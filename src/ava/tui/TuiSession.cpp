@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ActiveRun.h"
 #include "Composer.h"
 #include "SelectorHost.h"
 #include "TuiFrontEnd.h"
@@ -7,7 +8,6 @@
 #include "composer_internal.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
-#include "runtime_active_run_internal.h"
 #include "runtime_input_internal.h"
 #include "runtime_internal.h"
 #include "runtime_mermaid_internal.h"
@@ -22,6 +22,7 @@
 #include "runtime_user_turn_selection_internal.h"
 #include "runtime_views_internal.h"
 
+#include <cstdio>
 #include <functional>
 #include <utility>
 
@@ -35,6 +36,7 @@ using Key = terminal::Key;
 TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line)
     : frontend_(frontend),
       terminal_context_(terminal_context),
+      loop_(::fileno(terminal_context.input_stream())),
       presentation_state_(&frontend, initial_status_line),
       plugin_ui_(presentation_state_.snapshot),
       renderer_(&frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, &terminal_context),
@@ -46,12 +48,12 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       branch_summary_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings()),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
-      prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, &selectors_),
+      prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, loop_, &selectors_),
       mermaid_presentation_(presentation_state_.snapshot, renderer_, transcript_search_, frontend.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_),
       subagent_workspace_(frontend, presentation_state_.snapshot, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_),
-      active_run_controller_(frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
+      active_run_controller_(loop_, frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
                              action_controller_, transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
                          transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_),
@@ -67,11 +69,13 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
                          std::bind_front(&TuiSession::handle_transcript_input, this), std::bind_front(&TuiSession::handle_composer_navigation_input, this),
                          std::bind_front(&TuiSession::handle_tail_input, this)})
 {
+  plugin_ui_.attach_loop(loop_);
 }
 
 TuiSession::~TuiSession()
 {
   // Each collaborator is still alive here; shutdown also covers early run returns.
+  active_run_controller_.shutdown();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
   prompt_coordinator_.shutdown();
@@ -1108,6 +1112,29 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
 
   while (true)
   {
+    loop_.service_due();
+    if (loop_.notification_failed())
+    {
+      terminal_write_failed_ = true;
+      break;
+    }
+    if (active_run_controller_.active())
+    {
+      if (active_run_controller_.consume() == RuntimeEventDrainResult::RenderFailed)
+      {
+        terminal_write_failed_ = true;
+        break;
+      }
+      if (auto completed = active_run_controller_.complete())
+      {
+        terminal_write_failed_ = terminal_write_failed_ || completed->terminal_write_failed();
+        terminal_signal_received_ = terminal_signal_received_ || completed->terminal_signal_received();
+        // A signal completion must exit; otherwise its claimed outcome is lost.
+        ASSERT(!completed->terminal_signal_received() || completed->break_loop());
+        if (completed->break_loop())
+          break;
+      }
+    }
     if (mermaid_presentation_.service() == MermaidServiceOutcome::RenderFailed)
     {
       terminal_write_failed_ = true;
@@ -1120,13 +1147,19 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       terminal_write_failed_ = true;
       break;
     }
+    if (active_run_controller_.active() && !active_run_controller_.accepts_input())
+      continue; // Final receipt batches remain runnable; preserve buffered terminal bytes.
     auto const input_poll_started_at = std::chrono::steady_clock::now();
     if (subagent_workspace_.poll(input_poll_started_at) && !renderer_.request_render())
     {
       terminal_write_failed_ = true;
       break;
     }
-    auto input_poll_delay = kIdleInputPollDelay;
+    // Goal09 services one operation in this existing outer wait. Goal10 replaces
+    // this intermediate polling with the loop's timer/resource wait and batching.
+    auto input_poll_delay = active_run_controller_.active() ? std::chrono::milliseconds(16) : kIdleInputPollDelay;
+    if (active_run_controller_.has_pending_updates())
+      input_poll_delay = std::chrono::milliseconds::zero();
     if (auto workspace_wait = subagent_workspace_.time_until_poll(input_poll_started_at))
       input_poll_delay = std::min(input_poll_delay, std::chrono::ceil<std::chrono::milliseconds>(*workspace_wait));
     if (renderer_.has_pending_render())
@@ -1141,7 +1174,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
         terminal_write_failed_ = true;
         break;
       }
-      if (!renderer_.flush_pending_render_if_due() || !maybe_reload_display_settings())
+      auto const display_eligible = !active_run_controller_.active() || (!subagent_workspace_.active() && renderer_.transcript().scroll_offset() == 0);
+      if (!renderer_.flush_pending_render_if_due() || (display_eligible && !maybe_reload_display_settings()))
       {
         terminal_write_failed_ = true;
         break;
@@ -1149,7 +1183,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       continue;
     }
     auto const input = *maybe_input;
-    auto const outcome = input_dispatcher_.dispatch(input);
+    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
+                                                         : input_dispatcher_.dispatch(input);
     if (outcome == TuiInputOutcome::Failure)
     {
       terminal_write_failed_ = true;
@@ -1159,6 +1194,9 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       break;
   }
 
+  auto const shutdown_outcome = active_run_controller_.shutdown();
+  terminal_write_failed_ = terminal_write_failed_ || shutdown_outcome.terminal_write_failed();
+  terminal_signal_received_ = terminal_signal_received_ || shutdown_outcome.terminal_signal_received();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
   prompt_coordinator_.shutdown();

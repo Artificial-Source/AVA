@@ -11,6 +11,7 @@
 #include "ava/app/plugin_ui_capability.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
@@ -19,6 +20,7 @@
 #include "ava/plugin/runner.h"
 #include "ava/plugin/ui_protocol.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -1346,8 +1348,15 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
 
 void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
 {
+  std::array<int, 2> descriptors{-1, -1};
+  if (!ava::tests::require(::pipe(descriptors.data()) == 0, "create plugin timer input pipe"))
+    return;
+  ava::core::UniqueFd input(descriptors[0]);
+  ava::core::UniqueFd output(descriptors[1]);
+  ava::tui::TuiEventLoop loop(input.get());
   ava::tui::ComposerSnapshot snapshot;
   ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
+  coordinator.attach_loop(loop);
   snapshot.width = 80;
   snapshot.height = 10;
   snapshot.input = "untouched draft";
@@ -1432,13 +1441,21 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   auto deadline_reply = std::async(
       std::launch::async, [endpoint = *endpoint, deadline_request]() { return endpoint.present(deadline_request, endpoint.deadline, [] { return false; }); });
   bool const deadline_opened = open_plugin_modal(coordinator, snapshot, deadline_reply);
-  auto const deadline_poll = coordinator.poll(false, endpoint->deadline);
+  loop.service_due(endpoint->deadline);
+  bool const cancellation_latched = coordinator.deadline_reached(std::chrono::steady_clock::time_point::min());
+  auto const deadline_poll = coordinator.poll(false);
+  auto const repeated_poll = coordinator.poll(false, endpoint->deadline);
+  bool const deadline_ready = deadline_reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  if (!deadline_ready)
+    coordinator.cancel_active();
   auto const expired = deadline_reply.get();
-  expect(deadline_opened && deadline_poll.deadline_expired && expired.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_modal &&
-             !snapshot.plugin_ui_dock && endpoint->deadline == started + ava::tui::kTuiPluginUiInvocationDeadline,
-         "one absolute 120-second direct UI deadline cancels and unblocks a visible modal");
+  expect(deadline_opened && deadline_ready && cancellation_latched && deadline_poll.deadline_expired && !repeated_poll.deadline_expired &&
+             expired.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_modal && !snapshot.plugin_ui_dock &&
+             endpoint->deadline == started + ava::tui::kTuiPluginUiInvocationDeadline,
+         "the registered absolute 120-second timer unblocks a modal, latches worker cancellation and reports expiry once");
 
   coordinator.finish_submission();
+  expect(!coordinator.deadline_reached(std::chrono::steady_clock::time_point::max()), "finishing submission retires its latched deadline cancellation");
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-4");
   auto const binding4 = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-4"};
   auto canceled_request = tui_request(binding4, "child-exit", ava::tui::TuiPluginUiKind::Confirm);

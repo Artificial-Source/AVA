@@ -1,11 +1,11 @@
 #include "sys.h"
+#include "ava/tui/ActiveRun.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_active_run_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -19,7 +19,7 @@
 namespace ava::tui {
 
 // Mouse hit-testing/wheel.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mouse_input(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
@@ -127,7 +127,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
 }
 
 // Active-run restricted toggles/model actions and Space fallback.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;

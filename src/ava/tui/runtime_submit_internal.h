@@ -10,7 +10,7 @@ class SelectorHost;
 class SettingsDialog;
 class SessionSelector;
 class RuntimeActionController;
-class RuntimeActiveRunController;
+class ActiveRun;
 class Composer;
 class RuntimeNavigationController;
 class RuntimePresentationState;
@@ -40,10 +40,10 @@ class RuntimeSubmitController final
 {
  public:
   RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
-                          RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
-                          RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
-                          TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
-                          SettingsDialog& settings_dialog, SessionSelector& session_selector);
+                          RuntimeNavigationController& navigation, RuntimeActionController& action_controller, ActiveRun& active_run_controller,
+                          RuntimePromptStashController& prompt_stash, TranscriptSearchController& transcript_search,
+                          RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors, SettingsDialog& settings_dialog,
+                          SessionSelector& session_selector);
   RuntimeSubmitController(RuntimeSubmitController const&) = delete;
   RuntimeSubmitController& operator=(RuntimeSubmitController const&) = delete;
 
@@ -56,7 +56,7 @@ class RuntimeSubmitController final
   RuntimeRenderer& renderer_;
   RuntimeNavigationController& navigation_;
   RuntimeActionController& action_controller_;
-  RuntimeActiveRunController& active_run_controller_;
+  ActiveRun& active_run_controller_;
   RuntimePromptStashController& prompt_stash_;
   TranscriptSearchController& transcript_search_;
   RuntimeSubagentWorkspaceController& subagent_workspace_;

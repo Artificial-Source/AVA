@@ -10,6 +10,9 @@
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
+#include <deque>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -43,13 +46,16 @@ struct RuntimeEventQueue
   [[nodiscard]] ava::event::EventEnvelopeSink envelope_sink();
   [[nodiscard]] ava::agent::SubagentLaunchSink subagent_launch_sink();
   [[nodiscard]] ava::core::VoidResult enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context = {});
-  [[nodiscard]] std::vector<QueuedTuiEvent> drain();
+  [[nodiscard]] ava::core::VoidResult enqueue_envelope(ava::event::EventEnvelope const& envelope);
+  void enqueue_subagent_launch(ava::agent::SubagentLaunchNotification const& notification);
+  [[nodiscard]] std::vector<QueuedTuiEvent> drain(std::size_t maximum = std::numeric_limits<std::size_t>::max());
+  [[nodiscard]] bool has_pending() const;
   void discard();
-  [[nodiscard]] bool received_any();
+  [[nodiscard]] bool received_any() const;
 
  private:
-  std::mutex mutex;
-  std::vector<QueuedTuiEvent> events;
+  mutable std::mutex mutex;
+  std::deque<QueuedTuiEvent> events;
   bool received = false;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

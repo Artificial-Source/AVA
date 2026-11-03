@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ActiveRun.h"
 #include "BranchSummaryOperation.h"
 #include "Composer.h"
 #include "SelectorHost.h"
@@ -7,10 +8,10 @@
 #include "SessionSelector.h"
 #include "SessionTransitionCoordinator.h"
 #include "SettingsDialog.h"
+#include "TuiEventLoop.h"
 #include "TuiInputDispatcher.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
-#include "runtime_active_run_internal.h"
 #include "runtime_input_internal.h"
 #include "runtime_mermaid_internal.h"
 #include "runtime_navigation_internal.h"
@@ -71,6 +72,8 @@ class TuiSession final
   // refer to earlier members and remain valid through their destruction.
   TuiFrontEnd& frontend_;
   terminal::Context& terminal_context_;
+  // Every timer/notification client below retires before the loop resources.
+  TuiEventLoop loop_;
   RuntimePresentationState presentation_state_;
   RuntimePluginUiCoordinator plugin_ui_;
   bool terminal_write_failed_ = false;
@@ -91,7 +94,7 @@ class TuiSession final
   RuntimeActionController action_controller_;
   RuntimeSubagentWorkspaceController subagent_workspace_;
   SessionTransitionCoordinator session_transitions_;
-  RuntimeActiveRunController active_run_controller_;
+  ActiveRun active_run_controller_;
   RuntimeSubmitController submit_controller_;
   // Registered targets above outlive the dispatcher; the session cannot move.
   TuiInputDispatcher input_dispatcher_;

@@ -4,11 +4,13 @@
 #include "support/tui_test_support.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/terminal_text.h"
+#include "ava/tui/ActiveRun.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/SessionSelector.h"
 #include "ava/tui/SessionTransitionCoordinator.h"
 #include "ava/tui/SettingsDialog.h"
+#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -16,7 +18,7 @@
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_active_run_internal.h"
+#include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
@@ -32,15 +34,19 @@
 #include "ava/tui/terminal_image.h"
 #include "ava/tui/theme.h"
 #include "ava/core/Application.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/thread.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdio>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -48,11 +54,53 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace {
+
+// The ordinary composer suite uses a regular input file for ncurses. A real
+// pipe supplies the event loop's readiness descriptor without reading that file.
+class EventLoopFixture final
+{
+ public:
+  EventLoopFixture() : descriptors_(open_pipe()), loop_(descriptors_.first.get()) { }
+  [[nodiscard]] ava::tui::TuiEventLoop& loop() { return loop_; }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  static std::pair<ava::core::UniqueFd, ava::core::UniqueFd> open_pipe()
+  {
+    std::array<int, 2> descriptors{-1, -1};
+    if (::pipe(descriptors.data()) != 0)
+      throw std::system_error(errno, std::generic_category(), "create active fixture event loop pipe");
+    return {ava::core::UniqueFd(descriptors[0]), ava::core::UniqueFd(descriptors[1])};
+  }
+
+  std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors_;
+  ava::tui::TuiEventLoop loop_;
+};
+
+std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, ava::tui::TuiEventLoop& loop)
+{
+  auto const deadline = ava::tests::now_plus_seconds(2);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    loop.service_due();
+    if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
+      break;
+    if (auto outcome = active_run.complete())
+      return outcome;
+    std::this_thread::yield();
+  }
+  active_run.shutdown();
+  expect(false, "active fixture submission completes through bounded consume/complete servicing");
+  return std::nullopt;
+}
 
 // Draw a custom theme after allocating extended pairs, then inspect a rendered cell and the previously reserved pair.
 // This catches fixed-index collisions and truncation through legacy packed color attributes without requiring a real TTY.
@@ -361,6 +409,7 @@ bool test_changed_session_snapshot_resets_presentation()
 
 bool test_active_run_session_transition_discards_prior_session_events()
 {
+  EventLoopFixture event_loop;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
@@ -368,6 +417,8 @@ bool test_active_run_session_transition_discards_prior_session_events()
   bool initial_identity_forwarded = false;
   bool backend_session_replaced = false;
   bool quit_requested = false;
+  bool retained_prompt_case = false;
+  bool retained_prompt_answered = false;
   bool queues_enabled = true;
   tui_test_support::TuiFrontEndFixture* frontend_fixture = nullptr;
   ava::tui::TuiRuntimeOptions options;
@@ -407,12 +458,23 @@ bool test_active_run_session_transition_discards_prior_session_events()
     };
     return queues;
   };
-  frontend.hooks().on_submit = [&frontend_fixture, &initial_identity_forwarded, &backend_session_replaced, &quit_requested](
-                                   std::string const&, ava::tui::TuiSubmitContext context) {
+  frontend.hooks().on_submit = [&frontend_fixture, &initial_identity_forwarded, &backend_session_replaced, &quit_requested, &retained_prompt_case,
+                                &retained_prompt_answered](std::string const&, ava::tui::TuiSubmitContext context) {
     if (quit_requested)
     {
       auto result = ava::tui::TuiSubmitResult{};
       result.quit = true;
+      return result;
+    }
+    if (retained_prompt_case)
+    {
+      ava::agent::QuestionPrompt prompt{.header = "Retained input",
+                                        .question = "Resolve before routing the retained key",
+                                        .options = {{.value = "done", .label = "Done"}},
+                                        .auto_resolve = [] { return true; }};
+      retained_prompt_answered = context.question_resolver(prompt).has_value();
+      auto result = ava::tui::TuiSubmitResult{};
+      result.output = {"PROMPT-RECEIPT"};
       return result;
     }
     initial_identity_forwarded = context.request_id == "old-request" && static_cast<bool>(context.on_subagent_launch);
@@ -453,24 +515,29 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer,
+                                                        event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings());
   ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.snapshot);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation.snapshot, renderer, transcript_search, {});
-  ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid);
+  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
+                                 navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid);
 
-  auto const outcome = active_run.run("OLD SUBMITTED PROMPT");
+  if (!ava::tests::require(active_run.start("OLD SUBMITTED PROMPT"), "start the old-session active submission"))
+    return false;
+  auto const outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  if (!outcome)
+    return false;
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_index = std::optional<std::size_t>{};
   auto history_scratch = std::string{};
   auto const history_restored = ava::tui::browse_composer_input_history(history_probe, draft_state.history(), history_index, history_scratch, true);
   auto const passed =
-      !outcome.break_loop && !outcome.terminal_write_failed && finish_called && initial_identity_forwarded && backend_session_replaced &&
+      !outcome->break_loop() && !outcome->terminal_write_failed() && finish_called && initial_identity_forwarded && backend_session_replaced &&
       presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" && presentation.snapshot.transcript.size() == 1 &&
       presentation.snapshot.transcript.front().text == "NEW-SESSION-RECEIPT" && !presentation.snapshot.transcript.front().tool &&
       presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
@@ -478,17 +545,45 @@ bool test_active_run_session_transition_discards_prior_session_events()
       !presentation.snapshot.context_source_count && !presentation.sidebar.context_source_count && draft_state.history().empty() && !history_restored;
 
   queues_enabled = false;
+  retained_prompt_case = true;
+  if (!ava::tests::require(active_run.start("PROMPT SUBMISSION"), "start a submission with a pending question"))
+    return false;
+  draft_state.replace_draft("retained draft", 14);
+  auto const claim_deadline = ava::tests::now_plus_seconds(2);
+  while (!prompt_coordinator.has_pending_requests() && std::chrono::steady_clock::now() < claim_deadline)
+    std::this_thread::yield();
+  bool const prompt_published = prompt_coordinator.has_pending_requests();
+  if (!prompt_published)
+  {
+    active_run.shutdown();
+    expect(false, "question is published before retained active input is dispatched");
+    return false;
+  }
+  auto retained_key = ava::tui::runtime_input::RuntimeInput{};
+  retained_key.event.key = ava::tui::terminal::Key::Character;
+  retained_key.event.character = 'x';
+  retained_key.text = "x";
+  bool const retained_handled = active_run.handle_input(retained_key);
+  bool const retained_draft_unchanged = draft_state.draft().text == "retained draft" && draft_state.draft().cursor == 14;
+  auto const prompt_outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  bool const retained_input_discarded = prompt_outcome && !prompt_outcome->break_loop() && !prompt_outcome->terminal_write_failed() && retained_handled &&
+                                        retained_draft_unchanged && retained_prompt_answered;
+  expect(retained_input_discarded, "ordinary retained input keeps the second prompt check and discards the event when that check claims a prompt");
+  retained_prompt_case = false;
   quit_requested = true;
   frontend.seed_committed_todos({{.id = "quit-hidden", .content = "QUIT MUST NOT REFRESH", .status = ava::agent::TodoStatus::Pending}});
-  auto const quit_outcome = active_run.run("/exit");
-  expect(quit_outcome.break_loop && !quit_outcome.terminal_write_failed && presentation.sidebar.todos.size() == 1 &&
+  if (!ava::tests::require(active_run.start("/exit"), "start a subsequent quit submission on the same active owner"))
+    return false;
+  auto const quit_outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  expect(quit_outcome && quit_outcome->break_loop() && !quit_outcome->terminal_write_failed() && presentation.sidebar.todos.size() == 1 &&
              presentation.sidebar.todos.front().id == "new-todo",
          "quit completion performs no catalog or committed todo pull");
-  return passed;
+  return passed && retained_input_discarded;
 }
 
 bool test_atomic_search_input_prompt_precedence()
 {
+  EventLoopFixture event_loop;
   tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 80));
@@ -502,7 +597,7 @@ bool test_atomic_search_input_prompt_precedence()
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, draft_state);
   ava::tui::TuiSessionGrantRegistry session_grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, session_grants, renderer);
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, session_grants, renderer, event_loop.loop());
   coordinator.open_admission();
   auto resolver = coordinator.question_resolver();
 
@@ -574,13 +669,26 @@ bool test_atomic_search_input_prompt_precedence()
             queued_attempt_dispatched = true;
             return true;
           },
-          {}, {},
+          {},
           [&]() {
             std::lock_guard lock(mutex);
             order.push_back("before-prompt");
           });
       if (queued == ava::tui::SearchInputPromptDispatchResult::InputHandled)
         std::this_thread::yield();
+    }
+    auto const service_deadline = ava::tests::now_plus_seconds(1);
+    while (coordinator.has_active() && std::chrono::steady_clock::now() < service_deadline)
+    {
+      event_loop.loop().service_due();
+      static_cast<void>(coordinator.service());
+      std::this_thread::yield();
+    }
+    if (coordinator.has_active())
+    {
+      static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
+      std::lock_guard lock(mutex);
+      provider_timed_out = true;
     }
     {
       std::unique_lock lock(mutex);
@@ -591,10 +699,52 @@ bool test_atomic_search_input_prompt_precedence()
              !queued_attempt_dispatched && !provider_timed_out && provider_resolved && answer &&
              order == std::vector<std::string>({"search-input", "before-prompt", "resolver"});
     if (!passed)
+    {
       coordinator.fail_pending_requests();
+      static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
+    }
   }
 
-  return passed;
+  if (!passed)
+    return false;
+
+  std::atomic_bool stop_requested = false;
+  auto permission_resolver = coordinator.permission_resolver();
+  auto permission_worker = ava::core::make_async("escape_permission", [permission_resolver, &stop_requested] {
+    auto prompt = ava::permissions::PermissionPrompt{};
+    prompt.operation = ava::permissions::Operation::RunCommand;
+    prompt.mode = ava::core::Mode::Build;
+    prompt.command = "echo permission-escape";
+    prompt.tool_name = "bash";
+    prompt.reason = "verify stop publication before permission retirement";
+    auto result = permission_resolver(prompt);
+    return std::pair{std::move(result), stop_requested.load()};
+  });
+  auto const permission_deadline = ava::tests::now_plus_seconds(2);
+  while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < permission_deadline)
+    std::this_thread::yield();
+  bool const permission_published = coordinator.has_pending_requests();
+  auto const started = permission_published ? coordinator.start_pending() : ava::tui::PromptServiceOutcome::None;
+  auto const escape =
+      ava::tui::runtime_input::RuntimeInput{.event = {.key = ava::tui::terminal::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
+                                            .text = {},
+                                            .bracketed_paste = false,
+                                            .resize = false};
+  auto const effect = coordinator.handle_input(escape);
+  bool const claim_held = coordinator.has_active();
+  bool const worker_blocked = permission_worker.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+
+  // Publish the caller's run-stop effect before retiring the claim. Complete and
+  // join unconditionally before checking any regression assertion.
+  stop_requested.store(true);
+  coordinator.fail_pending_requests();
+  static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
+  auto const [permission_result, worker_observed_stop] = permission_worker.get();
+  bool const escape_ordered = permission_published && started == ava::tui::PromptServiceOutcome::Active &&
+                              effect == ava::tui::PromptServiceOutcome::RequestRunStop && claim_held && worker_blocked && permission_result &&
+                              permission_result->resolution == ava::permissions::PermissionResolution::Deny && worker_observed_stop;
+  expect(escape_ordered, "permission Escape keeps the worker blocked until run stop is published before denial and claim retirement");
+  return escape_ordered;
 }
 
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
@@ -1330,6 +1480,7 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
 
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 {
+  EventLoopFixture event_loop;
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
@@ -1415,15 +1566,16 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer,
+                                                        event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings());
   ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.snapshot);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation.snapshot, renderer, transcript_search, {});
-  ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid);
+  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
+                                 navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid);
   ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
                                                       prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog,
@@ -1454,12 +1606,15 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   presentation.initialize_startup_overview(*frontend.frontend(), frontend.frontend()->read_startup_overview());
 
   auto const models = submit_controller.submit(std::string("/reload models"));
-  bool const models_ok =
-      continued(models) && backend_submissions == std::vector<std::string>{"/reload models"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
+  auto const models_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  bool const models_ok = continued(models) && models_completion && !models_completion->break_loop() && !models_completion->terminal_write_failed() &&
+                         backend_submissions == std::vector<std::string>{"/reload models"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
 
   auto const malformed = submit_controller.submit(std::string("/reload no-such"));
-  bool const malformed_ok = continued(malformed) && backend_submissions == std::vector<std::string>{"/reload models", "/reload no-such"} &&
-                            display_reload_calls == 0 && keybinding_reload_calls == 0;
+  auto const malformed_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  bool const malformed_ok =
+      continued(malformed) && malformed_completion && !malformed_completion->break_loop() && !malformed_completion->terminal_write_failed() &&
+      backend_submissions == std::vector<std::string>{"/reload models", "/reload no-such"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
 
   auto const theme = submit_controller.submit(std::string("/reload theme"));
   bool const theme_ok = continued(theme) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 0 &&
@@ -1488,15 +1643,19 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
                               local_help_updated && overview_hint_updated;
 
   auto const help = submit_controller.submit(std::string("/help"));
-  bool const backend_help_uses_request_copy =
-      continued(help) && backend_submissions.size() == 3 && backend_submissions.back() == "/help" && submitted_request_mode_keys.back() == "Alt+Y";
+  auto const help_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  bool const backend_help_uses_request_copy = continued(help) && help_completion && !help_completion->break_loop() &&
+                                              !help_completion->terminal_write_failed() && backend_submissions.size() == 3 &&
+                                              backend_submissions.back() == "/help" && submitted_request_mode_keys.back() == "Alt+Y";
 
   auto const bare = submit_controller.submit(std::string("/reload"));
   bool const bare_ok = continued(bare) && backend_submissions.size() == 3 && display_reload_calls == 1 && keybinding_reload_calls == 2 &&
                        catalog_delivery_reads == 4 && presentation.snapshot.status == "keybindings reloaded";
 
   auto const trust = submit_controller.submit(std::string("/trust"));
-  bool const trust_catalog_refreshed = continued(trust) && trust_action_committed && catalog_delivery_reads == 5 &&
+  auto const trust_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  bool const trust_catalog_refreshed = continued(trust) && trust_completion && !trust_completion->break_loop() && !trust_completion->terminal_write_failed() &&
+                                       trust_action_committed && catalog_delivery_reads == 5 &&
                                        std::ranges::any_of(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/help"; });
   expect(trust_catalog_refreshed, "trust action completion pulls the newly published catalog into the palette at the serialized boundary");
 
@@ -1609,40 +1768,6 @@ void run_tui_composer_rendering_tests_part_1()
   expect(test_local_slash_completion_composition_tracks_current_ui_facts(),
          "TUI initial hydration, backend catalog replacement, display reload, and keybinding reload compose local slash choices once while retaining backend "
          "facts and current key hints without backend generation changes");
-  {
-    auto const started_at = std::chrono::steady_clock::time_point{};
-    ava::tui::detail::ActiveRunCadence cadence(started_at);
-    auto const input_before_frame = ava::tui::detail::active_run_input_read_decision(true, cadence.frame_due(started_at + std::chrono::milliseconds(15)));
-    auto const input_at_frame = ava::tui::detail::active_run_input_read_decision(true, cadence.frame_due(started_at + std::chrono::milliseconds(16)));
-    auto const no_input_before_frame = ava::tui::detail::active_run_input_read_decision(false, cadence.frame_due(started_at + std::chrono::milliseconds(15)));
-    auto const early = cadence.advance(started_at + std::chrono::milliseconds(15));
-    auto const first_frame = cadence.advance(started_at + std::chrono::milliseconds(16));
-    auto const before_spinner = cadence.advance(started_at + std::chrono::milliseconds(119));
-    auto const first_spinner = cadence.advance(started_at + std::chrono::milliseconds(120));
-    auto const delayed = cadence.advance(started_at + std::chrono::milliseconds(257));
-    expect(ava::tui::detail::kActiveRunFrameDelay == std::chrono::milliseconds(16) &&
-               ava::tui::detail::kProcessingIndicatorFrameDelay == std::chrono::milliseconds(120) &&
-               cadence.wait_duration(started_at + std::chrono::milliseconds(257)) == std::chrono::milliseconds(15) && early.elapsed_frames == 0 &&
-               early.elapsed_spinner_frames == 0 && first_frame.elapsed_frames == 1 && first_frame.elapsed_spinner_frames == 0 &&
-               before_spinner.elapsed_frames == 6 && before_spinner.elapsed_spinner_frames == 0 && first_spinner.elapsed_frames == 0 &&
-               first_spinner.elapsed_spinner_frames == 1 && delayed.elapsed_frames == 9 && delayed.elapsed_spinner_frames == 1 &&
-               input_before_frame == ava::tui::detail::ActiveRunInputReadDecision::DrainBufferedInput &&
-               input_at_frame == ava::tui::detail::ActiveRunInputReadDecision::ServiceFrame &&
-               no_input_before_frame == ava::tui::detail::ActiveRunInputReadDecision::WaitForNextFrame,
-           "active-run cadence drains buffered input before 16ms, but a buffered input at the frame deadline services provider updates before input drainage "
-           "while the spinner advances at 120ms boundaries");
-  }
-  {
-    bool input_dispatched = false;
-    auto const retained =
-        ava::tui::detail::dispatch_retained_input_with_prompt_precedence([]() { return ava::tui::detail::PendingPromptServiceResult::Serviced; },
-                                                                         [&]() {
-                                                                           input_dispatched = true;
-                                                                           return true;
-                                                                         });
-    expect(retained == ava::tui::detail::RetainedInputDispatchResult::PromptServiced && !input_dispatched,
-           "ordinary retained input keeps the second prompt check and discards the event when that check claims a prompt");
-  }
   {
     using ava::tui::detail::ActiveRunCancelDisposition;
     expect(ava::tui::detail::active_run_cancel_disposition(true, false) == ActiveRunCancelDisposition::ClearDraftSelection &&

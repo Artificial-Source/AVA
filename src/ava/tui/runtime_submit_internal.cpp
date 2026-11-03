@@ -2,6 +2,7 @@
 #include "SelectorHost.h"
 #include "SessionSelector.h"
 #include "SettingsDialog.h"
+#include "ava/tui/ActiveRun.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -10,7 +11,6 @@
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_active_run_internal.h"
 #include "ava/tui/runtime_commands_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -47,7 +47,7 @@ using runtime_views::compact_path_leaf;
 
 RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state,
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
-                                                 RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
+                                                 ActiveRun& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                                                  SelectorHost& selectors, SettingsDialog& settings_dialog, SessionSelector& session_selector)
     : frontend_(frontend),
@@ -548,10 +548,9 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    RuntimeActiveRunOutcome const outcome = active_run_controller_.run(std::move(submitted));
-    return {.disposition = outcome.break_loop ? RuntimeSubmitDisposition::BreakLoop : RuntimeSubmitDisposition::ContinueLoop,
-            .terminal_write_failed = outcome.terminal_write_failed,
-            .terminal_signal_received = outcome.terminal_signal_received};
+    if (!active_run_controller_.start(std::move(submitted)))
+      return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
+    return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
   }
   return {};
 }

@@ -6,7 +6,7 @@
 #include "composer_internal.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
-#include "runtime_active_run_internal.h"
+#include "ActiveRun.h"
 #include "runtime_input_internal.h"
 #include "runtime_internal.h"
 #include "runtime_mermaid_internal.h"

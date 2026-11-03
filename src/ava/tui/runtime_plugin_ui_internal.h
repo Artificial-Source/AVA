@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TuiTimer.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_plugin_ui.h"
 #include "ava/tui/terminal.h"
@@ -14,6 +15,7 @@ namespace ava::tui {
 
 struct ComposerSnapshot;
 struct RuntimePluginUiCoordinatorState;
+class TuiEventLoop;
 
 struct TuiPluginUiPollResult
 {
@@ -43,6 +45,10 @@ class RuntimePluginUiCoordinator final
   RuntimePluginUiCoordinator(RuntimePluginUiCoordinator const&) = delete;
   RuntimePluginUiCoordinator& operator=(RuntimePluginUiCoordinator const&) = delete;
 
+  // Attach once on the TUI thread before admission opens. The loop outlives
+  // this owner; worker endpoints receive only its weak wake capability.
+  void attach_loop(TuiEventLoop& loop);
+
   [[nodiscard]] std::optional<TuiPluginUiEndpoint> begin_submission(std::string_view submitted, std::string invocation_id,
                                                                     std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
   [[nodiscard]] TuiPluginUiPollResult poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
@@ -71,6 +77,7 @@ class RuntimePluginUiCoordinator final
 
  private:
   [[nodiscard]] bool clear_surface(std::optional<TuiPluginUiBinding> const& binding = std::nullopt);
+  void expire_submission(std::chrono::steady_clock::time_point now);
 
   ComposerSnapshot& snapshot_;
   // Worker endpoint calls retain shared synchronized state until their modal wait
@@ -78,6 +85,8 @@ class RuntimePluginUiCoordinator final
   std::shared_ptr<RuntimePluginUiCoordinatorState> state_;
   // Shared identity token lets copied endpoints observe this runtime lifetime.
   std::shared_ptr<void const> runtime_token_;
+  bool loop_attached_ = false;
+  TuiTimer deadline_timer_;
 };
 
 }  // namespace ava::tui

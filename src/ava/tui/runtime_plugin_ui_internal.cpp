@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "TuiEventLoop.h"
+#include "TuiWakeup.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
@@ -11,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
 using ava::app::sanitize_terminal_text;
@@ -210,6 +213,8 @@ struct RuntimePluginUiCoordinatorState
   bool shutdown = false;
   bool active = false;
   bool accepting = false;
+  bool deadline_expired = false;
+  bool expiry_report_pending = false;
   std::uint64_t generation = 0;
   std::string invocation_id;
   std::chrono::steady_clock::time_point deadline{};
@@ -219,6 +224,7 @@ struct RuntimePluginUiCoordinatorState
   std::shared_ptr<PendingPluginUiModal> visible_modal;
   std::function<void()> after_enqueue_for_test;
   std::function<void(std::size_t)> after_queue_swap_for_test;
+  TuiWakeup wakeup;
 };
 
 namespace {
@@ -262,6 +268,7 @@ TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> 
 
   std::shared_ptr<PendingPluginUiModal> modal;
   std::function<void()> after_enqueue;
+  TuiWakeup wakeup;
   {
     std::lock_guard lock(state->mutex);
     if (state->shutdown || !state->active || !state->accepting || state->generation != generation || state->deadline != deadline ||
@@ -280,7 +287,9 @@ TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> 
       state->outstanding_modal = modal;
     state->queue.push_back(PluginUiQueueRecord{.kind = PluginUiQueueRecordKind::Request, .generation = generation, .request = request, .modal = modal});
     after_enqueue = std::exchange(state->after_enqueue_for_test, {});
+    wakeup = state->wakeup;
   }
+  wakeup.notify();
   if (after_enqueue)
     after_enqueue();
 
@@ -322,10 +331,15 @@ void close_binding(std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state, st
   auto state = weak_state.lock();
   if (!state)
     return;
-  std::lock_guard lock(state->mutex);
-  if (state->shutdown || state->generation != generation || !state->owner || *state->owner != binding)
-    return;
-  cancel_locked(*state);
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(state->mutex);
+    if (state->shutdown || state->generation != generation || !state->owner || *state->owner != binding)
+      return;
+    cancel_locked(*state);
+    wakeup = state->wakeup;
+  }
+  wakeup.notify();
 }
 
 }  // namespace
@@ -343,6 +357,39 @@ RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(ComposerSnapshot& snapsho
 RuntimePluginUiCoordinator::~RuntimePluginUiCoordinator()
 {
   shutdown();
+}
+
+void RuntimePluginUiCoordinator::attach_loop(TuiEventLoop& loop)
+{
+  // Attach this nonmoving coordinator exactly once, before opening a submission.
+  ASSERT(!loop_attached_);
+  if (loop_attached_)
+    return;
+  {
+    std::lock_guard lock(state_->mutex);
+    // Install scheduling before begin_submission, and never reattach a shut-down coordinator.
+    ASSERT(!state_->active && !state_->shutdown);
+    if (state_->active || state_->shutdown)
+      return;
+    state_->wakeup = loop.wakeup();
+  }
+  deadline_timer_ = loop.member_timer(*this, &RuntimePluginUiCoordinator::expire_submission);
+  loop_attached_ = true;
+}
+
+void RuntimePluginUiCoordinator::expire_submission(std::chrono::steady_clock::time_point now)
+{
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (!state_->active || now < state_->deadline)
+      return;
+    state_->deadline_expired = true;
+    state_->expiry_report_pending = true;
+    cancel_locked(*state_);
+    wakeup = state_->wakeup;
+  }
+  wakeup.notify();
 }
 
 std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(std::string_view submitted, std::string invocation_id,
@@ -367,10 +414,13 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
     state_->visible_modal.reset();
     state_->active = true;
     state_->accepting = true;
+    state_->deadline_expired = false;
+    state_->expiry_report_pending = false;
     state_->invocation_id = std::move(invocation_id);
     state_->deadline = deadline;
     generation = ++state_->generation;
   }
+  deadline_timer_.arm_at(deadline);
   std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state = state_;
   return TuiPluginUiEndpoint{.runtime_token = runtime_token_,
                              .deadline = deadline,
@@ -412,10 +462,8 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
   if (fits)
     return false;
 
-  {
-    std::lock_guard lock(state_->mutex);
-    cancel_locked(*state_);
-  }
+  cancel_active();
+  deadline_timer_.cancel();
   snapshot.plugin_ui_dock.reset();
   snapshot.plugin_ui_modal.reset();
   return true;
@@ -430,11 +478,15 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
   std::function<void(std::size_t)> after_queue_swap;
   {
     std::lock_guard lock(state_->mutex);
-    if (state_->active && now >= state_->deadline)
+    // Standalone fixtures retain explicit-clock servicing. An attached owner
+    // receives expiry only from its registered member timer.
+    if (!loop_attached_ && state_->active && now >= state_->deadline)
     {
-      result.deadline_expired = true;
+      state_->deadline_expired = true;
+      state_->expiry_report_pending = true;
       cancel_locked(*state_);
     }
+    result.deadline_expired = std::exchange(state_->expiry_report_pending, false);
     records.swap(state_->queue);
     after_queue_swap = std::exchange(state_->after_queue_swap_for_test, {});
   }
@@ -551,6 +603,19 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
     state_->visible_modal = record.modal;
     result.changed = true;
   }
+  TuiWakeup wakeup;
+  bool active;
+  {
+    std::lock_guard lock(state_->mutex);
+    active = state_->active;
+    // A rejected surface may publish Clear while consuming this batch. Keep
+    // that later record runnable after releasing the mailbox lock.
+    if (!state_->queue.empty())
+      wakeup = state_->wakeup;
+  }
+  if (!active)
+    deadline_timer_.cancel();
+  wakeup.notify();
   return result;
 }
 
@@ -643,17 +708,23 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
 bool RuntimePluginUiCoordinator::deadline_reached(std::chrono::steady_clock::time_point now) const
 {
   std::lock_guard lock(state_->mutex);
-  return state_->active && now >= state_->deadline;
+  return state_->deadline_expired || (state_->active && now >= state_->deadline);
 }
 
 void RuntimePluginUiCoordinator::cancel_active()
 {
-  std::lock_guard lock(state_->mutex);
-  cancel_locked(*state_);
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(state_->mutex);
+    cancel_locked(*state_);
+    wakeup = state_->wakeup;
+  }
+  wakeup.notify();
 }
 
 void RuntimePluginUiCoordinator::finish_submission()
 {
+  deadline_timer_.cancel();
   {
     std::lock_guard lock(state_->mutex);
     cancel_locked(*state_);
@@ -661,18 +732,22 @@ void RuntimePluginUiCoordinator::finish_submission()
     state_->owner.reset();
     state_->outstanding_modal.reset();
     state_->visible_modal.reset();
+    state_->deadline_expired = false;
+    state_->expiry_report_pending = false;
   }
   static_cast<void>(clear_surface());
 }
 
 void RuntimePluginUiCoordinator::shutdown()
 {
+  deadline_timer_.cancel();
   {
     std::lock_guard lock(state_->mutex);
     state_->shutdown = true;
     cancel_locked(*state_);
     state_->queue.clear();
     state_->owner.reset();
+    state_->wakeup = {};
   }
   runtime_token_.reset();
   static_cast<void>(clear_surface());

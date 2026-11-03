@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "ava/tui/ActiveRun.h"
+#include "ava/tui/ActiveRunInbox.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -8,8 +10,6 @@
 #include "ava/tui/keybindings.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_active_run_internal.h"
-#include "ava/tui/runtime_active_run_state_internal.h"
 #include "ava/tui/runtime_commands_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
@@ -32,17 +32,17 @@ using runtime_commands::search_command_argument;
 using runtime_commands::shell_helper_submission;
 using runtime_commands::tool_command_argument;
 
-bool RuntimeActiveRunController::is_action(InputEvent const& event, TuiAction action) const
+bool ActiveRun::is_action(InputEvent const& event, TuiAction action) const
 {
   return key_matches_action(frontend_.key_bindings(), action, event.key);
 }
 
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::to_input_handling(bool render_result)
+ActiveRun::InputHandling ActiveRun::to_input_handling(bool render_result)
 {
   return render_result ? InputHandling::Handled : InputHandling::RenderFailed;
 }
 
-ComposerSnapshot const& RuntimeActiveRunController::completion_snapshot()
+ComposerSnapshot const& ActiveRun::completion_snapshot()
 {
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.project_completion(snapshot);
@@ -50,10 +50,10 @@ ComposerSnapshot const& RuntimeActiveRunController::completion_snapshot()
   return snapshot;
 }
 
-bool RuntimeActiveRunController::restore_latest_queued_message(RuntimeActiveRunState& state)
+bool ActiveRun::restore_latest_queued_message()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& active_queues = state.active_queues;
+  auto& active_queues = active_queues_;
   if (!active_queues || !active_queues->restore_latest)
   {
     snapshot.status = "active-run restore unavailable";
@@ -72,11 +72,11 @@ bool RuntimeActiveRunController::restore_latest_queued_message(RuntimeActiveRunS
   return renderer_.request_render();
 }
 
-std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActiveRunState& state)
+std::optional<bool> ActiveRun::run_active_command()
 {
   auto& snapshot = presentation_state_.snapshot;
   auto const& draft = draft_state_.draft();
-  auto& active_queues = state.active_queues;
+  auto& active_queues = active_queues_;
   if (draft.text == "/sidebar")
   {
     draft_state_.record_submission(draft.text);
@@ -222,7 +222,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
   return renderer_.request_render();
 }
 
-std::optional<bool> RuntimeActiveRunController::reject_disabled_visible_completion()
+std::optional<bool> ActiveRun::reject_disabled_visible_completion()
 {
   auto& snapshot = presentation_state_.snapshot;
   auto const& current = completion_snapshot();
@@ -235,12 +235,11 @@ std::optional<bool> RuntimeActiveRunController::reject_disabled_visible_completi
   return std::nullopt;
 }
 
-bool RuntimeActiveRunController::queue_active_draft(RuntimeActiveRunState& state, bool follow_up_only)
+bool ActiveRun::queue_active_draft(bool follow_up_only)
 {
   auto& snapshot = presentation_state_.snapshot;
   auto const& draft = draft_state_.draft();
-  auto& active_queues = state.active_queues;
-  auto& run_cancel_requested = state.run_cancel_requested;
+  auto& active_queues = active_queues_;
   if (auto handled = reject_disabled_visible_completion())
     return *handled;
   if (draft.text.empty())
@@ -250,7 +249,7 @@ bool RuntimeActiveRunController::queue_active_draft(RuntimeActiveRunState& state
   }
   if (!follow_up_only && draft.text == "/restore")
   {
-    return restore_latest_queued_message(state);
+    return restore_latest_queued_message();
   }
   auto const steering_prefix = std::string_view("/steer ");
   bool const steering_draft = !follow_up_only && draft.text.starts_with(steering_prefix);
@@ -259,7 +258,7 @@ bool RuntimeActiveRunController::queue_active_draft(RuntimeActiveRunState& state
     snapshot.status = "commands run between turns";
     return renderer_.request_render();
   }
-  if (run_cancel_requested.load())
+  if (inbox_->stop_requested())
   {
     snapshot.status = "stop requested; queueing disabled";
     return renderer_.request_render();
@@ -294,11 +293,9 @@ bool RuntimeActiveRunController::queue_active_draft(RuntimeActiveRunState& state
   return renderer_.request_render();
 }
 
-std::optional<bool> RuntimeActiveRunController::handle_transcript_search_input(runtime_input::RuntimeInput const& active_input)
+bool ActiveRun::handle_search_input_event(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
-  if (!transcript_search_.is_open())
-    return std::nullopt;
   if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
     renderer_.reset_wheel_input();
   if (active_input.resize)
@@ -313,7 +310,7 @@ std::optional<bool> RuntimeActiveRunController::handle_transcript_search_input(r
   return transcript_search_.handle_input(active_input.event).value_or(true);
 }
 
-bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runtime_input::RuntimeInput const& active_input)
+bool ActiveRun::dispatch_active_input(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
   auto& snapshot = presentation_state_.snapshot;
@@ -366,8 +363,8 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
       ava::core::Application::instance().terminal_context().beep();
     return !handled.changed || renderer_.request_render();
   }
-  if (auto handled = handle_transcript_search_input(active_input))
-    return *handled;
+  if (transcript_search_.is_open())
+    return handle_search_input_event(active_input);
   if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
     renderer_.reset_wheel_input();
   if (active_input.resize)
@@ -379,13 +376,13 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
   if (auto handled = prompt_stash_.handle_selector_input(active_input.event))
     return *handled;
 
-  auto result = handle_preemptive_input(state, active_input);
+  auto result = handle_preemptive_input(active_input);
   if (result != InputHandling::Unhandled)
     return result == InputHandling::Handled;
   result = handle_completion_acceptance(active_input);
   if (result != InputHandling::Unhandled)
     return result == InputHandling::Handled;
-  result = handle_active_command_input(state, active_input);
+  result = handle_active_command_input(active_input);
   if (result != InputHandling::Unhandled)
     return result == InputHandling::Handled;
   result = handle_composer_edit(active_input);

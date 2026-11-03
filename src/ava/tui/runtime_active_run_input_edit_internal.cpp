@@ -1,9 +1,9 @@
 #include "sys.h"
+#include "ava/tui/ActiveRun.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/keybindings.h"
-#include "ava/tui/runtime_active_run_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -22,7 +22,7 @@ constexpr std::size_t kKeyboardScrollRows = 3;
 }  // namespace
 
 // Composer edit/delete/cursor/undo/redo/yank.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_composer_edit(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_composer_edit(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
@@ -42,7 +42,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
 }
 
 // Transcript/palette/history/vertical navigation in exact original order.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
@@ -151,7 +151,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_nav
 }
 
 // Palette-next/history-next/arrow-down/cursor-down navigation in exact original order.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;

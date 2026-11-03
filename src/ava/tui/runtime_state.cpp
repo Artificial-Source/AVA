@@ -8,6 +8,8 @@
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/theme.h"
 
+#include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace ava::tui {
@@ -95,21 +97,27 @@ QueuedRuntimeEvent::QueuedRuntimeEvent(ava::event::RuntimeEvent event_in, ava::e
 
 ava::event::EventEnvelopeSink RuntimeEventQueue::envelope_sink()
 {
-  return [this](ava::event::EventEnvelope const& event) -> ava::core::VoidResult {
-    std::lock_guard<std::mutex> lock(mutex);
-    events.emplace_back(std::in_place_type<ava::event::EventEnvelope>, event);
-    received = true;
-    return {};
-  };
+  return std::bind_front(&RuntimeEventQueue::enqueue_envelope, this);
 }
 
 ava::agent::SubagentLaunchSink RuntimeEventQueue::subagent_launch_sink()
 {
-  return [this](ava::agent::SubagentLaunchNotification const& notification) {
-    std::lock_guard<std::mutex> lock(mutex);
-    events.emplace_back(std::in_place_type<ava::agent::SubagentLaunchNotification>, notification);
-    received = true;
-  };
+  return std::bind_front(&RuntimeEventQueue::enqueue_subagent_launch, this);
+}
+
+ava::core::VoidResult RuntimeEventQueue::enqueue_envelope(ava::event::EventEnvelope const& envelope)
+{
+  std::lock_guard lock(mutex);
+  events.emplace_back(std::in_place_type<ava::event::EventEnvelope>, envelope);
+  received = true;
+  return {};
+}
+
+void RuntimeEventQueue::enqueue_subagent_launch(ava::agent::SubagentLaunchNotification const& notification)
+{
+  std::lock_guard lock(mutex);
+  events.emplace_back(std::in_place_type<ava::agent::SubagentLaunchNotification>, notification);
+  received = true;
 }
 
 ava::core::VoidResult RuntimeEventQueue::enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context)
@@ -120,12 +128,24 @@ ava::core::VoidResult RuntimeEventQueue::enqueue(ava::event::RuntimeEvent const&
   return {};
 }
 
-std::vector<QueuedTuiEvent> RuntimeEventQueue::drain()
+std::vector<QueuedTuiEvent> RuntimeEventQueue::drain(std::size_t maximum)
 {
   std::lock_guard<std::mutex> lock(mutex);
   auto drained = std::vector<QueuedTuiEvent>{};
-  drained.swap(events);
+  auto const count = std::min(maximum, events.size());
+  drained.reserve(count);
+  for (std::size_t index = 0; index < count; ++index)
+  {
+    drained.push_back(std::move(events.front()));
+    events.pop_front();
+  }
   return drained;
+}
+
+bool RuntimeEventQueue::has_pending() const
+{
+  std::lock_guard lock(mutex);
+  return !events.empty();
 }
 
 void RuntimeEventQueue::discard()
@@ -135,7 +155,7 @@ void RuntimeEventQueue::discard()
   received = false;
 }
 
-bool RuntimeEventQueue::received_any()
+bool RuntimeEventQueue::received_any() const
 {
   std::lock_guard<std::mutex> lock(mutex);
   return received;

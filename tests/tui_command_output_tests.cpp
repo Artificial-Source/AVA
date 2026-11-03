@@ -2,12 +2,11 @@
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/app/command_catalog.h"
+#include "ava/tui/ActiveRunEvents.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/event_state.h"
-#include "ava/tui/runtime_active_run_internal.h"
-#include "ava/tui/runtime_active_run_state_internal.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -282,50 +281,38 @@ void test_unified_tool_index_chronology()
 
 void test_unauthorized_command_event_tool_merge()
 {
-  auto completed_tool = [](ava::tui::TuiEventState& event_state, std::string call_id, std::string name, std::string result, std::string status) {
+  auto completed_tool = [](std::optional<std::string> request_id, std::string call_id, std::string name, std::string result, std::string status) {
     auto payload = ava::event::ToolPayload{};
     payload.call_id = std::move(call_id);
     payload.tool = std::move(name);
     payload.text = std::move(result);
     payload.status = std::move(status);
-    ava::tui::apply_runtime_event(event_state, ava::event::RuntimeEvent{{}, ava::event::ToolResultEvent{.payload = std::move(payload)}});
+    auto context = ava::event::EventEnvelopeContext{};
+    context.request_id = std::move(request_id);
+    return ava::tui::QueuedRuntimeEvent(ava::event::RuntimeEvent{{}, ava::event::ToolResultEvent{.payload = std::move(payload)}}, std::move(context));
   };
 
-  ava::tui::RuntimeActiveRunState state("/compact", true, true);
-  state.initial_request_id = "request-compact";
-  state.ordinary_turn_request_ids = {"request-authorized"};
-  completed_tool(state.initial_command_event_state, "duplicate-call", "read_file", "event result", "success");
-  completed_tool(state.unattributed_local_event_state, "missing-id-call", "read_file", "missing id result", "success");
-  state.unattributed_local_event_state.pending_tools.push_back(
-      ava::tui::PendingToolItem{.call_id = "canceled-call",
-                                .backend_call_id = {},
-                                .request_id = {},
-                                .correlation_id = {},
-                                .item = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Canceled,
-                                                                   .name = "bash",
-                                                                   .call_id = "canceled-call",
-                                                                   .lifecycle = ava::tui::ToolLifecycleState::Canceled},
-                                .append_only_stream = false});
-  state.unattributed_local_event_state.pending_tools.push_back(ava::tui::PendingToolItem{
-      .call_id = "running-call",
-      .backend_call_id = {},
-      .request_id = {},
-      .correlation_id = {},
-      .item =
-          ava::tui::ToolTimelineItem{
-              .status = ava::tui::ToolTimelineStatus::Running, .name = "bash", .call_id = "running-call", .lifecycle = ava::tui::ToolLifecycleState::Progress},
-      .append_only_stream = false});
-  state.request_event_states.push_back(ava::tui::RuntimeRequestEventState{.request_id = "request-unauthorized", .event_state = {}});
-  completed_tool(state.request_event_states.back().event_state, "error-call", "write_file", "tool failed", "error");
-  state.request_event_states.push_back(ava::tui::RuntimeRequestEventState{.request_id = "request-authorized", .event_state = {}});
-  completed_tool(state.request_event_states.back().event_state, "authorized-call", "grep", "must stay provider-only", "success");
+  ava::tui::ActiveRunEvents events(true, "/compact", "request-compact", {}, {});
+  ava::tui::ComposerSnapshot snapshot;
+  auto running_tool = ava::event::ToolPayload{};
+  running_tool.call_id = "running-call";
+  running_tool.tool = "bash";
+  auto queued = std::vector<ava::tui::QueuedTuiEvent>{
+      completed_tool("request-compact", "duplicate-call", "read_file", "event result", "success"),
+      completed_tool(std::nullopt, "missing-id-call", "read_file", "missing id result", "success"),
+      completed_tool(std::nullopt, "canceled-call", "bash", {}, "canceled"),
+      ava::tui::QueuedRuntimeEvent(ava::event::RuntimeEvent{{}, ava::event::ToolProgressEvent{.payload = std::move(running_tool)}}, {}),
+      completed_tool("request-unauthorized", "error-call", "write_file", "tool failed", "error"),
+      completed_tool("request-authorized", "authorized-call", "grep", "must stay provider-only", "success")};
+  events.apply_batch(queued, snapshot);
+  events.authorize_receipts({"request-authorized"});
 
   auto backend_duplicate = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
                                                       .name = "read_file",
                                                       .result_summary = "stale backend result",
                                                       .call_id = "duplicate-call",
                                                       .lifecycle = ava::tui::ToolLifecycleState::Complete};
-  auto merged = ava::tui::detail::merge_unauthorized_command_event_tools(state, {backend_duplicate});
+  auto merged = events.merge_unauthorized_tools({backend_duplicate});
   expect(merged.size() == 4 && merged[0].call_id == "duplicate-call" && merged[0].result_summary == "event result" && merged[1].call_id == "missing-id-call" &&
              merged[2].call_id == "canceled-call" && merged[2].status == ava::tui::ToolTimelineStatus::Canceled &&
              merged[2].lifecycle == ava::tui::ToolLifecycleState::Canceled && merged[3].call_id == "error-call" &&

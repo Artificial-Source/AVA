@@ -1,12 +1,12 @@
 #include "sys.h"
+#include "ava/tui/ActiveRun.h"
+#include "ava/tui/ActiveRunInbox.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_active_run_internal.h"
-#include "ava/tui/runtime_active_run_state_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -30,8 +30,7 @@ detail::ActiveRunCancelDisposition detail::active_run_cancel_disposition(bool ha
 
 // Sidebar drawer, jump mode, cancel/copy/interrupt/exit, character/selection
 // and CtrlHome/CtrlEnd. These preempt all draft, completion, and view input.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_preemptive_input(RuntimeActiveRunState& state,
-                                                                                              runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
@@ -73,7 +72,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_pre
         snapshot.status.clear();
         return to_input_handling(renderer_.request_render());
       case detail::ActiveRunCancelDisposition::RequestStop:
-        return to_input_handling(request_stop(state));
+        return to_input_handling(request_stop());
     }
   }
   if (is_action(active_event, TuiAction::CopySelection) && draft_state_.selection_bounds())
@@ -96,13 +95,13 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_pre
       snapshot.selected_slash_command_index = draft_state_.completion_index();
       return to_input_handling(renderer_.render());
     }
-    request_close_after_submit(state);
+    request_close_after_submit();
     return InputHandling::Handled;
   }
   bool const active_ctrl_d_delete_forward = active_event.key == Key::CtrlD && is_action(active_event, TuiAction::DeleteForward) && !draft.text.empty();
   if (is_action(active_event, TuiAction::Exit) && !active_ctrl_d_delete_forward)
   {
-    request_close_after_submit(state);
+    request_close_after_submit();
     return InputHandling::Handled;
   }
   if (active_event.key == Key::Character)
@@ -124,7 +123,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_pre
 }
 
 // Slash, file-reference, path-forced and open-selection autocomplete acceptance.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
@@ -183,8 +182,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
 
 // Restore, nonblocking command, disabled-completion rejection, steering/follow-up
 // queue, NewLine/editor/suspend/image/dequeue/jump/submit.
-RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_active_command_input(RuntimeActiveRunState& state,
-                                                                                                  runtime_input::RuntimeInput const& active_input)
+ActiveRun::InputHandling ActiveRun::handle_active_command_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
@@ -208,7 +206,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_act
   }
   if (is_action(active_event, TuiAction::MessageDequeue))
   {
-    return to_input_handling(restore_latest_queued_message(state));
+    return to_input_handling(restore_latest_queued_message());
   }
   if (is_action(active_event, TuiAction::JumpForward) || is_action(active_event, TuiAction::JumpBackward))
   {
@@ -219,7 +217,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_act
   if (is_action(active_event, TuiAction::MessageFollowUp))
   {
     renderer_.clear_transcript_selection();
-    return to_input_handling(queue_active_draft(state, true));
+    return to_input_handling(queue_active_draft(true));
   }
   if (is_action(active_event, TuiAction::Submit))
   {
@@ -228,9 +226,9 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_act
     if (active_event.key == terminal::Key::Enter && draft_state_.convert_backslash_enter_to_newline(snapshot))
       return to_input_handling(renderer_.request_render());
     renderer_.clear_transcript_selection();
-    if (auto handled = run_active_command(state))
+    if (auto handled = run_active_command())
       return to_input_handling(*handled);
-    return to_input_handling(queue_active_draft(state, false));
+    return to_input_handling(queue_active_draft(false));
   }
   return InputHandling::Unhandled;
 }

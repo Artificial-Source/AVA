@@ -1,13 +1,16 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
+#include "ava/tui/Spinner.h"
 #include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiTimer.h"
+#include "ava/tui/composer_internal.h"
 #include "ava/core/UniqueFd.h"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -64,6 +67,18 @@ class TimerRecorder final
 
  private:
   std::vector<Clock::time_point> ticks_;
+};
+
+class SpinnerFrames final
+{
+ public:
+  void publish(std::size_t frame) { frames_.push_back(frame); }
+  [[nodiscard]] std::vector<std::size_t> const& frames() const { return frames_; }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::vector<std::size_t> frames_;
 };
 
 enum class PeerTimerAction
@@ -240,6 +255,28 @@ void test_timer_move_and_destruction()
   expect(displaced_target.ticks().empty(), "destroying an armed registration prevents its callback");
 }
 
+void test_spinner_preserves_phase_and_skips_missed_ticks()
+{
+  EventLoopPipe pipe;
+  if (!ava::tests::require(pipe.valid(), "create spinner test input pipe"))
+    return;
+  TuiEventLoop loop(pipe.input());
+  SpinnerFrames frames;
+  ava::tui::Spinner spinner(loop, std::bind_front(&SpinnerFrames::publish, &frames));
+  auto const before_start = Clock::now();
+  spinner.start(7);
+  auto const after_start = Clock::now();
+  loop.service_due(before_start + 119ms);
+  expect(spinner.active() && frames.frames().empty() && ava::tui::detail::kProcessingIndicatorFrameDelay == 120ms,
+         "spinner preserves the starting phase and schedules its first update after 120ms");
+  loop.service_due(after_start + 120ms);
+  loop.service_due(after_start + 900ms);
+  expect(frames.frames() == std::vector<std::size_t>{8, 9}, "late spinner servicing advances one visible phase without catch-up frames");
+  spinner.stop();
+  loop.service_due(after_start + 1200ms);
+  expect(!spinner.active() && frames.frames() == std::vector<std::size_t>{8, 9}, "stopping the spinner retires future phase publication");
+}
+
 void test_notification_before_wait_and_simultaneous_input()
 {
   EventLoopPipe pipe;
@@ -330,6 +367,7 @@ void run_tui_event_loop_tests()
   test_timer_deadline_replacement_and_late_repeat();
   test_timer_mutation_during_dispatch();
   test_timer_move_and_destruction();
+  test_spinner_preserves_phase_and_skips_missed_ticks();
   test_notification_before_wait_and_simultaneous_input();
   test_hangup_preserves_final_input();
   test_local_stop_and_retired_wakeup();
