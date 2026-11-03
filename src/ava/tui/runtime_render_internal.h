@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ava/tui/Composer.h"
+#include "ava/tui/TranscriptView.h"
 #include "ava/tui/composer_internal.h"
-#include "ava/tui/runtime_transcript_selection_internal.h"
 
 #include <chrono>
 #include <csignal>
@@ -60,24 +60,6 @@ enum class FrameRenderKind
   Full,
 };
 
-class TranscriptPositionIndicatorState final
-{
- public:
-  using Clock = std::chrono::steady_clock;
-  static constexpr auto kVisibleDuration = std::chrono::milliseconds(1000);
-
-  void show(Clock::time_point now = Clock::now()) noexcept;
-  void hide() noexcept;
-  [[nodiscard]] bool visible() const noexcept;
-  [[nodiscard]] bool expire_if_due(Clock::time_point now = Clock::now()) noexcept;
-  [[nodiscard]] std::optional<Clock::duration> time_until_expiry(Clock::time_point now = Clock::now()) const noexcept;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  std::optional<Clock::time_point> expires_at_ = std::nullopt;
-};
-
 class FrameScheduler final
 {
  public:
@@ -103,19 +85,12 @@ class FrameScheduler final
   bool failed_ = false;
 };
 
-struct DeferredDetachedViewport
-{
-  detail::TranscriptViewportAnchor anchor = {};
-  std::ptrdiff_t item_index_shift = 0;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
 class RuntimeRenderer final
 {
  public:
-  // Render `snapshot` and apply its cursor settings through `terminal_context` when provided.
-  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, Composer& draft_state,
+  // Snapshot/sidebar/Composer, frontend and optional Context outlive this renderer.
+  // Render the snapshot and apply cursor settings through Context when provided.
+  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& draft_state,
                   terminal::Context* terminal_context = nullptr);
 
   [[nodiscard]] bool render();
@@ -126,36 +101,43 @@ class RuntimeRenderer final
   [[nodiscard]] bool has_pending_render() const;
   [[nodiscard]] std::chrono::steady_clock::duration time_until_pending_render() const;
   [[nodiscard]] bool render_failed() const;
-  void defer_detached_transcript_update(detail::TranscriptViewportAnchor anchor, std::ptrdiff_t item_index_shift);
   void synchronize_detached_transcript_layout();
-  void discard_deferred_detached_transcript_update();
-  [[nodiscard]] bool has_deferred_detached_transcript_update() const;
 
   [[nodiscard]] TranscriptSelectionMouseResult handle_transcript_selection_mouse(InputEvent const& event, std::function<bool(std::size_t)> const& toggle_tool,
                                                                                  std::function<bool(std::size_t)> const& toggle_thinking);
   void show_transcript_position_indicator(TranscriptPositionIndicatorState::Clock::time_point now = TranscriptPositionIndicatorState::Clock::now());
-  [[nodiscard]] bool transcript_position_indicator_visible() const noexcept;
   [[nodiscard]] bool copy_transcript_selection();
   void clear_transcript_selection();
   // Ends Selecting/HeaderArmed and draft mouse-select without discarding a committed
   // transcript range. Used on Shift cancel, suspend/editor handoff, and mouse rearm.
   void cancel_pointer_interaction();
-  void note_live_transcript_selection_item_shift(std::ptrdiff_t item_index_shift) noexcept;
-  [[nodiscard]] bool has_transcript_selection() const noexcept;
-  [[nodiscard]] bool has_pointer_interaction() const noexcept;
-  [[nodiscard]] std::optional<TranscriptSelectionRange> transcript_selection_range() const noexcept;
   void reset_for_session_transition();
 
-  std::size_t transcript_scroll_offset = 0;
-  std::size_t detached_new_output_count = 0;
-  detail::CompletionMatchCache completion_cache;
-  detail::TranscriptLayoutCache transcript_layout_cache;
-  detail::ScreenRowCache screen_row_cache;
-  std::optional<SidebarSnapshot> detached_sidebar_snapshot;
-  WheelBurstGovernor wheel_governor;
-  std::recursive_mutex ui_mutex;
-  TuiFrontEnd* frontend;
+  [[nodiscard]] std::unique_lock<std::recursive_mutex> lock_ui();
+  [[nodiscard]] TranscriptView& transcript() noexcept;
+  [[nodiscard]] TranscriptView const& transcript() const noexcept;
+  void reset_wheel_input();
+  [[nodiscard]] bool accept_wheel_input(terminal::Key key, WheelBurstGovernor::Clock::time_point now = WheelBurstGovernor::Clock::now());
+  [[nodiscard]] std::size_t prepare_transcript_layout();
+  [[nodiscard]] detail::TranscriptViewportAnchor capture_transcript_viewport();
+  [[nodiscard]] TranscriptUpdate begin_transcript_update();
+  // Diagnostic/layout borrows expire at the next preparation or paint that mutates
+  // the corresponding cache; callers must not retain them across those operations.
+  [[nodiscard]] detail::TranscriptLayoutCache const& prepared_transcript_layout() const noexcept;
+  [[nodiscard]] detail::CompletionMatchCache const& completion_cache() const noexcept;
+  [[nodiscard]] detail::ScreenRowCache const& painted_frame() const noexcept;
+  [[nodiscard]] detail::CompletionMatchModel const* refresh_completion_cache();
+  [[nodiscard]] std::size_t clamp_completion(std::size_t selected);
+  [[nodiscard]] std::size_t previous_completion(std::size_t selected);
+  [[nodiscard]] std::size_t next_completion(std::size_t selected);
+  [[nodiscard]] std::optional<std::string> selected_completion_disabled_reason(std::size_t selected);
+  [[nodiscard]] FileReferenceSelectionText selected_completion_text(std::size_t selected);
+  [[nodiscard]] std::optional<std::size_t> file_reference_completion_at(std::size_t row, std::size_t column);
+  [[nodiscard]] std::optional<std::size_t> path_completion_at(std::size_t row, std::size_t column);
+  [[nodiscard]] std::size_t sidebar_drawer_max_scroll() const;
 
+  // Renderer-owned caches and borrowed presentation contain arbitrary message
+  // bodies; generated member printing must not expose them.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
@@ -165,14 +147,16 @@ class RuntimeRenderer final
   void service_auxiliary_timers(std::chrono::steady_clock::time_point now);
 
   ComposerSnapshot& snapshot_;
-  SidebarSnapshot& sidebar_;
   Composer& draft_state_;
   terminal::Context* terminal_context_ = nullptr;
-  RuntimeTranscriptSelectionState transcript_selection_;
-  std::ptrdiff_t pending_live_selection_item_index_shift_ = 0;
-  TranscriptPositionIndicatorState transcript_position_indicator_;
+  TranscriptView transcript_;
+  detail::CompletionMatchCache completion_cache_;
+  detail::TranscriptLayoutCache transcript_layout_cache_;
+  detail::ScreenRowCache screen_row_cache_;
+  WheelBurstGovernor wheel_governor_;
+  std::recursive_mutex ui_mutex_;
+  TuiFrontEnd* frontend_;
   FrameScheduler frame_scheduler_;
-  std::optional<DeferredDetachedViewport> deferred_detached_viewport_ = std::nullopt;
 };
 
-}  // namespace ava::tui
+} // namespace ava::tui

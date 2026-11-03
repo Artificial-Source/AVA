@@ -52,6 +52,7 @@ add_library(ava_tui
   "TuiFrontEnd.cpp"
   "TuiSession.cpp"
   "TuiInputDispatcher.cpp"
+  "TranscriptView.cpp"
   "SelectorInputController.cpp"
   "SelectorHost.cpp"
   "SettingsDialog.cpp"

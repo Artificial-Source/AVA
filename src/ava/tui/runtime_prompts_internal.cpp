@@ -109,7 +109,6 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
   using Key = terminal::Key;
   auto& snapshot = snapshot_;
   auto& command_session_grants = session_grants_;
-  auto& ui_mutex = renderer_.ui_mutex;
   auto permission_label = std::string("permission requested");
   if (!prompt.tool_name.empty())
     permission_label += ": " + prompt.tool_name;
@@ -129,7 +128,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     emit_prompt_audit("tui:permission_allow", "permission allowed for this session: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name,
                       prompt.reason, "reused tui session grant");
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       snapshot.status = "permission allowed for this session";
     }
     static_cast<void>(render());
@@ -138,7 +137,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     return decision;
   }
   {
-    std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+    auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
     close_competing_select_list_for_prompt(selectors_);
     snapshot.permission_prompt = permission_prompt_view(prompt);
@@ -169,7 +168,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         emit_prompt_audit("tui:permission_deny", "permission denied: remember unavailable", prompt.permission_request_id, prompt.tool_name, prompt.reason,
                           "remember unavailable");
         {
-          std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+          auto lock = renderer_.lock_ui();
           snapshot.permission_prompt.reset();
           snapshot.status = "permission rule unavailable; denied";
         }
@@ -189,7 +188,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         emit_prompt_audit("tui:permission_deny", "permission denied: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason,
                           reason);
         {
-          std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+          auto lock = renderer_.lock_ui();
           snapshot.permission_prompt.reset();
           snapshot.status = "permission rule failed; denied";
         }
@@ -213,7 +212,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         emit_prompt_audit("tui:permission_deny", "permission denied: session grant unavailable", prompt.permission_request_id, prompt.tool_name, prompt.reason,
                           cap_reached ? "session grant cap reached" : "session grant no longer eligible");
         {
-          std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+          auto lock = renderer_.lock_ui();
           snapshot.permission_prompt.reset();
           snapshot.status = cap_reached ? "permission session grant cap reached; denied" : "permission session grant no longer eligible; denied";
         }
@@ -228,7 +227,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
       emit_prompt_audit("tui:permission_allow", "permission allowed for this session: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name,
                         prompt.reason, grant_result == TuiSessionGrantInsertResult::Added ? "selected allow session" : "reused tui session grant");
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         snapshot.permission_prompt.reset();
         snapshot.status = "permission allowed for this session";
       }
@@ -246,7 +245,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
       emit_prompt_audit("tui:permission_allow", "permission allowed: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason,
                         remember ? "selected allow and remember" : "selected allow");
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         snapshot.permission_prompt.reset();
         snapshot.status = remember ? "permission allow rule saved" : "permission allowed once";
       }
@@ -266,7 +265,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     emit_prompt_audit("tui:permission_deny", "permission denied: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason,
                       remember ? "selected deny and remember" : "selected deny");
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       snapshot.permission_prompt.reset();
       snapshot.status = remember ? "permission deny rule saved" : "permission denied";
     }
@@ -311,7 +310,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     {
       emit_prompt_audit("tui:permission_deny", "permission denied: interrupted", prompt.permission_request_id, prompt.tool_name, prompt.reason, "interrupted");
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         snapshot.permission_prompt.reset();
         snapshot.status = "interrupted";
       }
@@ -374,7 +373,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     if (input_result.action == PermissionPromptInputAction::Redraw && snapshot.permission_prompt)
     {
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         if (snapshot.permission_prompt)
         {
           snapshot.permission_prompt->selected_choice = input_result.selected_choice;
@@ -392,7 +391,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     }
 
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       bool const guidance_active = snapshot.permission_prompt && snapshot.permission_prompt->guidance_mode;
       bool const has_extended =
           snapshot.permission_prompt && (snapshot.permission_prompt->allow_session_available || snapshot.permission_prompt->allow_remember_available ||
@@ -417,11 +416,10 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
                                                                                                 std::function<bool()> const& request_stop)
 {
   auto& snapshot = snapshot_;
-  auto& ui_mutex = renderer_.ui_mutex;
   static_cast<void>(request_stop);
   emit_prompt_audit("tui:question_request", prompt.question.empty() ? std::string("question requested") : "question requested: " + prompt.question);
   {
-    std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+    auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
     close_competing_select_list_for_prompt(selectors_);
     snapshot.question_prompt = question_prompt_view(prompt);
@@ -437,7 +435,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
   auto cancel_question = [&]() -> ava::core::Result<ava::agent::QuestionAnswer> {
     emit_prompt_audit("tui:question_cancel", prompt.question.empty() ? std::string("question canceled") : "question canceled: " + prompt.question);
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       snapshot.question_prompt.reset();
       snapshot.status = "question canceled";
     }
@@ -450,7 +448,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       return std::nullopt;
     ava::agent::QuestionAnswer answer{.selected_options = {"done"}, .custom_text = ""};
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       snapshot.question_prompt.reset();
       snapshot.status = "question answered";
     }
@@ -492,7 +490,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
     {
       emit_prompt_audit("tui:question_cancel", "question canceled: interrupted");
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         snapshot.question_prompt.reset();
         snapshot.status = "interrupted";
       }
@@ -539,7 +537,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
     if (snapshot.question_prompt && (input_result.action == QuestionPromptInputAction::Redraw || input_result.action == QuestionPromptInputAction::Copy ||
                                      input_result.action == QuestionPromptInputAction::Resolve))
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       if (snapshot.question_prompt)
       {
         snapshot.question_prompt->selected_option_index = input_result.selected_option_index;
@@ -551,7 +549,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
     if (input_result.action == QuestionPromptInputAction::Copy)
     {
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         snapshot.status = copy_text_to_terminal_clipboard(input_result.copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
       }
       emit_prompt_audit("tui:question_copy", "question copy");
@@ -567,7 +565,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       auto answer =
           ava::core::Result<ava::agent::QuestionAnswer>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt was dismissed"))};
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         if (snapshot.question_prompt)
           answer = question_answer_from_view(*snapshot.question_prompt);
         snapshot.question_prompt.reset();
@@ -582,7 +580,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
         if (auto copy_text = copy_text_from_answer(*answer))
         {
           {
-            std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+            auto lock = renderer_.lock_ui();
             snapshot.status = copy_text_to_terminal_clipboard(*copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
           }
           static_cast<void>(render());

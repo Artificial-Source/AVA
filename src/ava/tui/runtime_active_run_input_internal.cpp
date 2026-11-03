@@ -45,9 +45,8 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::to_input_h
 ComposerSnapshot const& RuntimeActiveRunController::completion_snapshot()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& completion_cache = renderer_.completion_cache;
   draft_state_.project_completion(snapshot);
-  detail::refresh_completion_match_cache(completion_cache, snapshot, snapshot.file_references_generation);
+  static_cast<void>(renderer_.refresh_completion_cache());
   return snapshot;
 }
 
@@ -77,9 +76,6 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
 {
   auto& snapshot = presentation_state_.snapshot;
   auto const& draft = draft_state_.draft();
-  auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
-  auto& detached_new_output_count = renderer_.detached_new_output_count;
-  auto& detached_sidebar_snapshot = renderer_.detached_sidebar_snapshot;
   auto& active_queues = state.active_queues;
   if (draft.text == "/sidebar")
   {
@@ -87,9 +83,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     draft_state_.reset_local_command();
     snapshot.sidebar_drawer_visible = true;
     snapshot.sidebar_drawer_scroll_offset = 0;
-    transcript_scroll_offset = 0;
-    detached_new_output_count = 0;
-    detached_sidebar_snapshot.reset();
+    renderer_.transcript().reset_for_local_command();
     snapshot.status = "session overview opened";
     return renderer_.request_render();
   }
@@ -161,9 +155,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     else
       snapshot.tool_presentation = snapshot.tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich : ToolPresentation::Expanded;
     draft_state_.reset_local_command();
-    transcript_scroll_offset = 0;
-    detached_new_output_count = 0;
-    detached_sidebar_snapshot.reset();
+    renderer_.transcript().reset_for_local_command();
     settle_local_command_status(snapshot, "tool details " + std::string(to_string(snapshot.tool_presentation)));
     return renderer_.request_render();
   }
@@ -224,7 +216,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
   draft_state_.record_submission(submitted_command);
   settle_local_command_completion(snapshot, submitted_command, dispatch.output);
   draft_state_.reset_local_command();
-  transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   if (dispatch.output.empty())
     snapshot.status = "job command complete";
   return renderer_.request_render();
@@ -233,9 +225,8 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
 std::optional<bool> RuntimeActiveRunController::reject_disabled_visible_completion()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& completion_cache = renderer_.completion_cache;
   auto const& current = completion_snapshot();
-  if (auto const disabled_status = detail::disabled_visible_completion_selection_status(current, completion_cache))
+  if (auto const disabled_status = detail::disabled_visible_completion_selection_status(current, renderer_.completion_cache()))
   {
     snapshot.status = *disabled_status;
     ava::core::Application::instance().terminal_context().beep();
@@ -309,14 +300,13 @@ std::optional<bool> RuntimeActiveRunController::handle_transcript_search_input(r
   if (!transcript_search_.is_open())
     return std::nullopt;
   if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
-    renderer_.wheel_governor.reset();
+    renderer_.reset_wheel_input();
   if (active_input.resize)
   {
     transcript_search_.refresh_after_resize();
     return renderer_.render();
   }
-  if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) &&
-      !runtime_wheel_input_accepted(renderer_.wheel_governor, active_input.event.key))
+  if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) && !renderer_.accept_wheel_input(active_input.event.key))
   {
     return true;
   }
@@ -330,11 +320,10 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
   if (snapshot.command_output && !snapshot.permission_prompt && !snapshot.question_prompt)
   {
     if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
-      renderer_.wheel_governor.reset();
+      renderer_.reset_wheel_input();
     if (active_input.resize)
       return renderer_.render();
-    if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) &&
-        !runtime_wheel_input_accepted(renderer_.wheel_governor, active_input.event.key))
+    if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) && !renderer_.accept_wheel_input(active_input.event.key))
     {
       return true;
     }
@@ -365,11 +354,10 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
   if (subagent_workspace_.active())
   {
     if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
-      renderer_.wheel_governor.reset();
+      renderer_.reset_wheel_input();
     if (active_input.resize)
       return renderer_.render();
-    if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) &&
-        !runtime_wheel_input_accepted(renderer_.wheel_governor, active_input.event.key))
+    if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) && !renderer_.accept_wheel_input(active_input.event.key))
     {
       return true;
     }
@@ -381,11 +369,10 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
   if (auto handled = handle_transcript_search_input(active_input))
     return *handled;
   if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
-    renderer_.wheel_governor.reset();
+    renderer_.reset_wheel_input();
   if (active_input.resize)
     return renderer_.render();
-  if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) &&
-      !runtime_wheel_input_accepted(renderer_.wheel_governor, active_input.event.key))
+  if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) && !renderer_.accept_wheel_input(active_input.event.key))
   {
     return true;
   }

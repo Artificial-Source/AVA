@@ -375,7 +375,7 @@ bool RuntimeActiveRunController::request_stop(RuntimeActiveRunState& state)
   if (!was_already_requested)
     ava::core::Application::instance().terminal_context().beep();
   {
-    std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
+    auto lock = renderer_.lock_ui();
     presentation_state_.snapshot.status = "stop requested";
     upsert_stopping_activity();
   }
@@ -400,12 +400,6 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
   auto const turn_started_at = state.turn_started_at;
   auto& snapshot = presentation_state_.snapshot;
   auto& sidebar = presentation_state_.sidebar;
-  auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
-  auto& detached_new_output_count = renderer_.detached_new_output_count;
-  auto& completion_cache = renderer_.completion_cache;
-  auto& transcript_layout_cache = renderer_.transcript_layout_cache;
-  auto& detached_sidebar_snapshot = renderer_.detached_sidebar_snapshot;
-  auto& ui_mutex = renderer_.ui_mutex;
   auto apply_non_transcript_event_authority = [&]() {
     snapshot.queued_messages = event_state.queued_messages;
     sidebar.activity = event_state.activity;
@@ -435,7 +429,7 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
     if (events.empty())
       return RuntimeEventDrainResult::NoEvents;
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       apply_non_transcript_event_authority();
     }
     return renderer_.request_render() ? RuntimeEventDrainResult::UpdatedNoRender : RuntimeEventDrainResult::RenderFailed;
@@ -455,19 +449,9 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
     }
   }
   {
-    std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-    auto const preserve_viewport = transcript_scroll_offset > 0;
-    auto old_anchor = detail::TranscriptViewportAnchor{};
-    if (preserve_viewport && !renderer_.has_deferred_detached_transcript_update())
-    {
-      auto const old_max_scroll =
-          detail::composer_max_transcript_scroll_offset_cached(snapshot, snapshot.width, snapshot.height, completion_cache, snapshot.file_references_generation,
-                                                               transcript_layout_cache, snapshot.transcript_generation);
-      old_anchor = detail::capture_transcript_viewport_anchor(transcript_layout_cache.layout, old_max_scroll, transcript_scroll_offset);
-    }
-    if (preserve_viewport && !detached_sidebar_snapshot)
-      detached_sidebar_snapshot = sidebar;
-    apply_assistant_turn_meta(turn_transcript, assistant_meta_for_snapshot(renderer_.frontend, snapshot, std::chrono::steady_clock::now() - turn_started_at),
+    auto lock = renderer_.lock_ui();
+    auto const transcript_update = renderer_.begin_transcript_update();
+    apply_assistant_turn_meta(turn_transcript, assistant_meta_for_snapshot(&frontend_, snapshot, std::chrono::steady_clock::now() - turn_started_at),
                               snapshot.thinking_visible);
     auto const tool_detail_overrides = capture_tool_detail_visibility(snapshot.transcript);
     auto const thinking_expansion_overrides = capture_thinking_expansion(snapshot.transcript);
@@ -481,22 +465,11 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
         submitted_transcript.size() > capped_update.leading_evictions ? submitted_transcript.size() - capped_update.leading_evictions : std::size_t{0};
     transcript_search_.refresh_after_transcript_mutation(capped_update.item_index_shift, changed_from_item_index);
     apply_non_transcript_event_authority();
-    if (preserve_viewport)
-    {
-      renderer_.defer_detached_transcript_update(old_anchor, capped_update.item_index_shift);
-      detached_new_output_count += events.size();
-      snapshot.transcript_scroll_offset = transcript_scroll_offset;
-    }
-    else
-    {
-      renderer_.note_live_transcript_selection_item_shift(capped_update.item_index_shift);
-      renderer_.discard_deferred_detached_transcript_update();
-      transcript_scroll_offset = 0;
-    }
+    renderer_.transcript().complete_transcript_update(transcript_update, capped_update.item_index_shift, events.size());
   }
   if (subagent_workspace_.active() && !snapshot.permission_prompt && !snapshot.question_prompt)
     return RuntimeEventDrainResult::UpdatedNoRender;
-  if (transcript_scroll_offset > 0 && !snapshot.permission_prompt && !snapshot.question_prompt && !snapshot.select_list)
+  if (renderer_.transcript().scroll_offset() > 0 && !snapshot.permission_prompt && !snapshot.question_prompt && !snapshot.select_list)
     return RuntimeEventDrainResult::UpdatedNoRender;
   return renderer_.request_render() ? RuntimeEventDrainResult::UpdatedNoRender : RuntimeEventDrainResult::RenderFailed;
 }
@@ -510,8 +483,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto& sidebar = presentation_state_.sidebar;
   auto& pending_image_attachments = presentation_state_.pending_image_attachments;
   auto const& draft = draft_state_.draft();
-  auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
-  auto& ui_mutex = renderer_.ui_mutex;
   auto refresh_plugin_surface_fit = [&]() {
     refresh_geometry_from_kernel();
     auto const [width, height] = terminal_size();
@@ -816,7 +787,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       }
       if (spinner_advanced)
       {
-        std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+        auto lock = renderer_.lock_ui();
         if (snapshot.processing)
           snapshot.spinner_frame += cadence_tick.elapsed_spinner_frames;
       }
@@ -827,7 +798,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         fail_active_run();
         break;
       }
-      if (!subagent_workspace_.active() && transcript_scroll_offset == 0 && !maybe_reload_display_settings())
+      if (!subagent_workspace_.active() && renderer_.transcript().scroll_offset() == 0 && !maybe_reload_display_settings())
       {
         fail_active_run();
         break;
@@ -871,7 +842,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     auto committed_session_id = frontend_.read_committed_session_id();
     auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
     {
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+      auto lock = renderer_.lock_ui();
       session_changed = transitions_.apply(std::move(committed_session_id));
       if (!result.quit)
         presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
@@ -881,7 +852,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       if (auto finished = active_queues->finish(run_cancel_requested.load()); !finished)
       {
         {
-          std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+          auto lock = renderer_.lock_ui();
           snapshot.status = finished.error().format();
         }
         render_failed = true;
@@ -980,13 +951,13 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     }
   }
   {
-    std::lock_guard<std::recursive_mutex> lock(ui_mutex);
+    auto lock = renderer_.lock_ui();
     settle_turn_activity();
   }
   if (settlement.policy.project_conversation && !events_received)
   {
     auto const turn_elapsed = std::chrono::steady_clock::now() - turn_started_at;
-    auto const assistant_meta = assistant_meta_for_snapshot(renderer_.frontend, snapshot, turn_elapsed);
+    auto const assistant_meta = assistant_meta_for_snapshot(&frontend_, snapshot, turn_elapsed);
     auto const transcript_size_before_fallback = snapshot.transcript.size();
     std::ptrdiff_t item_index_shift = 0;
     if (!is_command_submission && !session_changed)
@@ -1014,7 +985,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     auto const shifted_first_new_item = static_cast<std::ptrdiff_t>(transcript_size_before_fallback) + item_index_shift;
     auto const changed_from_item_index = shifted_first_new_item > 0 ? static_cast<std::size_t>(shifted_first_new_item) : std::size_t{0};
     transcript_search_.refresh_after_transcript_mutation(item_index_shift, std::min(changed_from_item_index, snapshot.transcript.size()));
-    renderer_.note_live_transcript_selection_item_shift(item_index_shift);
+    renderer_.transcript().note_live_selection_item_shift(item_index_shift);
   }
   if (settlement.policy.present_command_output)
   {
@@ -1023,7 +994,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   else
   {
     if (!events_received && !transcript_search_.is_open())
-      transcript_scroll_offset = 0;
+      renderer_.transcript().request_live_tail();
     snapshot.status = events_received ? (event_state.run_status == TuiEventRunStatus::Error      ? "error"
                                          : event_state.run_status == TuiEventRunStatus::Canceled ? "stopped"
                                                                                                  : "done")

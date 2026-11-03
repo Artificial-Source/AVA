@@ -21,7 +21,7 @@ bool SessionSelector::open()
   cancel_confirmation();
   selectors_.open(ActiveSelectList::Session, frontend_.session_selector_view());
   presentation_state_.snapshot.status = "session selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 

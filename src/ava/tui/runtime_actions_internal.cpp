@@ -121,7 +121,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     last_display_reload_error_ = status;
     static_cast<void>(core::Application::instance().terminal_context().beep());
     {
-      std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
+      auto lock = renderer_.lock_ui();
       settle_local_command_status(presentation_state_.snapshot, std::move(status));
     }
     // Failure path keeps last-good presentation and still paints the status when possible.
@@ -134,7 +134,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   auto result = std::move(**reloaded);
   auto status = result.status.empty() ? std::string("display theme auto-reloaded") : result.status;
   {
-    std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
+    auto lock = renderer_.lock_ui();
     presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
     synchronize_startup_overview_presentation(presentation_state_.snapshot, selectors_);
     settle_local_command_status(presentation_state_.snapshot, std::move(status));
@@ -285,7 +285,7 @@ void RuntimeActionController::toggle_thinking_visibility()
   auto& snapshot = presentation_state_.snapshot;
   snapshot.thinking_visible = !snapshot.thinking_visible;
   snapshot.status = snapshot.thinking_visible ? "thinking visible" : "thinking hidden";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
 }
 
 bool RuntimeActionController::open_model_selector()
@@ -295,7 +295,7 @@ bool RuntimeActionController::open_model_selector()
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
   snapshot.status = "model selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -316,7 +316,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Reasoning, std::move(*view));
   snapshot.status = "thinking mode selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -327,7 +327,7 @@ bool RuntimeActionController::open_scoped_model_selector()
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
   snapshot.status = "scoped model selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -351,7 +351,7 @@ bool RuntimeActionController::toggle_startup_overview()
   snapshot.sidebar_drawer_scroll_offset = 0;
   selectors_.open(ActiveSelectList::Overview, overview_select_list_view(*snapshot.startup_overview));
   snapshot.status = "overview opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -369,7 +369,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ForkUserTurn, std::move(*opened));
   snapshot.status = "fork-from selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -387,7 +387,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::CopyUserTurn, std::move(*opened));
   snapshot.status = "copy user-turn selector opened";
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
 
@@ -403,7 +403,7 @@ void RuntimeActionController::cycle_model(bool forward)
   }
   presentation_state_.refresh_after_backend_action(frontend_);
   snapshot.status = std::move(*result);
-  renderer_.transcript_scroll_offset = 0;
+  renderer_.transcript().request_live_tail();
 }
 
 }  // namespace ava::tui

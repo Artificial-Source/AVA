@@ -147,7 +147,7 @@ void test_prompt_stash_runtime_controller()
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::SelectorHost active_list(presentation.snapshot);
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list);

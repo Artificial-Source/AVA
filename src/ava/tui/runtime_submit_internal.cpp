@@ -70,9 +70,6 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
 {
   auto& snapshot = presentation_state_.snapshot;
   auto const& draft = draft_state_.draft();
-  auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
-  auto& detached_new_output_count = renderer_.detached_new_output_count;
-  auto& detached_sidebar_snapshot = renderer_.detached_sidebar_snapshot;
   draft_state_.cancel_escape();
   std::optional<std::string> immediate_slash_submission;
   if (forced_submission)
@@ -303,7 +300,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       draft_state_.record_submission(submitted);
       selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
       snapshot.status = "keybindings opened";
-      transcript_scroll_offset = 0;
+      renderer_.transcript().request_live_tail();
       if (!renderer_.request_render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -315,9 +312,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       draft_state_.record_submission(submitted);
       snapshot.sidebar_drawer_visible = true;
       snapshot.sidebar_drawer_scroll_offset = 0;
-      transcript_scroll_offset = 0;
-      detached_new_output_count = 0;
-      detached_sidebar_snapshot.reset();
+      renderer_.transcript().reset_for_local_command();
       snapshot.status = "session overview opened";
       if (!renderer_.request_render())
       {
@@ -329,7 +324,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     {
       draft_state_.record_submission(submitted);
       settings_dialog_.open();
-      transcript_scroll_offset = 0;
+      renderer_.transcript().request_live_tail();
       if (!renderer_.request_render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};

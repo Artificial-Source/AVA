@@ -12,7 +12,6 @@ struct ComposerSnapshot;
 struct FileReferenceSelectionText;
 struct InputEvent;
 class Composer;
-struct SidebarSnapshot;
 class TuiFrontEnd;
 class RuntimeRenderer;
 
@@ -23,8 +22,7 @@ struct CompletionMatchModel;
 class RuntimeNavigationController final
 {
  public:
-  RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, Composer& draft_state,
-                              RuntimeRenderer& renderer);
+  RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, Composer& draft_state, RuntimeRenderer& renderer);
   RuntimeNavigationController(RuntimeNavigationController const&) = delete;
   RuntimeNavigationController& operator=(RuntimeNavigationController const&) = delete;
 
@@ -59,9 +57,9 @@ class RuntimeNavigationController final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  void project_completion_input();
   TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
-  SidebarSnapshot& sidebar_;
   Composer& draft_state_;
   RuntimeRenderer& renderer_;
 };

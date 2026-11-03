@@ -24,7 +24,6 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
   auto const& draft = draft_state_.draft();
-  auto& completion_cache = renderer_.completion_cache;
 
   using Key = terminal::Key;
   if (active_event.key == Key::MouseLeftPress || active_event.key == Key::MouseLeftClick || active_event.key == Key::MouseLeftDrag ||
@@ -50,8 +49,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         }
         return to_input_handling(renderer_.request_render());
       }
-      if (auto const clicked = detail::file_reference_palette_selection_for_screen_position_cached(snapshot, active_event.mouse_row, active_event.mouse_column,
-                                                                                                   completion_cache, snapshot.file_references_generation))
+      if (auto const clicked = renderer_.file_reference_completion_at(active_event.mouse_row, active_event.mouse_column))
       {
         renderer_.clear_transcript_selection();
         draft_state_.select_completion(*clicked);
@@ -68,8 +66,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         }
         return to_input_handling(renderer_.request_render());
       }
-      if (auto const clicked = detail::path_completion_palette_selection_for_screen_position_cached(snapshot, active_event.mouse_row, active_event.mouse_column,
-                                                                                                    completion_cache, snapshot.file_references_generation))
+      if (auto const clicked = renderer_.path_completion_at(active_event.mouse_row, active_event.mouse_column))
       {
         renderer_.clear_transcript_selection();
         draft_state_.select_completion(*clicked);

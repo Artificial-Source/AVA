@@ -37,7 +37,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       terminal_context_(terminal_context),
       presentation_state_(&frontend, initial_status_line),
       renderer_(&frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, &terminal_context),
-      navigation_(frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, renderer_),
+      navigation_(frontend, presentation_state_.snapshot, draft_state_, renderer_),
       selectors_(presentation_state_.snapshot),
       selector_input_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       settings_(frontend, presentation_state_, selectors_, terminal_context),
@@ -86,13 +86,10 @@ bool TuiSession::stop_for_branch_summary(BranchSummaryOutcome outcome)
 bool TuiSession::service_mermaid_presentation()
 {
   auto old_anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript_scroll_offset > 0;
-  if (preserve_viewport && !renderer_.has_deferred_detached_transcript_update())
+  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
+  if (preserve_viewport && !renderer_.transcript().has_deferred_update())
   {
-    auto const old_max_scroll = detail::composer_max_transcript_scroll_offset_cached(
-        presentation_state_.snapshot, presentation_state_.snapshot.width, presentation_state_.snapshot.height, renderer_.completion_cache,
-        presentation_state_.snapshot.file_references_generation, renderer_.transcript_layout_cache, presentation_state_.snapshot.transcript_generation);
-    old_anchor = detail::capture_transcript_viewport_anchor(renderer_.transcript_layout_cache.layout, old_max_scroll, renderer_.transcript_scroll_offset);
+    old_anchor = renderer_.capture_transcript_viewport();
   }
   auto const update = mermaid_presentation_.service(presentation_state_.snapshot);
   if (!update.visual_changed)
@@ -100,7 +97,7 @@ bool TuiSession::service_mermaid_presentation()
   transcript_search_.refresh_after_transcript_mutation(0, update.earliest_changed_item);
   if (preserve_viewport)
   {
-    renderer_.defer_detached_transcript_update(old_anchor, 0);
+    renderer_.transcript().defer_update(old_anchor, 0);
     renderer_.synchronize_detached_transcript_layout();
   }
   return renderer_.request_render(FrameRenderKind::Full);
@@ -214,7 +211,7 @@ TuiInputOutcome TuiSession::handle_resize_input(runtime_input::RuntimeInput cons
 {
   if (input.resize)
   {
-    renderer_.wheel_governor.reset();
+    renderer_.reset_wheel_input();
     transcript_search_.refresh_after_resize();
     if (!renderer_.render())
     {
@@ -227,7 +224,7 @@ TuiInputOutcome TuiSession::handle_resize_input(runtime_input::RuntimeInput cons
 
 TuiInputOutcome TuiSession::handle_wheel_input(runtime_input::RuntimeInput const& input)
 {
-  if (!runtime_wheel_input_accepted(renderer_.wheel_governor, input.event.key))
+  if (!renderer_.accept_wheel_input(input.event.key))
     return TuiInputOutcome::Handled;
   return TuiInputOutcome::Pass;
 }
@@ -360,7 +357,7 @@ TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput co
           case SettingsDialogRequest::Hotkeys:
             selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
             presentation_state_.snapshot.status = "keybindings opened";
-            renderer_.transcript_scroll_offset = 0;
+            renderer_.transcript().request_live_tail();
             break;
           case SettingsDialogRequest::None:
             break;
@@ -617,7 +614,7 @@ TuiInputOutcome TuiSession::handle_editor_input(runtime_input::RuntimeInput cons
     draft_state_.cancel_path_completion();
     static_cast<void>(draft_state_.copy_selection(presentation_state_.snapshot));
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CopySelection, event.key) && renderer_.has_transcript_selection())
+  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CopySelection, event.key) && renderer_.transcript().has_selection())
   {
     draft_state_.cancel_escape();
     draft_state_.cancel_path_completion();
@@ -815,9 +812,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
         draft_state_.select_slash_command(presentation_state_.snapshot, terminal_context_);
         palette_claimed = true;
       }
-      else if (auto const clicked = detail::file_reference_palette_selection_for_screen_position_cached(
-                   presentation_state_.snapshot, event.mouse_row, event.mouse_column, renderer_.completion_cache,
-                   presentation_state_.snapshot.file_references_generation))
+      else if (auto const clicked = renderer_.file_reference_completion_at(event.mouse_row, event.mouse_column))
       {
         renderer_.clear_transcript_selection();
         draft_state_.clear_selection();
@@ -825,9 +820,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
         draft_state_.select_file_reference(navigation_, presentation_state_.snapshot, terminal_context_);
         palette_claimed = true;
       }
-      else if (auto const clicked = detail::path_completion_palette_selection_for_screen_position_cached(
-                   presentation_state_.snapshot, event.mouse_row, event.mouse_column, renderer_.completion_cache,
-                   presentation_state_.snapshot.file_references_generation))
+      else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
       {
         renderer_.clear_transcript_selection();
         draft_state_.clear_selection();
@@ -1079,7 +1072,7 @@ TuiInputOutcome TuiSession::handle_tail_input(runtime_input::RuntimeInput const&
       draft_state_.cancel_escape();
       presentation_state_.snapshot.status.clear();
     }
-    else if (renderer_.has_transcript_selection())
+    else if (renderer_.transcript().has_selection())
     {
       renderer_.clear_transcript_selection();
       draft_state_.cancel_escape();

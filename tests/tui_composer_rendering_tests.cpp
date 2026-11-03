@@ -137,15 +137,19 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   presentation.snapshot.sidebar = presentation.sidebar;
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController controller(presentation, renderer, navigation, active_select_list);
 
+  auto const [width, height] = ava::tui::terminal_size();
+  presentation.snapshot.width = width;
+  presentation.snapshot.height = height;
+  auto const prepared_max_scroll = renderer.prepare_transcript_layout();
   auto const opened = controller.open("retained item");
   auto const before = controller.diagnostics();
-  auto const full_layout_builds = renderer.transcript_layout_cache.layout_build_count;
-  renderer.transcript_scroll_offset = 1;
-  renderer.defer_detached_transcript_update({}, 0);
+  auto const full_layout_builds = renderer.prepared_transcript_layout().layout_build_count;
+  renderer.transcript().scroll_up(1, prepared_max_scroll);
+  renderer.transcript().defer_update({}, 0);
   presentation.snapshot.transcript.back().text = "retained item tail replacement";
   ++presentation.snapshot.transcript_generation;
   controller.refresh_after_transcript_mutation(0, ava::tui::kMaxTranscriptItems - 1);
@@ -154,7 +158,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   auto const direct_refresh_passed =
       opened && presentation.snapshot.select_list && presentation.snapshot.select_list->freeze_underlying_transcript_layout &&
       presentation.snapshot.select_list->items.size() == ava::tui::kMaxTranscriptItems &&
-      ava::tui::composer_canvas_layout(presentation.snapshot).content_width == 120 && renderer.transcript_layout_cache.width == 141 &&
+      ava::tui::composer_canvas_layout(presentation.snapshot).content_width == 120 && renderer.prepared_transcript_layout().width == 141 &&
       full_layout_builds == 1 && before.authoritative_mutation_item_render_count == 0 && before.projection_build_count == ava::tui::kMaxTranscriptItems &&
       before.layout_position_visit_count == ava::tui::kMaxTranscriptItems && before.match_projection_evaluation_count == ava::tui::kMaxTranscriptItems &&
       before.match_entry_realign_count == 0 && before.match_entry_splice_count == 0 && before.modal_row_build_count == ava::tui::kMaxTranscriptItems &&
@@ -162,15 +166,15 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
       after.projection_build_count == before.projection_build_count + 1 && after.layout_position_visit_count == before.layout_position_visit_count + 1 &&
       after.match_projection_evaluation_count == before.match_projection_evaluation_count + 1 &&
       after.match_entry_realign_count == before.match_entry_realign_count && after.match_entry_splice_count == before.match_entry_splice_count + 1 &&
-      after.modal_row_build_count == before.modal_row_build_count + 1 && renderer.transcript_layout_cache.layout_build_count == full_layout_builds &&
-      renderer.has_deferred_detached_transcript_update();
+      after.modal_row_build_count == before.modal_row_build_count + 1 && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&
+      renderer.transcript().has_deferred_update();
 
   auto const scheduled = renderer.request_render(ava::tui::FrameRenderKind::Full);
   auto const flushed = renderer.flush_pending_render();
   auto const after_flush = controller.diagnostics();
   auto const scheduled_render_passed =
-      scheduled && flushed && !renderer.render_failed() && renderer.transcript_layout_cache.layout_build_count == full_layout_builds &&
-      renderer.transcript_layout_cache.width == 141 && renderer.has_deferred_detached_transcript_update() &&
+      scheduled && flushed && !renderer.render_failed() && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&
+      renderer.prepared_transcript_layout().width == 141 && renderer.transcript().has_deferred_update() &&
       after_flush.authoritative_mutation_item_render_count == after.authoritative_mutation_item_render_count &&
       after_flush.projection_build_count == after.projection_build_count && after_flush.layout_position_visit_count == after.layout_position_visit_count &&
       after_flush.match_projection_evaluation_count == after.match_projection_evaluation_count &&
@@ -178,11 +182,11 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
       after_flush.modal_row_build_count == after.modal_row_build_count;
 
   controller.refresh_after_resize();
-  auto const full_sync_passed = presentation.snapshot.select_list && presentation.snapshot.select_list->freeze_underlying_transcript_layout &&
-                                presentation.snapshot.select_list->items.size() == ava::tui::kMaxTranscriptItems &&
-                                ava::tui::composer_canvas_layout(presentation.snapshot).content_width == 120 && renderer.transcript_layout_cache.width == 141 &&
-                                renderer.transcript_layout_cache.layout_build_count == full_layout_builds + 1 &&
-                                !renderer.has_deferred_detached_transcript_update();
+  auto const full_sync_passed =
+      presentation.snapshot.select_list && presentation.snapshot.select_list->freeze_underlying_transcript_layout &&
+      presentation.snapshot.select_list->items.size() == ava::tui::kMaxTranscriptItems &&
+      ava::tui::composer_canvas_layout(presentation.snapshot).content_width == 120 && renderer.prepared_transcript_layout().width == 141 &&
+      renderer.prepared_transcript_layout().layout_build_count == full_layout_builds + 1 && !renderer.transcript().has_deferred_update();
 
   return direct_refresh_passed && scheduled_render_passed && full_sync_passed;
 }
@@ -200,6 +204,8 @@ bool test_changed_session_snapshot_resets_presentation()
       ava::tui::TranscriptItem{.label = "you", .text = "OLD-TRANSCRIPT-MARKER"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "read_file"}},
   };
+  for (int index = 0; index < 30; ++index)
+    options.initial_transcript.front().text += "\nold transcript line";
   tui_test_support::TuiFrontEndFixture frontend(options);
   frontend.hooks().list_subagents = [&]() -> ava::core::Result<ava::tui::SelectListView> {
     ++job_list_calls;
@@ -211,8 +217,6 @@ bool test_changed_session_snapshot_resets_presentation()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.queued_messages = {{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}};
-  presentation.snapshot.sidebar_drawer_visible = true;
-  presentation.snapshot.sidebar_drawer_scroll_offset = 4;
   presentation.sidebar.activity = {{.id = "activity-old", .label = "tool", .detail = "old activity"}};
   presentation.sidebar.modified_files = {{.path = "old.cpp"}};
   presentation.sidebar.session_entry_count = 9;
@@ -237,18 +241,22 @@ bool test_changed_session_snapshot_resets_presentation()
   draft_state.replace_draft(presentation.snapshot.input, 0);
   draft_state.extend_selection_to(3, presentation.snapshot);
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
 
+  navigation.scroll_up(3);
+  auto const detached_update = renderer.begin_transcript_update();
   auto const search_opened = transcript_search.open("OLD-TRANSCRIPT-MARKER");
-  renderer.transcript_scroll_offset = 3;
-  renderer.detached_new_output_count = 2;
-  renderer.detached_sidebar_snapshot = presentation.sidebar;
-  renderer.defer_detached_transcript_update({}, 1);
-  renderer.transcript_layout_cache.valid = true;
+  presentation.snapshot.transcript.push_back({.label = "ava", .text = "pending output one"});
+  presentation.snapshot.transcript.push_back({.label = "ava", .text = "pending output two"});
+  ++presentation.snapshot.transcript_generation;
+  renderer.transcript().complete_transcript_update(detached_update, 0, 2);
+  bool const detached_state_seeded = renderer.transcript().scroll_offset() == 3 && renderer.transcript().new_output_count() == 2 &&
+                                     renderer.transcript().frozen_sidebar() && renderer.transcript().has_deferred_update() &&
+                                     renderer.prepared_transcript_layout().valid;
   auto const previous_generation = presentation.snapshot.transcript_generation;
   auto const replaced_session = frontend.replace_session_identity();
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
@@ -261,21 +269,22 @@ bool test_changed_session_snapshot_resets_presentation()
   auto history_probe_scratch = std::string{};
   auto const history_restored = ava::tui::browse_composer_input_history(history_probe, draft_state.history(), history_probe_index, history_probe_scratch, true);
   auto const changed_state_ok =
-      replaced_session && changed && search_opened && presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" &&
-      presentation.snapshot.transcript.empty() && presentation.snapshot.transcript_generation == previous_generation + 1 &&
-      presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
-      presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().content == "new todo" &&
-      presentation.sidebar.session_entry_count == std::nullopt && draft_state.draft().text.empty() && draft_state.history().empty() && !history_restored &&
-      !draft_state.selection_bounds() && draft_state.saved_draft().empty() && !draft_state.history_index() &&
-      draft_state.jump_mode() == ava::tui::ComposerJumpMode::None && draft_state.scroll_offset() == 0 && presentation.snapshot.input.empty() &&
-      presentation.snapshot.input_cursor == 0 && presentation.snapshot.input_selection_start == std::string::npos &&
-      presentation.snapshot.input_selection_end == std::string::npos && presentation.snapshot.transcript_selection_anchor_item == std::string::npos &&
+      replaced_session && changed && search_opened && detached_state_seeded && presentation.snapshot.session_id == committed_session_id &&
+      presentation.snapshot.mode == "build" && presentation.snapshot.transcript.empty() &&
+      presentation.snapshot.transcript_generation == previous_generation + 1 && presentation.snapshot.queued_messages.empty() &&
+      presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() && presentation.sidebar.todos.size() == 1 &&
+      presentation.sidebar.todos.front().content == "new todo" && presentation.sidebar.session_entry_count == std::nullopt &&
+      draft_state.draft().text.empty() && draft_state.history().empty() && !history_restored && !draft_state.selection_bounds() &&
+      draft_state.saved_draft().empty() && !draft_state.history_index() && draft_state.jump_mode() == ava::tui::ComposerJumpMode::None &&
+      draft_state.scroll_offset() == 0 && presentation.snapshot.input.empty() && presentation.snapshot.input_cursor == 0 &&
+      presentation.snapshot.input_selection_start == std::string::npos && presentation.snapshot.input_selection_end == std::string::npos &&
+      presentation.snapshot.transcript_selection_anchor_item == std::string::npos &&
       presentation.snapshot.transcript_selection_focus_item == std::string::npos && !presentation.snapshot.command_output &&
       !presentation.snapshot.local_command_feedback && presentation.snapshot.tool_index.empty() &&
       presentation.snapshot.evicted_tool_index_identities.empty() && presentation.snapshot.next_tool_index_sequence == 0 &&
       presentation.pending_image_attachments.empty() && presentation.snapshot.pending_attachments.empty() && !presentation.snapshot.sidebar_drawer_visible &&
-      presentation.snapshot.sidebar_drawer_scroll_offset == 0 && renderer.transcript_scroll_offset == 0 && renderer.detached_new_output_count == 0 &&
-      !renderer.detached_sidebar_snapshot && !renderer.has_deferred_detached_transcript_update() && !renderer.transcript_layout_cache.valid &&
+      presentation.snapshot.sidebar_drawer_scroll_offset == 0 && renderer.transcript().scroll_offset() == 0 && renderer.transcript().new_output_count() == 0 &&
+      !renderer.transcript().frozen_sidebar() && !renderer.transcript().has_deferred_update() && !renderer.prepared_transcript_layout().valid &&
       !transcript_search.is_open() && active_select_list.kind() == ava::tui::ActiveSelectList::None;
 
   presentation.snapshot.transcript = {{.label = "ava", .text = "new receipt only"}};
@@ -298,6 +307,9 @@ bool test_changed_session_snapshot_resets_presentation()
   draft_state.record_submission("old session prompt");
   draft_state.replace_draft("history scratch");
   bool const history_browsing_started = draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.saved_draft() == "history scratch";
+  // The drawer hides the transcript, so exercise its reset outside the detached-view probe.
+  presentation.snapshot.sidebar_drawer_visible = true;
+  presentation.snapshot.sidebar_drawer_scroll_offset = 4;
   presentation.snapshot.input = "draft from previous session";
   presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
   auto const before_replacements = presentation.snapshot.transcript_generation;
@@ -309,7 +321,8 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const transitioned = session_transition.apply(final_identity);
   bool const rapid_replacements_ok = first_replaced && second_replaced && intermediate_identity != final_identity && transitioned &&
                                      presentation.snapshot.session_id == final_identity && presentation.snapshot.input.empty() &&
-                                     presentation.pending_image_attachments.empty() && presentation.snapshot.transcript_generation == before_replacements + 1;
+                                     presentation.pending_image_attachments.empty() && presentation.snapshot.transcript_generation == before_replacements + 1 &&
+                                     !presentation.snapshot.sidebar_drawer_visible && presentation.snapshot.sidebar_drawer_scroll_offset == 0;
   expect(rapid_replacements_ok, "two replacements before one boundary reset presentation exactly once to the final identity");
   bool const history_browsing_reset =
       history_browsing_started && transitioned && draft_state.history().empty() && !draft_state.history_index() && draft_state.saved_draft().empty();
@@ -434,7 +447,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::Composer draft_state;
   draft_state.record_submission("OLD HISTORY PROMPT");
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
@@ -610,71 +623,71 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   ava::tui::Composer draft_state;
   draft_state.replace_draft(presentation.snapshot.input, presentation.snapshot.input_cursor);
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
 
   navigation.jump_to_bottom("live tail");
-  auto const live_before_wheel = renderer.transcript_scroll_offset;
+  auto const live_before_wheel = renderer.transcript().scroll_offset();
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
-  auto const wheel_up_offset = renderer.transcript_scroll_offset;
-  bool const wheel_up_detached = wheel_up_offset == ava::tui::kTranscriptWheelScrollRows && renderer.detached_sidebar_snapshot.has_value();
+  auto const wheel_up_offset = renderer.transcript().scroll_offset();
+  bool const wheel_up_detached = wheel_up_offset == ava::tui::kTranscriptWheelScrollRows && renderer.transcript().frozen_sidebar().has_value();
   navigation.scroll_down(ava::tui::kTranscriptWheelScrollRows);
-  auto const wheel_down_live = renderer.transcript_scroll_offset;
+  auto const wheel_down_live = renderer.transcript().scroll_offset();
   bool const wheel_reverse_reattached =
-      live_before_wheel == 0 && wheel_down_live == 0 && !renderer.detached_sidebar_snapshot.has_value() && renderer.detached_new_output_count == 0;
+      live_before_wheel == 0 && wheel_down_live == 0 && !renderer.transcript().frozen_sidebar().has_value() && renderer.transcript().new_output_count() == 0;
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
-  auto const two_wheel_ups = renderer.transcript_scroll_offset;
+  auto const two_wheel_ups = renderer.transcript().scroll_offset();
   navigation.scroll_down(1);
-  auto const one_row_down = renderer.transcript_scroll_offset;
+  auto const one_row_down = renderer.transcript().scroll_offset();
   bool const wheel_step_is_three =
       two_wheel_ups == ava::tui::kTranscriptWheelScrollRows * 2 && one_row_down + 1 == two_wheel_ups && ava::tui::kTranscriptWheelScrollRows == 3;
 
   navigation.scroll_up(1000);
-  auto const oldest_offset = renderer.transcript_scroll_offset;
+  auto const oldest_offset = renderer.transcript().scroll_offset();
   auto const draft_before = draft_state.draft().text;
   auto const cursor_before = draft_state.draft().cursor;
   bool const detached = oldest_offset > 0;
-  auto const overscroll_offset = renderer.transcript_scroll_offset;
+  auto const overscroll_offset = renderer.transcript().scroll_offset();
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
-  bool const wheel_clamps_at_oldest = renderer.transcript_scroll_offset == overscroll_offset;
+  bool const wheel_clamps_at_oldest = renderer.transcript().scroll_offset() == overscroll_offset;
 
   navigation.scroll_to_message_boundary(true);
   auto const oldest_status = presentation.snapshot.status;
-  auto const oldest_boundary_offset = renderer.transcript_scroll_offset;
+  auto const oldest_boundary_offset = renderer.transcript().scroll_offset();
 
   navigation.scroll_to_message_boundary(false);
   auto const next_status = presentation.snapshot.status;
-  auto const next_offset = renderer.transcript_scroll_offset;
+  auto const next_offset = renderer.transcript().scroll_offset();
   auto const max_scroll = oldest_offset;
   auto const next_start = max_scroll - std::min(max_scroll, next_offset);
-  auto const next_position = std::ranges::find(renderer.transcript_layout_cache.layout.message_starts, next_start);
-  auto const next_layout_position = static_cast<std::size_t>(next_position - renderer.transcript_layout_cache.layout.message_starts.begin());
-  auto const next_item_index = next_layout_position < renderer.transcript_layout_cache.layout.message_item_indices.size()
-                                   ? renderer.transcript_layout_cache.layout.message_item_indices[next_layout_position]
+  auto const next_position = std::ranges::find(renderer.prepared_transcript_layout().layout.message_starts, next_start);
+  auto const next_layout_position = static_cast<std::size_t>(next_position - renderer.prepared_transcript_layout().layout.message_starts.begin());
+  auto const next_item_index = next_layout_position < renderer.prepared_transcript_layout().layout.message_item_indices.size()
+                                   ? renderer.prepared_transcript_layout().layout.message_item_indices[next_layout_position]
                                    : std::string::npos;
 
   navigation.scroll_to_message_boundary(true);
   auto const prev_status = presentation.snapshot.status;
-  auto const prev_offset = renderer.transcript_scroll_offset;
+  auto const prev_offset = renderer.transcript().scroll_offset();
   auto const prev_start = max_scroll - std::min(max_scroll, prev_offset);
-  auto const prev_position = std::ranges::find(renderer.transcript_layout_cache.layout.message_starts, prev_start);
-  auto const prev_layout_position = static_cast<std::size_t>(prev_position - renderer.transcript_layout_cache.layout.message_starts.begin());
-  auto const prev_item_index = prev_layout_position < renderer.transcript_layout_cache.layout.message_item_indices.size()
-                                   ? renderer.transcript_layout_cache.layout.message_item_indices[prev_layout_position]
+  auto const prev_position = std::ranges::find(renderer.prepared_transcript_layout().layout.message_starts, prev_start);
+  auto const prev_layout_position = static_cast<std::size_t>(prev_position - renderer.prepared_transcript_layout().layout.message_starts.begin());
+  auto const prev_item_index = prev_layout_position < renderer.prepared_transcript_layout().layout.message_item_indices.size()
+                                   ? renderer.prepared_transcript_layout().layout.message_item_indices[prev_layout_position]
                                    : std::string::npos;
 
   navigation.scroll_to_message_boundary(false);
   navigation.scroll_to_message_boundary(false);
   auto const past_last_status = presentation.snapshot.status;
-  auto const past_last_offset = renderer.transcript_scroll_offset;
+  auto const past_last_offset = renderer.transcript().scroll_offset();
 
   navigation.jump_to_bottom("live tail");
   auto const live_status = presentation.snapshot.status;
-  auto const live_offset = renderer.transcript_scroll_offset;
+  auto const live_offset = renderer.transcript().scroll_offset();
 
   navigation.scroll_to_message_boundary(false);
   auto const already_live_status = presentation.snapshot.status;
-  auto const already_live_offset = renderer.transcript_scroll_offset;
+  auto const already_live_offset = renderer.transcript().scroll_offset();
 
   bool const draft_unchanged =
       draft_state.draft().text == draft_before && draft_state.draft().cursor == cursor_before && presentation.snapshot.input == draft_before;
@@ -691,16 +704,16 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   auto const body = ava::tui::detail::transcript_body_screen_geometry(presentation.snapshot);
   navigation.jump_to_bottom("live tail");
   navigation.scroll_up(page);
-  auto const page_offset = renderer.transcript_scroll_offset;
+  auto const page_offset = renderer.transcript().scroll_offset();
   navigation.jump_to_bottom("live tail");
   navigation.scroll_up(3);
-  auto const plain_arrow_step_offset = renderer.transcript_scroll_offset;
+  auto const plain_arrow_step_offset = renderer.transcript().scroll_offset();
   navigation.scroll_up(100000);
-  auto const bounded_oldest = renderer.transcript_scroll_offset;
+  auto const bounded_oldest = renderer.transcript().scroll_offset();
   navigation.scroll_up(page);
-  auto const clamped_oldest = renderer.transcript_scroll_offset;
+  auto const clamped_oldest = renderer.transcript().scroll_offset();
   navigation.scroll_down(100000);
-  auto const clamped_live_tail = renderer.transcript_scroll_offset;
+  auto const clamped_live_tail = renderer.transcript().scroll_offset();
   static_cast<void>(ava::tui::terminal::Context::resizeterm(4, 40));
   auto const tiny_page = navigation.transcript_page_size();
   bool const body_page_and_plain_arrow_sovereignty =
@@ -781,25 +794,19 @@ bool test_detached_completion_publish_preserves_numbered_window()
   auto const [width, height] = ava::tui::terminal_size();
   presentation.snapshot.width = width;
   presentation.snapshot.height = height;
-  auto const max_scroll = ava::tui::detail::composer_max_transcript_scroll_offset_cached(
-      presentation.snapshot, width, height, renderer.completion_cache, presentation.snapshot.file_references_generation, renderer.transcript_layout_cache,
-      presentation.snapshot.transcript_generation);
+  auto const max_scroll = renderer.prepare_transcript_layout();
   if (max_scroll == 0)
     return false;
   // Detach while the active-run contextual row is already reserved (processing=true, count=0).
-  renderer.transcript_scroll_offset = std::min<std::size_t>(3, max_scroll);
-  renderer.detached_sidebar_snapshot = presentation.sidebar;
-  presentation.snapshot.transcript_scroll_offset = renderer.transcript_scroll_offset;
+  renderer.transcript().scroll_up(3, max_scroll);
+  presentation.snapshot.transcript_scroll_offset = renderer.transcript().scroll_offset();
   presentation.snapshot.transcript_new_output_count = 0;
   if (!renderer.render())
     return false;
 
-  auto const detached_scroll = renderer.transcript_scroll_offset;
-  auto const detached_max_scroll = ava::tui::detail::composer_max_transcript_scroll_offset_cached(
-      presentation.snapshot, width, height, renderer.completion_cache, presentation.snapshot.file_references_generation, renderer.transcript_layout_cache,
-      presentation.snapshot.transcript_generation);
-  auto const anchor = ava::tui::detail::capture_transcript_viewport_anchor(renderer.transcript_layout_cache.layout, detached_max_scroll, detached_scroll);
-  auto const before_numbers = numbered_window(renderer.screen_row_cache.surfaces);
+  auto const detached_scroll = renderer.transcript().scroll_offset();
+  auto const detached_update = renderer.begin_transcript_update();
+  auto const before_numbers = numbered_window(renderer.painted_frame().surfaces);
   auto const draft_before = draft_state.draft().text;
   auto const snapshot_count_before = presentation.snapshot.transcript_new_output_count;
 
@@ -807,20 +814,19 @@ bool test_detached_completion_publish_preserves_numbered_window()
   constexpr int kNewOutputCount = 35;
   presentation.snapshot.transcript.back().text += "\n" + build_stream_text(30, 30 + kNewOutputCount - 1);
   ++presentation.snapshot.transcript_generation;
-  renderer.defer_detached_transcript_update(anchor, 0);
-  renderer.detached_new_output_count = static_cast<std::size_t>(kNewOutputCount);
+  renderer.transcript().complete_transcript_update(detached_update, 0, static_cast<std::size_t>(kNewOutputCount));
   presentation.snapshot.transcript_new_output_count = 0;
   presentation.snapshot.processing = false;
 
   auto const rendered = renderer.render();
-  auto const after_numbers = numbered_window(renderer.screen_row_cache.surfaces);
-  auto const surfaces_joined = tui_test_support::join_visible_lines(renderer.screen_row_cache.surfaces);
+  auto const after_numbers = numbered_window(renderer.painted_frame().surfaces);
+  auto const surfaces_joined = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces);
   auto const hint_visible =
       surfaces_joined.find(std::to_string(kNewOutputCount) + " new") != std::string::npos && surfaces_joined.find("Ctrl+End") != std::string::npos;
-  bool const passed = rendered && !renderer.render_failed() && snapshot_count_before == 0 && detached_scroll > 0 && anchor.valid && !before_numbers.empty() &&
-                      before_numbers == after_numbers && hint_visible && !renderer.has_deferred_detached_transcript_update() &&
+  bool const passed = rendered && !renderer.render_failed() && snapshot_count_before == 0 && detached_scroll > 0 && detached_update.anchor().valid &&
+                      !before_numbers.empty() && before_numbers == after_numbers && hint_visible && !renderer.transcript().has_deferred_update() &&
                       presentation.snapshot.transcript_new_output_count == static_cast<std::size_t>(kNewOutputCount) &&
-                      presentation.snapshot.transcript_scroll_offset == renderer.transcript_scroll_offset && renderer.transcript_scroll_offset > 0 &&
+                      presentation.snapshot.transcript_scroll_offset == renderer.transcript().scroll_offset() && renderer.transcript().scroll_offset() > 0 &&
                       draft_state.draft().text == draft_before && presentation.snapshot.input == draft_before && !presentation.snapshot.processing;
 
   return passed;
@@ -845,19 +851,19 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
     ava::tui::Composer draft_state;
     draft_state.replace_draft(presentation.snapshot.input, presentation.snapshot.input_cursor);
     ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-    ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+    ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
 
     auto const draft_before = draft_state.draft().text;
     auto const cursor_before = draft_state.draft().cursor;
-    auto const offset_before = renderer.transcript_scroll_offset;
+    auto const offset_before = renderer.transcript().scroll_offset();
 
     navigation.scroll_to_message_boundary(true);
     auto const prev_status = presentation.snapshot.status;
-    auto const prev_offset = renderer.transcript_scroll_offset;
+    auto const prev_offset = renderer.transcript().scroll_offset();
 
     navigation.scroll_to_message_boundary(false);
     auto const next_status = presentation.snapshot.status;
-    auto const next_offset = renderer.transcript_scroll_offset;
+    auto const next_offset = renderer.transcript().scroll_offset();
 
     bool const draft_unchanged =
         draft_state.draft().text == draft_before && draft_state.draft().cursor == cursor_before && presentation.snapshot.input == draft_before;
@@ -1401,7 +1407,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
@@ -4295,7 +4301,7 @@ void run_tui_composer_rendering_tests_part_4()
       active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       ava::tui::Composer draft_state;
       ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
+      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active);
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active);

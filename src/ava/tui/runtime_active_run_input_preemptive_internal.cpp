@@ -62,7 +62,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_pre
     return to_input_handling(prompt_stash_.trigger());
   if (active_event.key == Key::Escape || is_action(active_event, TuiAction::Cancel))
   {
-    switch (detail::active_run_cancel_disposition(draft_state_.selection_bounds().has_value(), renderer_.has_transcript_selection()))
+    switch (detail::active_run_cancel_disposition(draft_state_.selection_bounds().has_value(), renderer_.transcript().has_selection()))
     {
       case detail::ActiveRunCancelDisposition::ClearDraftSelection:
         draft_state_.clear_selection();
@@ -82,7 +82,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_pre
     static_cast<void>(draft_state_.copy_selection(snapshot));
     return to_input_handling(renderer_.request_render());
   }
-  if (is_action(active_event, TuiAction::CopySelection) && renderer_.has_transcript_selection())
+  if (is_action(active_event, TuiAction::CopySelection) && renderer_.transcript().has_selection())
   {
     draft_state_.cancel_escape();
     static_cast<void>(renderer_.copy_transcript_selection());

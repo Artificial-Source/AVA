@@ -700,15 +700,13 @@ void TranscriptSearchController::refresh_authoritative_layout()
   snapshot.height = height;
   ScopedTranscriptSearchModalProjection project_search_modal(snapshot, is_open());
   renderer_.synchronize_detached_transcript_layout();
-  static_cast<void>(detail::composer_max_transcript_scroll_offset_cached(snapshot, width, height, renderer_.completion_cache,
-                                                                         snapshot.file_references_generation, renderer_.transcript_layout_cache,
-                                                                         snapshot.transcript_generation));
+  static_cast<void>(renderer_.prepare_transcript_layout());
 }
 
 void TranscriptSearchController::capture_authoritative_layout_settings()
 {
   auto const& snapshot = presentation_state_.snapshot;
-  auto const& cache = renderer_.transcript_layout_cache;
+  auto const& cache = renderer_.prepared_transcript_layout();
   authoritative_terminal_width_ = snapshot.width;
   authoritative_terminal_height_ = snapshot.height;
   authoritative_layout_width_ = cache.width;
@@ -730,18 +728,16 @@ bool TranscriptSearchController::open(std::string query)
 
   refresh_authoritative_layout();
   capture_authoritative_layout_settings();
-  auto const max_scroll = detail::composer_max_transcript_scroll_offset_cached(snapshot, snapshot.width, snapshot.height, renderer_.completion_cache,
-                                                                               snapshot.file_references_generation, renderer_.transcript_layout_cache,
-                                                                               snapshot.transcript_generation);
-  saved_scroll_offset_ = std::min(renderer_.transcript_scroll_offset, max_scroll);
+  auto const max_scroll = renderer_.prepare_transcript_layout();
+  saved_scroll_offset_ = std::min(renderer_.transcript().scroll_offset(), max_scroll);
   saved_transcript_generation_ = snapshot.transcript_generation;
   saved_width_ = snapshot.width;
   saved_height_ = snapshot.height;
-  saved_viewport_anchor_ = detail::capture_transcript_viewport_anchor(renderer_.transcript_layout_cache.layout, max_scroll, saved_scroll_offset_);
+  saved_viewport_anchor_ = detail::capture_transcript_viewport_anchor(renderer_.prepared_transcript_layout().layout, max_scroll, saved_scroll_offset_);
   accumulated_item_index_shift_ = 0;
   query_ = std::move(query);
   static_cast<void>(projection_cache_.update_query(query_));
-  auto const update = projection_cache_.rebuild_all(snapshot, renderer_.transcript_layout_cache.layout);
+  auto const update = projection_cache_.rebuild_all(snapshot, renderer_.prepared_transcript_layout().layout);
   rebuild(std::nullopt, std::numeric_limits<std::size_t>::max(), update.first_changed_match_row);
   snapshot.status = projection_cache_.matches().empty() ? "no transcript matches" : "transcript search opened";
   return true;
@@ -814,7 +810,7 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
   {
     refresh_authoritative_layout();
     capture_authoritative_layout_settings();
-    auto const update = projection_cache_.rebuild_all(snapshot, renderer_.transcript_layout_cache.layout);
+    auto const update = projection_cache_.rebuild_all(snapshot, renderer_.prepared_transcript_layout().layout);
     rebuild(selected_item_index, fallback_selection, update.first_changed_match_row);
     return;
   }
@@ -840,7 +836,7 @@ void TranscriptSearchController::refresh_after_resize()
   }
   refresh_authoritative_layout();
   capture_authoritative_layout_settings();
-  auto const update = projection_cache_.rebuild_all(presentation_state_.snapshot, renderer_.transcript_layout_cache.layout);
+  auto const update = projection_cache_.rebuild_all(presentation_state_.snapshot, renderer_.prepared_transcript_layout().layout);
   rebuild(selected_item_index, fallback_selection, update.first_changed_match_row);
 }
 
@@ -849,28 +845,16 @@ void TranscriptSearchController::restore_saved_viewport(std::string status)
   auto& snapshot = presentation_state_.snapshot;
   selectors_.close();
   refresh_authoritative_layout();
-  auto const max_scroll = detail::composer_max_transcript_scroll_offset_cached(snapshot, snapshot.width, snapshot.height, renderer_.completion_cache,
-                                                                               snapshot.file_references_generation, renderer_.transcript_layout_cache,
-                                                                               snapshot.transcript_generation);
+  auto const max_scroll = renderer_.prepare_transcript_layout();
   auto const exact_restore =
       snapshot.width == saved_width_ && snapshot.height == saved_height_ &&
       (saved_scroll_offset_ == 0 || (snapshot.transcript_generation == saved_transcript_generation_ && accumulated_item_index_shift_ == 0));
-  renderer_.transcript_scroll_offset = exact_restore ? std::min(saved_scroll_offset_, max_scroll)
-                                       : saved_viewport_anchor_.valid
-                                           ? detail::restore_transcript_viewport_anchor(saved_viewport_anchor_, renderer_.transcript_layout_cache.layout,
-                                                                                        max_scroll, accumulated_item_index_shift_)
-                                           : std::min(saved_scroll_offset_, max_scroll);
-  renderer_.discard_deferred_detached_transcript_update();
-  if (renderer_.transcript_scroll_offset > 0)
-  {
-    if (!renderer_.detached_sidebar_snapshot)
-      renderer_.detached_sidebar_snapshot = presentation_state_.sidebar;
-  }
-  else
-  {
-    renderer_.detached_new_output_count = 0;
-    renderer_.detached_sidebar_snapshot.reset();
-  }
+  auto const offset = exact_restore ? std::min(saved_scroll_offset_, max_scroll)
+                      : saved_viewport_anchor_.valid
+                          ? detail::restore_transcript_viewport_anchor(saved_viewport_anchor_, renderer_.prepared_transcript_layout().layout, max_scroll,
+                                                                       accumulated_item_index_shift_)
+                          : std::min(saved_scroll_offset_, max_scroll);
+  renderer_.transcript().navigate_to_offset(offset, max_scroll);
   snapshot.status = std::move(status);
   projection_cache_.clear();
   query_.clear();
