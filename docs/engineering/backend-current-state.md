@@ -293,10 +293,11 @@ TUI caches the resulting tree in `ApplicationCatalogCoordinator`.
 Cancellation is a **cooperative polling** model; there is no centralized cancellation
 registry.
 
-- **Origins.** TUI: `RuntimeActiveRunController::request_stop` sets the
-  `run_cancel_requested` atomic
-  ([src/ava/tui/runtime_active_run_internal.cpp](../../src/ava/tui/runtime_active_run_internal.cpp));
-  Escape inside permission/question prompts also routes to `request_stop`
+- **Origins.** TUI: `ActiveRun::request_stop` publishes the private Inbox stop
+  flag and cancels pending prompt/plugin work
+  ([src/ava/tui/ActiveRun.cpp](../../src/ava/tui/ActiveRun.cpp)).
+  Permission Escape requests run stop before releasing its denial result;
+  question cancellation completes that question without requesting run stop
   ([src/ava/tui/runtime_prompts_internal.cpp](../../src/ava/tui/runtime_prompts_internal.cpp)).
   RPC/ACP/print frontends supply their own `cancel_requested` callbacks.
   `SessionRunController::request_stop` records the stop against the active run and
