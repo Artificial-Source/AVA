@@ -65,7 +65,6 @@ class ActiveRunEvents final
   std::vector<std::string> ordinary_turn_request_ids_;
   bool command_events_released_ = false;
   bool projection_pending_ = false;
-  bool received_events_ = false;
 };
 
 } // namespace ava::tui

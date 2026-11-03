@@ -28,10 +28,10 @@ class SessionTransitionCoordinator final
   SessionTransitionCoordinator(SessionTransitionCoordinator const&) = delete;
   SessionTransitionCoordinator& operator=(SessionTransitionCoordinator const&) = delete;
 
-  // Read committed identity through the frontend before acquiring the UI lock.
+  // TUI thread: read committed identity before replacing the visible session.
   // A matching identity preserves all session-scoped presentation state.
   [[nodiscard]] bool apply(std::string committed_session_id);
-  // Calls frontend boundary reads: invoke only without holding the UI lock.
+  // TUI thread: read the backend before publishing the replacement projection.
   [[nodiscard]] bool apply_and_refresh(TuiFrontEnd& frontend, std::string committed_session_id);
 
   // Generated reference printing reports type/address without traversing owners.

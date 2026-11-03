@@ -8,12 +8,14 @@
 #include "ava/app/tui/subagent_workspace.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
+#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_commands_internal.h"
+#include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 #include "ava/tui/runtime_user_turn_selection_internal.h"
@@ -23,6 +25,7 @@
 #include "ava/config/model_config.h"
 #include "ava/session/session_store.h"
 #include "ava/session/session_tree.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/error.h"
 
 #include <algorithm>
@@ -36,6 +39,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <sys/eventfd.h>
 
 void run_tui_selector_tests()
 {
@@ -1894,10 +1898,19 @@ void run_tui_selector_tests()
   controller_presentation.publish_transcript({{.label = "assistant", .text = "parent transcript"}});
   auto const parent_generation = controller_snapshot.transcript_generation;
   controller_presentation.publish_dimensions(40, 8);
+  // Discovery runs through the production timer registry, with a real pollable
+  // descriptor kept alive until all registrations and the loop are destroyed.
+  ava::core::UniqueFd discovery_fd(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK));
+  if (!ava::tests::require(discovery_fd.get() >= 0, "workspace discovery has a pollable descriptor"))
+    return;
+  ava::tui::TuiEventLoop discovery_loop(discovery_fd.get());
+  ava::tui::RuntimeRenderer workspace_renderer(controller_frontend.frontend(), controller_presentation, controller_composer);
+  workspace_renderer.attach_loop(discovery_loop);
   ava::tui::SelectorHost selectors(controller_presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
+  workspace_controller.attach_loop(discovery_loop, workspace_renderer);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
-  auto const time_zero = WorkspaceClock::time_point{};
+  auto const time_zero = WorkspaceClock::now();
   expect(workspace_controller.open_selector(time_zero) && workspace_controller.selector_active() && list_calls == 1,
          "shared subagent controller opens the selector without changing the parent composer state");
   ava::tui::InputEvent type_query;
@@ -1915,10 +1928,10 @@ void run_tui_selector_tests()
              controller_snapshot.subagent_workspace->launch_detail == "GPT-5.6 Terra · thinking default",
          "selector Enter opens the owner-bound frozen frame with launch metadata using hidden job identity");
   current_new_launch = "GPT-5.6 Luna · thinking default";
-  expect(!workspace_controller.poll(time_zero + std::chrono::milliseconds(149)) && inspect_calls == 1 && list_calls == 1,
-         "subagent workspace never polls faster than 150ms");
-  auto const live_changed = workspace_controller.poll(time_zero + std::chrono::milliseconds(150));
-  expect(live_changed && inspect_calls == 2 && list_calls == 2 && inspected_generations.back() == std::optional<std::uint64_t>{1} &&
+  discovery_loop.service_due(time_zero + std::chrono::milliseconds(149));
+  expect(inspect_calls == 1 && list_calls == 1, "subagent workspace never polls faster than 150ms");
+  discovery_loop.service_due(time_zero + std::chrono::milliseconds(150));
+  expect(inspect_calls == 2 && list_calls == 2 && inspected_generations.back() == std::optional<std::uint64_t>{1} &&
              workspace_controller.known_generation() == std::optional<std::uint64_t>{2} && controller_snapshot.subagent_workspace &&
              controller_snapshot.subagent_workspace->messages.size() == 2 &&
              controller_snapshot.subagent_workspace->launch_detail == "GPT-5.6 Luna · thinking default",
@@ -1935,12 +1948,18 @@ void run_tui_selector_tests()
   auto paged_up = workspace_controller.handle_input(page_up);
   expect(paged_up.changed && controller_snapshot.subagent_workspace && before_page >= controller_snapshot.subagent_workspace->scroll_offset + 5,
          "workspace PageUp scrolls exactly five rendered rows within bounds");
-  auto const unchanged_poll = workspace_controller.poll(time_zero + std::chrono::milliseconds(300));
-  expect(!unchanged_poll && inspect_calls == 3 && inspected_generations.back() == std::optional<std::uint64_t>{2},
+  // Finish prior invalidation so a not-modified discovery must leave no new
+  // frame timer due before the next 150 ms discovery deadline.
+  expect(workspace_renderer.paint_for_handoff(), "workspace paints its prior update before checking unchanged discovery");
+  auto const unchanged_generation = workspace_controller.known_generation();
+  discovery_loop.service_due(time_zero + std::chrono::milliseconds(300));
+  expect(!discovery_loop.has_due_work(time_zero + std::chrono::milliseconds(300)) && workspace_controller.known_generation() == unchanged_generation &&
+             inspect_calls == 3 && inspected_generations.back() == std::optional<std::uint64_t>{2},
          "not-modified inspector polls retain the frozen frame without requesting redraw");
   list_refresh_failure = true;
-  expect(workspace_controller.poll(time_zero + std::chrono::milliseconds(450)) && controller_snapshot.subagent_workspace &&
-             controller_snapshot.subagent_workspace->refresh_unavailable && controller_snapshot.subagent_workspace->messages.size() == 2 && inspect_calls == 3,
+  discovery_loop.service_due(time_zero + std::chrono::milliseconds(450));
+  expect(controller_snapshot.subagent_workspace && controller_snapshot.subagent_workspace->refresh_unavailable &&
+             controller_snapshot.subagent_workspace->messages.size() == 2 && inspect_calls == 3,
          "metadata refresh failures retain the frozen child frame and expose only a fixed unavailable state");
   auto const refresh_failure_screen =
       controller_snapshot.subagent_workspace
@@ -1949,8 +1968,8 @@ void run_tui_selector_tests()
   expect(refresh_failure_screen.find("Live refresh unavail") != std::string::npos && refresh_failure_screen.find("private backend detail") == std::string::npos,
          "poll failure rendering is truthful and sanitized");
   list_refresh_failure = false;
-  expect(workspace_controller.poll(time_zero + std::chrono::milliseconds(600)) && controller_snapshot.subagent_workspace &&
-             !controller_snapshot.subagent_workspace->refresh_unavailable && inspect_calls == 4,
+  discovery_loop.service_due(time_zero + std::chrono::milliseconds(600));
+  expect(controller_snapshot.subagent_workspace && !controller_snapshot.subagent_workspace->refresh_unavailable && inspect_calls == 4,
          "a successful metadata and known-generation refresh clears transient unavailable state");
   ava::tui::InputEvent escape_workspace;
   escape_workspace.key = ava::tui::terminal::Key::Escape;

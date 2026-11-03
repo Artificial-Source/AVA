@@ -91,9 +91,11 @@ std::vector<std::string> split_argument_tokens(std::string_view text)
   std::size_t index = 0;
   while (index < text.size())
   {
-    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0) ++index;
+    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0)
+      ++index;
     auto const start = index;
-    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) == 0) ++index;
+    while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) == 0)
+      ++index;
     if (start < index)
       tokens.emplace_back(text.substr(start, index - start));
   }
@@ -151,9 +153,11 @@ std::vector<std::string> file_reference_query_tokens(std::string_view query)
   std::size_t index = 0;
   while (index < query.size())
   {
-    while (index < query.size() && (is_ascii_space(query[index]) || query[index] == '/')) ++index;
+    while (index < query.size() && (is_ascii_space(query[index]) || query[index] == '/'))
+      ++index;
     auto const start = index;
-    while (index < query.size() && !is_ascii_space(query[index]) && query[index] != '/') ++index;
+    while (index < query.size() && !is_ascii_space(query[index]) && query[index] != '/')
+      ++index;
     if (start < index)
       tokens.emplace_back(query.substr(start, index - start));
   }
@@ -618,7 +622,8 @@ std::optional<FileReferencePrefix> find_file_reference_prefix(std::string_view i
   }
 
   auto start = cursor;
-  while (start > 0 && !is_file_reference_boundary_char(input[start - 1])) --start;
+  while (start > 0 && !is_file_reference_boundary_char(input[start - 1]))
+    --start;
   if (start >= input.size() || input[start] != '@')
     return std::nullopt;
   if (!is_file_reference_boundary(input, start))
@@ -663,7 +668,8 @@ std::optional<PathCompletionPrefix> find_path_completion_prefix(std::string_view
   }
 
   auto start = cursor;
-  while (start > 0 && !is_path_completion_delimiter(input[start - 1])) --start;
+  while (start > 0 && !is_path_completion_delimiter(input[start - 1]))
+    --start;
   if (start >= input.size())
   {
     if (!force)
@@ -704,7 +710,8 @@ std::vector<std::size_t> rank_file_reference_indices(std::string_view query, std
   });
   std::vector<std::size_t> indices;
   indices.reserve(scored.size());
-  for (auto const& match : scored) indices.push_back(match.source_index);
+  for (auto const& match : scored)
+    indices.push_back(match.source_index);
   return indices;
 }
 
@@ -801,17 +808,28 @@ std::string render_palette_item_compact(SlashCommandItem const& item, bool selec
 
 void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapshot const& snapshot, std::size_t source_revision)
 {
+  refresh_completion_match_cache(cache, snapshot.input, snapshot.input_cursor, snapshot.slash_palette_suppressed, snapshot.path_completion_force_active,
+                                 snapshot.slash_commands, snapshot.file_references, source_revision);
+}
+
+// TUI thread: rank against call-scoped editor/catalog values. Forced completion
+// uses this same algorithm before publishing its changed force flag. No owner or
+// snapshot is copied, and the cache owns only indices into the unchanged catalog.
+void refresh_completion_match_cache(CompletionMatchCache& cache, std::string const& input, std::size_t cursor, bool suppressed, bool force_path,
+                                    std::vector<SlashCommandItem> const& commands, std::vector<FileReferenceItem> const& references,
+                                    std::size_t source_revision)
+{
   auto surface = CompletionSurface::None;
   auto prefix = CompletionPrefix{};
-  if (!snapshot.slash_palette_suppressed && !slash_palette_visible(snapshot.input, snapshot.input_cursor, snapshot.slash_commands))
+  if (!suppressed && !slash_palette_visible(input, cursor, commands))
   {
-    if (auto const reference_prefix = find_file_reference_prefix(snapshot.input, snapshot.input_cursor))
+    if (auto const reference_prefix = find_file_reference_prefix(input, cursor))
     {
       surface = CompletionSurface::FileReference;
       prefix = CompletionPrefix{
           .start = reference_prefix->start, .cursor = reference_prefix->cursor, .value = reference_prefix->value, .quoted = reference_prefix->quoted};
     }
-    else if (auto const path_prefix = find_path_completion_prefix(snapshot.input, snapshot.input_cursor, snapshot.path_completion_force_active))
+    else if (auto const path_prefix = find_path_completion_prefix(input, cursor, force_path))
     {
       surface = CompletionSurface::PathCompletion;
       prefix = CompletionPrefix{.start = path_prefix->start,
@@ -822,18 +840,14 @@ void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapsho
     }
   }
 
-  if (cache.model && cache.model->input == snapshot.input && cache.model->cursor == snapshot.input_cursor &&
-      cache.model->force_path == snapshot.path_completion_force_active && cache.model->source_revision == source_revision && cache.model->surface == surface)
+  if (cache.model && cache.model->input == input && cache.model->cursor == cursor && cache.model->force_path == force_path &&
+      cache.model->source_revision == source_revision && cache.model->surface == surface)
   {
     return;
   }
 
-  CompletionMatchModel model{.input = snapshot.input,
-                             .cursor = snapshot.input_cursor,
-                             .force_path = snapshot.path_completion_force_active,
-                             .source_revision = source_revision,
-                             .surface = surface,
-                             .prefix = std::move(prefix)};
+  CompletionMatchModel model{
+      .input = input, .cursor = cursor, .force_path = force_path, .source_revision = source_revision, .surface = surface, .prefix = std::move(prefix)};
   auto const query = model.surface == CompletionSurface::PathCompletion
                          ? path_completion_query_value(PathCompletionPrefix{.start = model.prefix.start,
                                                                             .cursor = model.prefix.cursor,
@@ -842,11 +856,11 @@ void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapsho
                                                                             .leading_dot_slash = model.prefix.leading_dot_slash})
                          : model.prefix.value;
   if (model.surface != CompletionSurface::None)
-    model.ranked_source_indices = rank_file_reference_indices(query, snapshot.file_references);
+    model.ranked_source_indices = rank_file_reference_indices(query, references);
   model.palette_visible = !model.ranked_source_indices.empty();
   if (model.palette_visible && model.ranked_source_indices.size() == 1)
   {
-    auto const& match = snapshot.file_references[model.ranked_source_indices.front()];
+    auto const& match = references[model.ranked_source_indices.front()];
     if (match.enabled && !match.directory && match.value == query)
       model.palette_visible = false;
   }
@@ -1343,7 +1357,8 @@ std::vector<FileReferenceItem> filter_file_references(std::string_view input, st
   auto const indices = detail::rank_file_reference_indices(prefix->value, references);
   std::vector<FileReferenceItem> matches;
   matches.reserve(indices.size());
-  for (auto const index : indices) matches.push_back(references[index]);
+  for (auto const index : indices)
+    matches.push_back(references[index]);
   return matches;
 }
 
@@ -1455,7 +1470,8 @@ std::vector<FileReferenceItem> filter_path_completions(std::string_view input, s
   auto const indices = detail::rank_file_reference_indices(detail::path_completion_query_value(*prefix), references);
   std::vector<FileReferenceItem> matches;
   matches.reserve(indices.size());
-  for (auto const index : indices) matches.push_back(references[index]);
+  for (auto const index : indices)
+    matches.push_back(references[index]);
   return matches;
 }
 

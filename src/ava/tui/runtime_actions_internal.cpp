@@ -108,12 +108,11 @@ RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimeP
 void RuntimeActionController::attach_loop(TuiEventLoop& loop)
 {
   // Attach display discovery once before servicing this nonmoving controller.
-  ASSERT(!loop_attached_);
-  if (loop_attached_)
+  ASSERT(!display_reload_timer_.active());
+  if (display_reload_timer_.active())
     return;
   display_reload_timer_ = loop.member_timer(*this, &RuntimeActionController::mark_display_reload_due);
   display_reload_timer_.repeat(kDisplayReloadPollInterval);
-  loop_attached_ = true;
 }
 
 void RuntimeActionController::mark_display_reload_due(TuiTimer::Clock::time_point)
@@ -123,7 +122,7 @@ void RuntimeActionController::mark_display_reload_due(TuiTimer::Clock::time_poin
 
 DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_settings()
 {
-  if (loop_attached_ && !std::exchange(display_reload_due_, false))
+  if (!std::exchange(display_reload_due_, false))
     return DisplaySettingsReloadPollOutcome::Unchanged;
 
   // Preserve the frontend owner's optional result as the explicit applied/unchanged signal.
@@ -137,7 +136,6 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     last_display_reload_error_ = status;
     static_cast<void>(core::Application::instance().terminal_context().beep());
     {
-      auto lock = renderer_.lock_ui();
       presentation_state_.publish_local_status(std::move(status));
     }
     // Failure path keeps last-good presentation and still paints the status when possible.
@@ -150,12 +148,16 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   auto result = std::move(**reloaded);
   auto status = result.status.empty() ? std::string("display theme auto-reloaded") : result.status;
   {
-    auto lock = renderer_.lock_ui();
     presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
     synchronize_startup_overview_presentation(presentation_state_, selectors_);
     presentation_state_.publish_local_status(std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;
+}
+
+void RuntimeActionController::close_startup_overview()
+{
+  close_startup_overview_presentation(presentation_state_, selectors_);
 }
 
 bool RuntimeActionController::clear_draft_for_interrupt()

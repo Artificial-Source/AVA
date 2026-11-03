@@ -68,8 +68,13 @@ class ActiveRunInbox final : public std::enable_shared_from_this<ActiveRunInbox>
   ava::event::EventEnvelopeContext context_;
   std::atomic_bool stop_requested_{false};
   bool accepting_ = true;
-  bool terminal_published_ = false;
-  std::optional<ActiveRunTerminal> terminal_;
+  // A consumed marker preserves first-publication wins after the payload moves out.
+  enum class TerminalHistory
+  {
+    Consumed // TUI has taken the first payload; all later publications remain rejected.
+  };
+  // Under mutex_: empty permits publication; payload is ready; consumed rejects repeats.
+  std::variant<std::monostate, ActiveRunTerminal, TerminalHistory> terminal_;
 };
 
 } // namespace ava::tui

@@ -305,6 +305,7 @@ set(AVA_TESTS_SOURCES
   "tui_completion_tests.cpp"
   "tui_composer_rendering_tests.cpp"
   "tui_event_loop_tests.cpp"
+  "tui_runtime_owner_tests.cpp"
   "tui_keybinding_tests.cpp"
   "tui_markdown_tests.cpp"
   "tui_mermaid_tests.cpp"

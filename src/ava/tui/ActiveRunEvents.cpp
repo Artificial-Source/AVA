@@ -160,7 +160,6 @@ void ActiveRunEvents::apply_batch(std::span<QueuedTuiEvent const> events, Runtim
   if (!events.empty())
   {
     projection_pending_ = true;
-    received_events_ = true;
   }
 }
 
@@ -222,8 +221,9 @@ bool ActiveRunEvents::conversation_committed() const noexcept
 
 bool ActiveRunEvents::authorized_events_received() const
 {
-  if (!command_)
-    return received_events_;
+  // Only command submissions need receipt-filtered evidence; ordinary runs use
+  // the inbox history, which includes events already drained into this reducer.
+  ASSERT(command_);
   if (detail::command_event_request_has_conversation_authority(std::optional<std::string>{initial_request_id_}, ordinary_turn_request_ids_) &&
       has_transcript_events(initial_command_))
     return true;
@@ -257,7 +257,6 @@ void ActiveRunEvents::discard()
   ordinary_turn_request_ids_.clear();
   command_events_released_ = false;
   projection_pending_ = false;
-  received_events_ = false;
 }
 
 } // namespace ava::tui

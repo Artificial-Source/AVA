@@ -244,7 +244,6 @@ bool ActiveRun::request_stop()
   if (newly_requested)
     ava::core::Application::instance().terminal_context().beep();
   {
-    auto lock = renderer_.lock_ui();
     presentation_state_.publish_status("stop requested");
     upsert_stopping_activity();
   }
@@ -279,7 +278,7 @@ void ActiveRun::before_prompt()
   // from the displayed frame after the claim retires, preserving baseline cadence.
   spinner_.stop();
   transcript_search_.close_before_prompt();
-  close_startup_overview_presentation(presentation_state_, action_controller_.selectors());
+  action_controller_.close_startup_overview();
 }
 
 bool ActiveRun::service_prompt()
@@ -334,7 +333,6 @@ void ActiveRun::publish_spinner_frame(std::size_t frame)
   if (!active() || !presentation_state_.screen().processing)
     return;
   {
-    auto lock = renderer_.lock_ui();
     presentation_state_.publish_spinner(frame);
   }
   if (!subagent_workspace_.active() && !renderer_.request_render(FrameRenderKind::Footer))
@@ -458,7 +456,6 @@ void ActiveRun::finish_queues()
   {
     if (auto finished = active_queues_->finish(inbox_->stop_requested()); !finished)
     {
-      auto lock = renderer_.lock_ui();
       presentation_state_.publish_status(finished.error().format());
       completion_failed_ = true;
     }
@@ -473,11 +470,10 @@ void ActiveRun::begin_completion(TuiSubmitResult result)
   plugin_ui_.finish_submission();
   worker_.get();
   events_->authorize_receipts(result_->ordinary_turn_request_ids);
-  // Backend identity/transports are read after commit and outside the UI lock.
+  // Read backend identity/transports after commit, before replacing the projection.
   auto committed_session_id = frontend_.read_committed_session_id();
   auto boundary_reads = result_->quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
   {
-    auto lock = renderer_.lock_ui();
     session_changed_ = transitions_.apply(std::move(committed_session_id));
     if (!result_->quit)
       presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
@@ -637,7 +633,6 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
     if (batch.empty())
       return RuntimeEventDrainResult::NoEvents;
     {
-      auto lock = renderer_.lock_ui();
       apply_non_transcript_event_authority();
     }
     return renderer_.request_render() ? RuntimeEventDrainResult::UpdatedNoRender : RuntimeEventDrainResult::RenderFailed;
@@ -649,7 +644,6 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
         presentation_state_.publish_tool(*item.tool, TuiToolIndexOrigin::Provider);
   }
   {
-    auto lock = renderer_.lock_ui();
     auto const update = renderer_.begin_transcript_update();
     apply_assistant_turn_meta(*projection, assistant_meta_for_snapshot(&frontend_, snapshot, std::chrono::steady_clock::now() - turn_started_at_),
                               snapshot.thinking_visible);
@@ -699,7 +693,6 @@ ActiveRunOutcome ActiveRun::settle_completion()
     presentation_state_.publish_modified_files(files);
   }
   {
-    auto lock = renderer_.lock_ui();
     settle_turn_activity();
   }
   if (settlement.policy.project_conversation && !events_received)

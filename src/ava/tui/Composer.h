@@ -19,7 +19,9 @@ namespace runtime_input {
 struct RuntimeInput;
 }
 
-class RuntimeNavigationController;
+namespace detail {
+struct CompletionMatchCache;
+}
 class PromptStash;
 enum class PromptStashRestoreResult;
 namespace terminal {
@@ -98,11 +100,12 @@ class Composer final
   // Keep the identity borrowed by renderer/navigation stable for its lifetime.
   Composer& operator=(Composer const&) = delete;
   // TUI thread: handle one documented dispatch phase. All inputs are call-scoped;
-  // returned requests are performed by the session before its next paint.
+  // returned requests are performed by the session before its next paint. The
+  // caller publishes this draft and prepares completions before each phase.
   [[nodiscard]] ComposerInputResult handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
-                                               RuntimeNavigationController& navigation, bool transcript_selected, ComposerInputPhase phase);
+                                               detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase);
   // TUI thread: share palette wrapping/status between idle and active-run routing.
-  [[nodiscard]] ComposerInputResult step_completion(CompletionStep step, RuntimeNavigationController& navigation, ComposerSnapshot const& snapshot);
+  [[nodiscard]] ComposerInputResult step_completion(CompletionStep step, detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot);
 
   [[nodiscard]] ComposerDraftState const& draft() const noexcept;
   [[nodiscard]] std::vector<std::string> const& history() const noexcept;
@@ -114,7 +117,6 @@ class Composer final
   [[nodiscard]] bool path_completion_forced() const noexcept;
   [[nodiscard]] std::size_t scroll_offset() const noexcept;
   [[nodiscard]] bool mouse_selecting() const noexcept;
-  [[nodiscard]] bool escape_pending() const noexcept;
 
   void cancel_escape();
   void reset_interaction();
@@ -138,9 +140,9 @@ class Composer final
   ComposerInputResult insert_input(runtime_input::RuntimeInput const& input, ComposerEditContext context = ComposerEditContext::Idle);
 
   ComposerInputResult select_slash_command(ComposerSnapshot const& snapshot);
-  ComposerInputResult select_file_reference(RuntimeNavigationController& navigation);
-  ComposerInputResult select_path_completion(RuntimeNavigationController& navigation);
-  ComposerInputResult force_path_completion(RuntimeNavigationController& navigation, ComposerEditContext edit_context = ComposerEditContext::Idle);
+  ComposerInputResult select_file_reference(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot);
+  ComposerInputResult select_path_completion(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot);
+  ComposerInputResult force_path_completion(ComposerSnapshot const& snapshot, ComposerEditContext edit_context = ComposerEditContext::Idle);
   PromptStashRestoreResult restore_stashed(PromptStash& stash, std::uint64_t id);
   void select_completion(std::size_t index);
   void reset_completion();
@@ -165,9 +167,6 @@ class Composer final
   void project_completion(ComposerSnapshot& snapshot) const;
   void clear_selection();
   [[nodiscard]] std::optional<std::pair<std::size_t, std::size_t>> selection_bounds() const;
-  bool replace_selection(std::string_view replacement);
-  bool delete_selection();
-  [[nodiscard]] std::optional<std::string> selected_text() const;
   ComposerInputResult copy_selection();
   ComposerInputResult extend_selection(TuiAction movement);
   ComposerInputResult extend_selection_to(std::size_t target);
@@ -180,6 +179,10 @@ class Composer final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Internal TUI-thread selection steps; public feature operations preserve ordering.
+  bool replace_selection(std::string_view replacement);
+  bool delete_selection();
+  [[nodiscard]] std::optional<std::string> selected_text() const;
   void leave_history();
   void prepare_text_edit();
   void reset_cursor_metadata();

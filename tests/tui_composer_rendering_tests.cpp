@@ -189,6 +189,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.publish_visible_sidebar(presentation.sidebar());
+  EventLoopFixture event_loop;
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
@@ -226,8 +227,14 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
       after.modal_row_build_count == before.modal_row_build_count + 1 && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&
       renderer.transcript().has_deferred_update();
 
+  // Drive the same timer and paint path as the session. Attach after the initial
+  // modal handoff so its cached underlying geometry is already established.
+  renderer.attach_loop(event_loop.loop());
   auto const scheduled = renderer.request_render(ava::tui::FrameRenderKind::Full);
-  auto const flushed = renderer.flush_pending_render();
+  // Wait for the frame deadline rather than bypassing cadence with a fixture flush.
+  event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
+  event_loop.loop().service_due();
+  auto const flushed = renderer.paint_ready_frame();
   auto const after_flush = controller.diagnostics();
   auto const scheduled_render_passed =
       scheduled && flushed && !renderer.render_failed() && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&

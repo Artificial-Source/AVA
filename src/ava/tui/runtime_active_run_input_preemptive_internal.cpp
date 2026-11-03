@@ -176,7 +176,7 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::AutocompleteAccept) &&
-      apply_composer_result(draft_state_.force_path_completion(navigation_, ComposerEditContext::ActiveRun)))
+      apply_composer_result(draft_state_.force_path_completion(completion_snapshot(), ComposerEditContext::ActiveRun)))
     return to_input_handling(renderer_.request_render());
   return InputHandling::Unhandled;
 }

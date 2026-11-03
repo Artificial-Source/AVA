@@ -45,8 +45,6 @@ class RuntimeSubagentWorkspaceController final
   void attach_loop(TuiEventLoop& loop, RuntimeRenderer& renderer);
   [[nodiscard]] bool take_render_failure() noexcept;
   [[nodiscard]] bool open_selector(Clock::time_point now = Clock::now());
-  // Standalone explicit-clock servicing when no loop is attached.
-  [[nodiscard]] bool poll(Clock::time_point now = Clock::now());
   [[nodiscard]] RuntimeSubagentWorkspaceInputResult handle_input(InputEvent const& event, Clock::time_point now = Clock::now());
   // Close presentation and polling admission while the borrowed host/snapshot live.
   void close();
@@ -93,8 +91,6 @@ class RuntimeSubagentWorkspaceController final
   std::optional<std::uint64_t> known_generation_ = std::nullopt;
   bool refresh_unavailable_ = false;
   bool last_list_refresh_succeeded_ = true;
-  // Used only by the unattached explicit-clock service seam.
-  Clock::time_point next_poll_ = Clock::time_point::max();
   RuntimeRenderer* renderer_ = nullptr;
   bool render_failed_ = false;
   TuiTimer discovery_timer_;

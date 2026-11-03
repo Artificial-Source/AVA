@@ -45,7 +45,7 @@ ActiveRun::InputHandling ActiveRun::handle_composer_edit(runtime_input::RuntimeI
 ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto const& snapshot = presentation_state_.screen();
+  auto const& snapshot = completion_snapshot();
 
   if (is_action(active_event, TuiAction::TranscriptHalfPageUp))
   {
@@ -82,7 +82,8 @@ ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::Runti
     navigation_.jump_to_bottom("live tail");
     return to_input_handling(renderer_.request_render());
   }
-  if (is_action(active_event, TuiAction::PalettePrev) && apply_composer_result(draft_state_.step_completion(CompletionStep::Previous, navigation_, snapshot)))
+  if (is_action(active_event, TuiAction::PalettePrev) &&
+      apply_composer_result(draft_state_.step_completion(CompletionStep::Previous, renderer_.completion_cache(), snapshot)))
     return to_input_handling(renderer_.request_render());
   if (is_action(active_event, TuiAction::HistoryPrev))
   {
@@ -110,9 +111,10 @@ ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::Runti
 ActiveRun::InputHandling ActiveRun::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto const& snapshot = presentation_state_.screen();
+  auto const& snapshot = completion_snapshot();
 
-  if (is_action(active_event, TuiAction::PaletteNext) && apply_composer_result(draft_state_.step_completion(CompletionStep::Next, navigation_, snapshot)))
+  if (is_action(active_event, TuiAction::PaletteNext) &&
+      apply_composer_result(draft_state_.step_completion(CompletionStep::Next, renderer_.completion_cache(), snapshot)))
     return to_input_handling(renderer_.request_render());
   if (is_action(active_event, TuiAction::HistoryNext))
   {

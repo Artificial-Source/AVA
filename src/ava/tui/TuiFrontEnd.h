@@ -107,7 +107,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   // Return the currently committed application session identity.
   virtual std::string read_committed_session_id() const = 0;
 
-  // Pull pending catalog generations at serialized boundaries, never while holding the UI lock.
+  // TUI thread: pull pending catalog generations before publishing their projection.
   virtual TuiCatalogDelivery read_catalog_delivery() = 0;
 
   // Return the latest committed todo projection without exposing backend storage authority.

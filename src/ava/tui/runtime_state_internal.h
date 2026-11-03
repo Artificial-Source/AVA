@@ -45,6 +45,9 @@ struct QueuedRuntimeEvent
 
 using QueuedTuiEvent = std::variant<QueuedRuntimeEvent, ava::event::EventEnvelope, ava::agent::SubagentLaunchNotification>;
 
+// FIFO storage used only while its owner serializes access. ActiveRunInbox holds
+// its one producer mutex across queue and request-context operations. This value
+// has no independent synchronization and must never be shared without that lock.
 struct RuntimeEventQueue
 {
   [[nodiscard]] ava::core::VoidResult enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context = {});
@@ -59,7 +62,6 @@ struct RuntimeEventQueue
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  mutable std::mutex mutex;
   std::deque<QueuedTuiEvent> events;
   bool received = false;
 };
@@ -120,11 +122,11 @@ class RuntimePresentationState final
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
   // Reads the retained transports through the frontend's application boundary. Like
-  // read_committed_session_id, call this without holding the UI lock.
+  // read_committed_session_id, this runs on the TUI thread before publishing changes.
   static BoundaryReads read_boundary_data(TuiFrontEnd& frontend);
   // Applies previously read transports without reading or replacing popup-only facts.
   void apply_boundary_data(TuiFrontEnd const& frontend, BoundaryReads reads);
-  // Reads and applies in one step for callers that hold no lock.
+  // TUI thread: reads and applies at one serialized application boundary.
   void refresh_after_backend_action(TuiFrontEnd& frontend);
   // Applies TUI-owned bindings and refreshes every local hint projection.
   // This never changes backend catalog generations or applies a backend snapshot.

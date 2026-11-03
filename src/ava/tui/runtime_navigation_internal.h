@@ -37,10 +37,7 @@ class RuntimeNavigationController final
   [[nodiscard]] bool slash_palette_active() const;
   [[nodiscard]] bool file_reference_palette_active();
   [[nodiscard]] bool path_completion_palette_active();
-  [[nodiscard]] std::size_t completion_match_count();
   [[nodiscard]] std::size_t clamp_completion(std::size_t selected);
-  [[nodiscard]] std::size_t previous_completion(std::size_t selected);
-  [[nodiscard]] std::size_t next_completion(std::size_t selected);
   [[nodiscard]] std::optional<std::string> selected_completion_disabled_reason(std::size_t selected);
   [[nodiscard]] FileReferenceSelectionText selected_completion_text(std::size_t selected);
 

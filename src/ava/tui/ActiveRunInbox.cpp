@@ -103,23 +103,25 @@ bool ActiveRunInbox::stop_requested() const noexcept
 
 std::vector<QueuedTuiEvent> ActiveRunInbox::drain(std::size_t maximum)
 {
+  std::lock_guard lock(mutex_);
   return events_.drain(maximum);
 }
 
 bool ActiveRunInbox::has_pending() const
 {
   std::lock_guard lock(mutex_);
-  return terminal_.has_value() || events_.has_pending();
+  return std::holds_alternative<ActiveRunTerminal>(terminal_) || events_.has_pending();
 }
 
 bool ActiveRunInbox::terminal_ready() const
 {
   std::lock_guard lock(mutex_);
-  return terminal_.has_value();
+  return std::holds_alternative<ActiveRunTerminal>(terminal_);
 }
 
 bool ActiveRunInbox::received_any() const
 {
+  std::lock_guard lock(mutex_);
   return events_.received_any();
 }
 
@@ -133,10 +135,9 @@ void ActiveRunInbox::publish_terminal(ActiveRunTerminal terminal)
 {
   {
     std::lock_guard lock(mutex_);
-    if (!accepting_ || terminal_published_)
+    if (!accepting_ || !std::holds_alternative<std::monostate>(terminal_))
       return;
-    terminal_.emplace(std::move(terminal));
-    terminal_published_ = true;
+    terminal_.emplace<ActiveRunTerminal>(std::move(terminal));
   }
   wakeup_.notify();
 }
@@ -144,7 +145,12 @@ void ActiveRunInbox::publish_terminal(ActiveRunTerminal terminal)
 std::optional<ActiveRunTerminal> ActiveRunInbox::take_terminal()
 {
   std::lock_guard lock(mutex_);
-  return std::exchange(terminal_, std::nullopt);
+  auto* ready = std::get_if<ActiveRunTerminal>(&terminal_);
+  if (!ready)
+    return std::nullopt;
+  auto result = std::move(*ready);
+  terminal_.emplace<TerminalHistory>(TerminalHistory::Consumed);
+  return result;
 }
 
 void ActiveRunInbox::retire()

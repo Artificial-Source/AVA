@@ -60,6 +60,14 @@ struct ComposerDispatchFixture
     return true;
   }
 
+  // Prepare the production read-only completion model after each editor mutation.
+  ava::tui::detail::CompletionMatchCache const& completions()
+  {
+    presentation.publish_completion(composer);
+    static_cast<void>(renderer.refresh_completion_cache());
+    return renderer.completion_cache();
+  }
+
   // Owns the canonical backend and frontend for the complete fixture lifetime.
   tui_test_support::TuiFrontEndFixture frontend;
   // Holds the screen projection borrowed by the renderer and navigation controller.
@@ -85,13 +93,13 @@ void test_clear_input_yields_to_interrupt_only_when_empty()
   fixture.composer.restore_draft("draft to clear");
   fixture.presentation.publish_composer(fixture.composer);
 
-  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Editor);
+  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Editor);
   expect(cleared.handled && cleared.request == ComposerInputRequest::None && cleared.status == "input cleared" && !cleared.beep &&
              fixture.composer.draft().text.empty(),
          "composer Editor phase clears a nonempty draft before the shared Interrupt binding");
 
   fixture.presentation.publish_composer(fixture.composer);
-  auto const empty = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Editor);
+  auto const empty = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Editor);
   expect(!empty.handled && empty.request == ComposerInputRequest::None && !empty.status && !empty.beep &&
              ava::tui::key_matches_action(bindings, ava::tui::TuiAction::Interrupt, input.event.key),
          "composer Editor phase leaves an empty shared ClearInput/Interrupt key available to session dispatch");
@@ -112,7 +120,7 @@ void test_transcript_copy_precedes_clear_input()
                            "transcript copy fixture has an unselected draft and pending Escape"))
     return;
 
-  auto const copied = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, true, ComposerInputPhase::Editor);
+  auto const copied = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), true, ComposerInputPhase::Editor);
   expect(copied.handled && copied.request == ComposerInputRequest::CopyTranscript && !copied.status && !copied.beep &&
              fixture.composer.draft().text == "unselected draft",
          "composer requests transcript copy before clearing an unselected draft on the shared key");
@@ -121,7 +129,7 @@ void test_transcript_copy_precedes_clear_input()
          "composer transcript copy resets Escape so the next Escape preserves the draft");
   fixture.composer.cancel_escape();
 
-  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Editor);
+  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Editor);
   expect(cleared.handled && cleared.request == ComposerInputRequest::None && cleared.status == "input cleared" && fixture.composer.draft().text.empty(),
          "composer shared copy/clear key clears the draft when neither surface has a selection");
 }
@@ -138,13 +146,15 @@ void test_empty_history_requests_transcript_scroll()
   fixture.presentation.publish_composer(fixture.composer);
   auto const cursor = fixture.composer.draft().cursor;
 
-  auto const fallback = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Navigation);
+  auto const fallback =
+      fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Navigation);
   expect(fallback.handled && fallback.request == ComposerInputRequest::ScrollUp && !fallback.status && !fallback.beep &&
              fixture.composer.draft().text == "first line\nsecond line" && fixture.composer.draft().cursor == cursor && !fixture.composer.history_index(),
          "composer empty HistoryPrev returns ScrollUp while preserving the multiline draft and cursor");
 
   fixture.composer.record_submission("previous prompt");
-  auto const recalled = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Navigation);
+  auto const recalled =
+      fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Navigation);
   expect(recalled.handled && recalled.request == ComposerInputRequest::None && recalled.status == "history previous" &&
              fixture.composer.draft().text == "previous prompt" && fixture.composer.saved_draft() == "first line\nsecond line",
          "composer HistoryPrev recalls available history instead of requesting transcript scrolling");
@@ -160,14 +170,14 @@ void test_space_bound_to_submit_does_not_insert()
   fixture.composer.restore_draft("ready");
   fixture.presentation.publish_composer(fixture.composer);
 
-  auto const submitted = fixture.composer.handle_key(input, fixture.frontend.frontend()->key_bindings(), fixture.presentation.screen(), fixture.navigation,
+  auto const submitted = fixture.composer.handle_key(input, fixture.frontend.frontend()->key_bindings(), fixture.presentation.screen(), fixture.completions(),
                                                      false, ComposerInputPhase::Tail);
   expect(submitted.handled && submitted.request == ComposerInputRequest::Submit && !submitted.status && !submitted.beep &&
              fixture.composer.draft().text == "ready" && fixture.composer.draft().cursor == 5,
          "composer Space submit requests submission and preserves draft content and cursor");
 
   fixture.presentation.apply_local_key_bindings(*fixture.frontend.frontend(), ava::tui::default_key_bindings());
-  auto const inserted = fixture.composer.handle_key(input, fixture.frontend.frontend()->key_bindings(), fixture.presentation.screen(), fixture.navigation,
+  auto const inserted = fixture.composer.handle_key(input, fixture.frontend.frontend()->key_bindings(), fixture.presentation.screen(), fixture.completions(),
                                                     false, ComposerInputPhase::Tail);
   expect(inserted.handled && inserted.request == ComposerInputRequest::None && fixture.composer.draft().text == "ready ",
          "composer Tail inserts an ordinary Space when Submit does not claim the key");
@@ -188,7 +198,7 @@ void test_cancel_selection_and_palette_priority()
                            "Cancel fixture has both a selected draft and active slash palette"))
     return;
 
-  auto const draft = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, true, ComposerInputPhase::Tail);
+  auto const draft = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), true, ComposerInputPhase::Tail);
   expect(draft.handled && draft.request == ComposerInputRequest::None && draft.status == "" && !fixture.composer.selection_bounds() &&
              !fixture.composer.palette_suppressed() && fixture.composer.draft().text == "/",
          "composer Cancel gives draft selection priority over transcript selection and completion");
@@ -197,7 +207,7 @@ void test_cancel_selection_and_palette_priority()
          "composer cancelling draft selection leaves the next Escape as a first press");
   fixture.composer.cancel_escape();
 
-  auto const transcript = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, true, ComposerInputPhase::Tail);
+  auto const transcript = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), true, ComposerInputPhase::Tail);
   expect(transcript.handled && transcript.request == ComposerInputRequest::ClearTranscriptSelection && transcript.status == "" &&
              !fixture.composer.palette_suppressed(),
          "composer Cancel requests transcript deselection before dismissing the active palette");
@@ -206,16 +216,16 @@ void test_cancel_selection_and_palette_priority()
          "composer cancelling transcript selection leaves the next Escape as a first press");
   fixture.composer.cancel_escape();
 
-  auto const palette = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Tail);
+  auto const palette = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Tail);
   expect(palette.handled && palette.request == ComposerInputRequest::None && palette.status == "" && fixture.composer.palette_suppressed() &&
              fixture.composer.draft().text == "/",
          "composer Cancel dismisses the palette without arming double-Escape clearing");
 
-  auto const pending = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Tail);
+  auto const pending = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Tail);
   expect(
       pending.handled && pending.request == ComposerInputRequest::None && pending.status == "press Esc again to clear" && fixture.composer.draft().text == "/",
       "composer Cancel arms Escape only after selection and completion have yielded");
-  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.navigation, false, ComposerInputPhase::Tail);
+  auto const cleared = fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Tail);
   expect(cleared.handled && cleared.request == ComposerInputRequest::None && cleared.status == "input cleared" && fixture.composer.draft().text.empty(),
          "composer Cancel clears the draft on the second unclaimed Escape");
 }
@@ -231,7 +241,7 @@ void test_slash_completion_steps_wrap_and_report_status()
     return;
   fixture.presentation.publish_composer(fixture.composer);
 
-  auto const previous = fixture.composer.step_completion(CompletionStep::Previous, fixture.navigation, fixture.presentation.screen());
+  auto const previous = fixture.composer.step_completion(CompletionStep::Previous, fixture.completions(), fixture.presentation.screen());
   expect(previous.handled && previous.request == ComposerInputRequest::None && previous.status == "command 3/3" && !previous.beep &&
              fixture.composer.completion_index() == 2,
          "composer Previous wraps slash completion from the first command to the last");
@@ -239,13 +249,13 @@ void test_slash_completion_steps_wrap_and_report_status()
   expect(after_previous.status == "press Esc again to clear" && fixture.composer.draft().text == "/",
          "composer slash completion resets Escape so the next Escape preserves the draft");
   fixture.composer.cancel_escape();
-  auto const next = fixture.composer.step_completion(CompletionStep::Next, fixture.navigation, fixture.presentation.screen());
+  auto const next = fixture.composer.step_completion(CompletionStep::Next, fixture.completions(), fixture.presentation.screen());
   expect(next.handled && next.status == "command 1/3" && fixture.composer.completion_index() == 0 && fixture.composer.draft().text == "/",
          "composer Next wraps slash completion from the last command to the first without accepting it");
 
   fixture.composer.restore_draft("/zzzzzz");
   fixture.presentation.publish_composer(fixture.composer);
-  auto const unmatched = fixture.composer.step_completion(CompletionStep::Next, fixture.navigation, fixture.presentation.screen());
+  auto const unmatched = fixture.composer.step_completion(CompletionStep::Next, fixture.completions(), fixture.presentation.screen());
   expect(unmatched.handled && unmatched.request == ComposerInputRequest::None && unmatched.status == "no matching slash commands" && !unmatched.beep &&
              fixture.composer.completion_index() == 0 && fixture.composer.draft().text == "/zzzzzz",
          "composer slash completion reports an unmatched query without accepting or editing it");
@@ -266,7 +276,7 @@ void test_file_and_path_completion_steps_wrap_and_report_status()
       return;
     fixture.presentation.publish_composer(fixture.composer);
 
-    auto const previous = fixture.composer.step_completion(CompletionStep::Previous, fixture.navigation, fixture.presentation.screen());
+    auto const previous = fixture.composer.step_completion(CompletionStep::Previous, fixture.completions(), fixture.presentation.screen());
     expect(previous.handled && previous.request == ComposerInputRequest::None && previous.status == label + "2/2" && !previous.beep &&
                fixture.composer.completion_index() == 1,
            "composer Previous wraps " + label + "completion to the last match");
@@ -274,17 +284,46 @@ void test_file_and_path_completion_steps_wrap_and_report_status()
     expect(after_previous.status == "press Esc again to clear" && fixture.composer.draft().text == input,
            "composer " + label + "completion resets Escape so the next Escape preserves the draft");
     fixture.composer.cancel_escape();
-    auto const next = fixture.composer.step_completion(CompletionStep::Next, fixture.navigation, fixture.presentation.screen());
+    auto const next = fixture.composer.step_completion(CompletionStep::Next, fixture.completions(), fixture.presentation.screen());
     expect(next.handled && next.request == ComposerInputRequest::None && next.status == label + "1/2" && !next.beep &&
                fixture.composer.completion_index() == 0 && fixture.composer.draft().text == input,
            "composer Next wraps " + label + "completion to the first match without accepting it");
 
     fixture.composer.dismiss_completion();
-    auto const dismissed = fixture.composer.step_completion(CompletionStep::Next, fixture.navigation, fixture.presentation.screen());
+    auto const dismissed = fixture.composer.step_completion(CompletionStep::Next, fixture.completions(), fixture.presentation.screen());
     expect(!dismissed.handled && dismissed.request == ComposerInputRequest::None && !dismissed.status && !dismissed.beep &&
                fixture.composer.palette_suppressed() && fixture.composer.draft().text == input,
            "composer stepping a dismissed " + label + "palette yields without changing the draft");
   }
+}
+
+// Forced completion queries the proposed flags without borrowing or mutating navigation.
+void test_forced_completion_uses_current_editor_flags()
+{
+  ComposerDispatchFixture fixture(file_options({{.value = "alpha.txt", .description = "Alpha file"}}));
+  fixture.composer.restore_draft("alp");
+  fixture.composer.dismiss_completion();
+  static_cast<void>(fixture.completions());
+  auto const accepted = fixture.composer.force_path_completion(fixture.presentation.screen());
+  expect(accepted.handled && accepted.status == "path selected" && !accepted.beep && fixture.composer.draft().text == "alpha.txt" &&
+             !fixture.composer.path_completion_forced(),
+         "forcing a suppressed bare prefix ranks with the proposed flags and accepts its one match");
+
+  fixture.composer.restore_draft("unmatched");
+  fixture.composer.dismiss_completion();
+  static_cast<void>(fixture.completions());
+  auto const unmatched = fixture.composer.force_path_completion(fixture.presentation.screen());
+  expect(
+      !unmatched.handled && fixture.composer.palette_suppressed() && !fixture.composer.path_completion_forced() && fixture.composer.draft().text == "unmatched",
+      "an unmatched force attempt restores suppression without changing the draft");
+
+  ComposerDispatchFixture disabled(file_options({{.value = "alpha.txt", .description = "Alpha file", .enabled = false, .disabled_reason = "not available"}}));
+  disabled.composer.restore_draft("alp");
+  static_cast<void>(disabled.completions());
+  auto const rejected = disabled.composer.force_path_completion(disabled.presentation.screen(), ava::tui::ComposerEditContext::ActiveRun);
+  expect(rejected.handled && rejected.beep && rejected.status == "path disabled: not available" && disabled.composer.draft().text == "alp" &&
+             !disabled.composer.path_completion_forced(),
+         "active-run forcing reports a disabled candidate without accepting its text");
 }
 
 }  // namespace
@@ -299,4 +338,5 @@ void run_tui_composer_dispatch_tests()
   test_cancel_selection_and_palette_priority();
   test_slash_completion_steps_wrap_and_report_status();
   test_file_and_path_completion_steps_wrap_and_report_status();
+  test_forced_completion_uses_current_editor_flags();
 }

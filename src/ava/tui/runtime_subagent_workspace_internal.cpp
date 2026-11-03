@@ -152,7 +152,6 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   }
   selector_.freeze_underlying_transcript_layout = true;
   selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
-  next_poll_ = now + kPollInterval;
   discovery_timer_.repeat(kPollInterval, now);
   publish();
   return true;
@@ -168,7 +167,6 @@ void RuntimeSubagentWorkspaceController::close()
   known_generation_.reset();
   refresh_unavailable_ = false;
   last_list_refresh_succeeded_ = true;
-  next_poll_ = Clock::time_point::max();
   publish();
 }
 
@@ -364,14 +362,6 @@ bool RuntimeSubagentWorkspaceController::scroll_workspace(std::ptrdiff_t delta)
   auto const amount = static_cast<std::size_t>(delta);
   auto const max = subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height);
   return set_workspace_scroll(amount > max - std::min(max, workspace_.scroll_offset) ? max : workspace_.scroll_offset + amount);
-}
-
-bool RuntimeSubagentWorkspaceController::poll(Clock::time_point now)
-{
-  if (renderer_ || !active() || now < next_poll_)
-    return false;
-  next_poll_ = now + kPollInterval;
-  return refresh();
 }
 
 bool RuntimeSubagentWorkspaceController::refresh()

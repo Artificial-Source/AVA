@@ -3,7 +3,6 @@
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime_input_internal.h"
-#include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/terminal/Context.h"
 #include "ava/core/Application.h"
@@ -13,7 +12,7 @@
 namespace ava::tui {
 
 ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
-                                         RuntimeNavigationController& navigation, bool transcript_selected, ComposerInputPhase phase)
+                                         detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase)
 {
   using Key = terminal::Key;
   auto is_action = [&](TuiAction action) { return key_matches_action(bindings, action, input.event.key); };
@@ -101,22 +100,24 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
     {
       result.status = apply_edit(TuiAction::ClearInput) ? "input cleared" : "input already empty";
     }
-    else if (is_action(TuiAction::AutocompleteAccept) && navigation.slash_palette_active())
+    else if (is_action(TuiAction::AutocompleteAccept) && (!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands)))
     {
       cancel_escape();
       result = select_slash_command(snapshot);
     }
-    else if (is_action(TuiAction::AutocompleteAccept) && navigation.file_reference_palette_active())
+    else if (is_action(TuiAction::AutocompleteAccept) &&
+             (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible))
     {
       cancel_escape();
-      result = select_file_reference(navigation);
+      result = select_file_reference(completions, snapshot);
     }
-    else if (is_action(TuiAction::AutocompleteAccept) && navigation.path_completion_palette_active())
+    else if (is_action(TuiAction::AutocompleteAccept) &&
+             (completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible))
     {
       cancel_escape();
-      result = select_path_completion(navigation);
+      result = select_path_completion(completions, snapshot);
     }
-    else if (is_action(TuiAction::AutocompleteAccept) && (result = force_path_completion(navigation)).handled)
+    else if (is_action(TuiAction::AutocompleteAccept) && (result = force_path_completion(snapshot)).handled)
     {
       cancel_escape();
     }
@@ -164,7 +165,7 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
     {
       static_cast<void>(apply_edit(TuiAction::CursorWordRight));
     }
-    else if (is_action(TuiAction::PalettePrev) && (result = step_completion(CompletionStep::Previous, navigation, snapshot)).handled)
+    else if (is_action(TuiAction::PalettePrev) && (result = step_completion(CompletionStep::Previous, completions, snapshot)).handled)
     {
     // Composer selected the row and produced its status.
     }
@@ -187,7 +188,7 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
     {
     // Composer applied the movement and its successful-movement reset.
     }
-    else if (is_action(TuiAction::PaletteNext) && (result = step_completion(CompletionStep::Next, navigation, snapshot)).handled)
+    else if (is_action(TuiAction::PaletteNext) && (result = step_completion(CompletionStep::Next, completions, snapshot)).handled)
     {
     // Composer selected the row and produced its status.
     }
@@ -249,7 +250,9 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
         cancel_escape();
         result.status = std::string{};
       }
-      else if (navigation.slash_palette_active() || navigation.file_reference_palette_active() || navigation.path_completion_palette_active())
+      else if ((!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands)) ||
+               (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible) ||
+               (completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible))
       {
         dismiss_completion();
         result.status = std::string{};
@@ -275,15 +278,18 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
   return {};
 }
 
-ComposerInputResult Composer::step_completion(CompletionStep step, RuntimeNavigationController& navigation, ComposerSnapshot const& snapshot)
+ComposerInputResult Composer::step_completion(CompletionStep step, detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)
 {
-  bool const slash = navigation.slash_palette_active();
-  bool const reference = !slash && navigation.file_reference_palette_active();
-  bool const path = !slash && !reference && navigation.path_completion_palette_active();
+  bool const slash = (!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands));
+  bool const reference =
+      !slash && (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible);
+  bool const path = !slash && !reference &&
+                    (completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible);
   if (!slash && !reference && !path)
     return {};
   cancel_escape();
-  auto const count = slash ? filter_slash_commands(draft_.text, draft_.cursor, snapshot.slash_commands).size() : navigation.completion_match_count();
+  auto const count = slash ? filter_slash_commands(draft_.text, draft_.cursor, snapshot.slash_commands).size()
+                           : (completions.model ? completions.model->ranked_source_indices.size() : 0);
   if (count == 0)
     return {.handled = true, .status = slash ? "no matching slash commands" : reference ? "no matching file references" : "no matching paths"};
   if (slash)
@@ -291,7 +297,8 @@ ComposerInputResult Composer::step_completion(CompletionStep step, RuntimeNaviga
                           ? previous_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, completion_index())
                           : next_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, completion_index()));
   else
-    select_completion(step == CompletionStep::Previous ? navigation.previous_completion(completion_index()) : navigation.next_completion(completion_index()));
+    select_completion(step == CompletionStep::Previous ? detail::previous_completion_selection(completions, completion_index())
+                                                       : detail::next_completion_selection(completions, completion_index()));
   return {.handled = true,
           .status = std::string(slash       ? "command "
                                 : reference ? "reference "
@@ -314,43 +321,48 @@ ComposerInputResult Composer::select_slash_command(ComposerSnapshot const& snaps
   result.status = "command selected - press Enter to run";
   return result;
 }
-ComposerInputResult Composer::select_file_reference(RuntimeNavigationController& navigation)
+ComposerInputResult Composer::select_file_reference(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)
 {
   ComposerInputResult result{.handled = true};
-  selected_slash_command_index_ = navigation.clamp_completion(selected_slash_command_index_);
-  if (auto const reason = navigation.selected_completion_disabled_reason(selected_slash_command_index_))
+  selected_slash_command_index_ = detail::clamp_completion_selection(completions, selected_slash_command_index_);
+  if (auto const reason = detail::completion_selection_disabled_reason(completions, snapshot.file_references, selected_slash_command_index_))
   {
     result.status = "reference disabled: " + *reason;
     result.beep = true;
     return result;
   }
-  auto selection = navigation.selected_completion_text(selected_slash_command_index_);
+  auto selection = detail::completion_selection_text(completions, snapshot, selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
   result.status = "file reference selected";
   return result;
 }
-ComposerInputResult Composer::select_path_completion(RuntimeNavigationController& navigation)
+ComposerInputResult Composer::select_path_completion(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)
 {
   ComposerInputResult result{.handled = true};
-  selected_slash_command_index_ = navigation.clamp_completion(selected_slash_command_index_);
-  if (auto const reason = navigation.selected_completion_disabled_reason(selected_slash_command_index_))
+  selected_slash_command_index_ = detail::clamp_completion_selection(completions, selected_slash_command_index_);
+  if (auto const reason = detail::completion_selection_disabled_reason(completions, snapshot.file_references, selected_slash_command_index_))
   {
     result.status = "path disabled: " + *reason;
     result.beep = true;
     return result;
   }
-  auto selection = navigation.selected_completion_text(selected_slash_command_index_);
+  auto selection = detail::completion_selection_text(completions, snapshot, selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
   result.status = "path selected";
   return result;
 }
-ComposerInputResult Composer::force_path_completion(RuntimeNavigationController& navigation, ComposerEditContext edit_context)
+ComposerInputResult Composer::force_path_completion(ComposerSnapshot const& snapshot, ComposerEditContext edit_context)
 {
   ComposerInputResult result{.handled = true};
   auto const was_suppressed = slash_palette_suppressed_;
   slash_palette_suppressed_ = false;
   path_completion_force_active_ = true;
-  auto const match_count = navigation.completion_match_count();
+  // Query the prospective flags before publishing them. The prepared normal
+  // cache still describes the previous flags and must not be reused here.
+  detail::CompletionMatchCache completions;
+  detail::refresh_completion_match_cache(completions, draft_.text, draft_.cursor, slash_palette_suppressed_, path_completion_force_active_,
+                                         snapshot.slash_commands, snapshot.file_references, snapshot.file_references_generation);
+  auto const match_count = (completions.model ? completions.model->ranked_source_indices.size() : 0);
   if (match_count == 0)
   {
     slash_palette_suppressed_ = was_suppressed;
@@ -365,14 +377,14 @@ ComposerInputResult Composer::force_path_completion(RuntimeNavigationController&
   }
   if (match_count == 1)
   {
-    if (auto const reason = navigation.selected_completion_disabled_reason(0))
+    if (auto const reason = detail::completion_selection_disabled_reason(completions, snapshot.file_references, 0))
     {
       path_completion_force_active_ = false;
       result.status = "path disabled: " + *reason;
       result.beep = true;
       return result;
     }
-    auto selection = navigation.selected_completion_text(0);
+    auto selection = detail::completion_selection_text(completions, snapshot, 0);
     accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Forced);
     result.status = "path selected";
     return result;
@@ -425,11 +437,6 @@ bool Composer::mouse_selecting() const noexcept
 {
   return mouse_selecting_;
 }
-bool Composer::escape_pending() const noexcept
-{
-  return pending_escape_clear_;
-}
-
 void Composer::cancel_escape()
 {
   pending_escape_clear_ = false;

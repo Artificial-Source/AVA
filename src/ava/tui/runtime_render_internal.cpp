@@ -130,7 +130,6 @@ void RuntimeRenderer::synchronize_timers()
 {
   if (!loop_attached_)
     return;
-  auto lock = lock_ui();
   if (frame_scheduler_.failed())
   {
     frame_timer_.cancel();
@@ -178,7 +177,6 @@ void RuntimeRenderer::frame_due(std::chrono::steady_clock::time_point)
 
 void RuntimeRenderer::indicator_due(std::chrono::steady_clock::time_point now)
 {
-  auto lock = lock_ui();
   armed_indicator_deadline_.reset();
   if (transcript_.expire_position_indicator(now))
     frame_scheduler_.request(FrameRenderKind::Full, now);
@@ -187,7 +185,6 @@ void RuntimeRenderer::indicator_due(std::chrono::steady_clock::time_point now)
 
 void RuntimeRenderer::autoscroll_due(std::chrono::steady_clock::time_point now)
 {
-  auto lock = lock_ui();
   armed_autoscroll_deadline_.reset();
   if (auto const deadline = transcript_.autoscroll_deadline(); deadline && now >= *deadline)
   {
@@ -198,17 +195,12 @@ void RuntimeRenderer::autoscroll_due(std::chrono::steady_clock::time_point now)
   synchronize_timers();
 }
 
-std::unique_lock<std::recursive_mutex> RuntimeRenderer::lock_ui()
-{
-  return std::unique_lock<std::recursive_mutex>(ui_mutex_);
-}
 TranscriptView const& RuntimeRenderer::transcript() const noexcept
 {
   return transcript_;
 }
 void RuntimeRenderer::scroll_transcript(std::ptrdiff_t rows)
 {
-  auto lock = lock_ui();
   synchronize_detached_transcript_layout();
   auto const maximum = prepare_transcript_layout();
   if (rows >= 0)
@@ -220,13 +212,11 @@ void RuntimeRenderer::scroll_transcript(std::ptrdiff_t rows)
 }
 void RuntimeRenderer::navigate_transcript(std::size_t offset)
 {
-  auto lock = lock_ui();
   transcript_.navigate_to_offset(offset, prepare_transcript_layout());
   synchronize_timers();
 }
 void RuntimeRenderer::show_live_tail(LiveTailReason reason)
 {
-  auto lock = lock_ui();
   switch (reason)
   {
     case LiveTailReason::Requested:
@@ -243,7 +233,6 @@ void RuntimeRenderer::show_live_tail(LiveTailReason reason)
 }
 void RuntimeRenderer::complete_transcript_update(TranscriptUpdate const& update, std::ptrdiff_t shift, std::size_t event_count, TranscriptUpdateMode mode)
 {
-  auto lock = lock_ui();
   if (mode == TranscriptUpdateMode::Immediate)
   {
     if (update.detached())
@@ -258,7 +247,6 @@ void RuntimeRenderer::complete_transcript_update(TranscriptUpdate const& update,
 }
 void RuntimeRenderer::note_transcript_eviction(std::ptrdiff_t shift)
 {
-  auto lock = lock_ui();
   transcript_.note_live_selection_item_shift(shift);
   synchronize_timers();
 }
@@ -313,16 +301,6 @@ std::size_t RuntimeRenderer::clamp_completion(std::size_t selected)
   static_cast<void>(refresh_completion_cache());
   return detail::clamp_completion_selection(completion_cache_, selected);
 }
-std::size_t RuntimeRenderer::previous_completion(std::size_t selected)
-{
-  static_cast<void>(refresh_completion_cache());
-  return detail::previous_completion_selection(completion_cache_, selected);
-}
-std::size_t RuntimeRenderer::next_completion(std::size_t selected)
-{
-  static_cast<void>(refresh_completion_cache());
-  return detail::next_completion_selection(completion_cache_, selected);
-}
 std::optional<std::string> RuntimeRenderer::selected_completion_disabled_reason(std::size_t selected)
 {
   static_cast<void>(refresh_completion_cache());
@@ -375,7 +353,6 @@ bool RuntimeRenderer::prepare_transcript_selection_authority()
 TranscriptSelectionMouseResult RuntimeRenderer::handle_transcript_selection_mouse(InputEvent const& event, std::function<bool(std::size_t)> const& toggle_tool,
                                                                                   std::function<bool(std::size_t)> const& toggle_thinking)
 {
-  auto lock = lock_ui();
   if (event.key != terminal::Key::MousePointerCancel && !prepare_transcript_selection_authority())
     return TranscriptSelectionMouseResult::Ignored;
   auto const before = transcript_.scroll_offset();
@@ -387,57 +364,38 @@ TranscriptSelectionMouseResult RuntimeRenderer::handle_transcript_selection_mous
 }
 void RuntimeRenderer::show_transcript_position_indicator(TranscriptPositionIndicatorState::Clock::time_point now)
 {
-  auto lock = lock_ui();
   transcript_.show_position_indicator(now);
   frame_scheduler_.request(FrameRenderKind::Full, now);
   synchronize_timers();
 }
 bool RuntimeRenderer::copy_transcript_selection()
 {
-  auto lock = lock_ui();
   auto const copied = transcript_.copy_selection(transcript_layout_cache_);
   synchronize_timers();
   return copied;
 }
 void RuntimeRenderer::clear_transcript_selection()
 {
-  auto lock = lock_ui();
   transcript_.clear_selection();
   synchronize_timers();
 }
 void RuntimeRenderer::cancel_pointer_interaction()
 {
-  auto lock = lock_ui();
   transcript_.cancel_pointer_interaction();
   synchronize_timers();
 }
 void RuntimeRenderer::reset_for_session_transition()
 {
-  auto lock = lock_ui();
   transcript_.reset_for_session_transition();
   transcript_layout_cache_ = {};
   screen_row_cache_.valid = false;
   wheel_governor_.reset();
   synchronize_timers();
 }
-void RuntimeRenderer::service_auxiliary_timers(std::chrono::steady_clock::time_point now)
-{
-  auto lock = lock_ui();
-  if (auto const deadline = transcript_.autoscroll_deadline(); deadline && now >= *deadline)
-  {
-    auto const authority_ready = prepare_transcript_selection_authority();
-    if (transcript_.service_autoscroll(transcript_layout_cache_, authority_ready, now))
-      frame_scheduler_.request(FrameRenderKind::Full, now);
-  }
-  if (transcript_.expire_position_indicator(now))
-    frame_scheduler_.request(FrameRenderKind::Full, now);
-}
-
 bool RuntimeRenderer::render()
 {
   if (!loop_attached_)
     return paint_for_handoff();
-  auto lock = lock_ui();
   if (frame_scheduler_.failed())
     return false;
   frame_scheduler_.request(FrameRenderKind::Full, std::chrono::steady_clock::now());
@@ -448,11 +406,8 @@ bool RuntimeRenderer::render()
 
 bool RuntimeRenderer::paint_for_handoff()
 {
-  auto lock = lock_ui();
   if (frame_scheduler_.failed())
     return false;
-  if (!loop_attached_)
-    service_auxiliary_timers(std::chrono::steady_clock::now());
   frame_scheduler_.discard_pending();
   frame_timer_.cancel();
   armed_frame_deadline_.reset();
@@ -468,7 +423,6 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
   auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
-    auto lock = lock_ui();
     presentation_.publish_composer(draft_state_);
     // Publish viewport chrome before freeze/sync/clamp so the N-new reserved row
     // participates in geometry even when the prior stream update was not painted.
@@ -532,7 +486,6 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
 
 bool RuntimeRenderer::request_render(FrameRenderKind kind)
 {
-  auto lock = lock_ui();
   frame_scheduler_.request(kind, std::chrono::steady_clock::now());
   synchronize_timers();
   return !frame_scheduler_.failed();
@@ -544,7 +497,6 @@ bool RuntimeRenderer::paint_ready_frame()
   ASSERT(loop_attached_);
   if (!loop_attached_)
     return false;
-  auto lock = lock_ui();
   // View operations are deliberately independent of the renderer. Reconcile
   // their absolute deadlines here even when this batch needs no actual paint.
   synchronize_timers();
@@ -564,24 +516,6 @@ bool RuntimeRenderer::paint_ready_frame()
   return succeeded;
 }
 
-bool RuntimeRenderer::flush_pending_render()
-{
-  // Explicit fixture flushes are for unattached renderers; live composition must batch paint.
-  ASSERT(!loop_attached_);
-  if (loop_attached_)
-    return false;
-  auto lock = lock_ui();
-  if (frame_scheduler_.failed())
-    return false;
-  service_auxiliary_timers(std::chrono::steady_clock::now());
-  auto const kind = frame_scheduler_.take_pending();
-  if (!kind)
-    return true;
-  auto const succeeded = paint(*kind, true);
-  frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
-  return succeeded;
-}
-
 bool RuntimeRenderer::render_failed() const
 {
   return frame_scheduler_.failed();
@@ -597,7 +531,6 @@ bool RuntimeRenderer::paint(FrameRenderKind kind, bool freeze_transcript_layout)
   auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
-    std::lock_guard<std::recursive_mutex> lock(ui_mutex_);
     if (snapshot.permission_prompt || snapshot.question_prompt || snapshot.command_output || snapshot.select_list || snapshot.subagent_workspace ||
         snapshot.sidebar_drawer_visible || !snapshot.processing)
       return true;

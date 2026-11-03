@@ -377,7 +377,14 @@ enum class WordSegmentClass
                                                                       std::size_t max_lines);
 [[nodiscard]] std::optional<std::string> disabled_visible_completion_selection_status(ComposerSnapshot const& snapshot);
 [[nodiscard]] std::optional<std::string> disabled_visible_completion_selection_status(ComposerSnapshot const& snapshot, CompletionMatchCache const& cache);
+// TUI thread: cached editor/catalog query; inputs live for this call and indices
+// remain valid only while the catalog revision and draft match the model.
 void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapshot const& snapshot, std::size_t source_revision);
+// The explicit values let Composer query its next force state without mutating a
+// renderer or publishing a partially changed draft. All borrows are call-scoped.
+void refresh_completion_match_cache(CompletionMatchCache& cache, std::string const& input, std::size_t cursor, bool suppressed, bool force_path,
+                                    std::vector<SlashCommandItem> const& commands, std::vector<FileReferenceItem> const& references,
+                                    std::size_t source_revision);
 [[nodiscard]] std::size_t next_completion_selection(CompletionMatchCache const& cache, std::size_t selected_index);
 [[nodiscard]] std::size_t previous_completion_selection(CompletionMatchCache const& cache, std::size_t selected_index);
 [[nodiscard]] std::size_t clamp_completion_selection(CompletionMatchCache const& cache, std::size_t selected_index);
@@ -514,10 +521,10 @@ inline void refresh_transcript_layout_cache(TranscriptLayoutCache& cache, std::v
   refresh_transcript_layout_cache(cache, transcript, generation, width, legacy_tool_presentation(expanded), thinking_visible, compact_spacing);
 }
 
-[[nodiscard]] ComposerFrame render_composer_frame_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
-                                                         TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation, bool center_canvas = true,
-                                                         bool allow_transcript_gap = true, bool freeze_transcript_layout = false,
-                                                         bool allow_frozen_width_mismatch = false);
+[[nodiscard]] ComposerFrame render_composer_frame_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache,
+                                                         std::size_t source_revision, TranscriptLayoutCache* transcript_cache,
+                                                         std::size_t transcript_generation, bool center_canvas = true, bool allow_transcript_gap = true,
+                                                         bool freeze_transcript_layout = false, bool allow_frozen_width_mismatch = false);
 [[nodiscard]] std::optional<ComposerPaletteScreenLayout> composer_palette_screen_layout_cached(ComposerSnapshot const& snapshot,
                                                                                                CompletionMatchCache& completion_cache,
                                                                                                std::size_t source_revision);
@@ -531,11 +538,12 @@ inline void refresh_transcript_layout_cache(TranscriptLayoutCache& cache, std::v
 [[nodiscard]] std::optional<std::size_t> path_completion_palette_selection_for_screen_position_cached(ComposerSnapshot const& snapshot, std::size_t row,
                                                                                                       std::size_t column, CompletionMatchCache& cache,
                                                                                                       std::size_t source_revision);
-[[nodiscard]] bool draw_screen_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
-                                      TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache,
-                                      bool freeze_transcript_layout = false, bool allow_frozen_width_mismatch = false);
-[[nodiscard]] bool draw_processing_footer_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
-                                                 TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache);
+[[nodiscard]] bool draw_screen_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache,
+                                      std::size_t source_revision, TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation,
+                                      ScreenRowCache& screen_cache, bool freeze_transcript_layout = false, bool allow_frozen_width_mismatch = false);
+[[nodiscard]] bool draw_processing_footer_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache,
+                                                 std::size_t source_revision, TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation,
+                                                 ScreenRowCache& screen_cache);
 void clear_composer_terminal_graphics(terminal::Context& terminal_context) noexcept;
 
 [[nodiscard]] std::size_t composer_input_prefix_columns(bool first_line);

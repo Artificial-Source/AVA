@@ -102,7 +102,6 @@ QueuedRuntimeEvent::QueuedRuntimeEvent(ava::event::RuntimeEvent event_in, ava::e
 
 ava::core::VoidResult RuntimeEventQueue::enqueue_envelope(ava::event::EventEnvelope const& envelope)
 {
-  std::lock_guard lock(mutex);
   events.emplace_back(std::in_place_type<ava::event::EventEnvelope>, envelope);
   received = true;
   return {};
@@ -110,14 +109,12 @@ ava::core::VoidResult RuntimeEventQueue::enqueue_envelope(ava::event::EventEnvel
 
 void RuntimeEventQueue::enqueue_subagent_launch(ava::agent::SubagentLaunchNotification const& notification)
 {
-  std::lock_guard lock(mutex);
   events.emplace_back(std::in_place_type<ava::agent::SubagentLaunchNotification>, notification);
   received = true;
 }
 
 ava::core::VoidResult RuntimeEventQueue::enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context)
 {
-  std::lock_guard<std::mutex> lock(mutex);
   events.emplace_back(std::in_place_type<QueuedRuntimeEvent>, event, std::move(context));
   received = true;
   return {};
@@ -125,7 +122,6 @@ ava::core::VoidResult RuntimeEventQueue::enqueue(ava::event::RuntimeEvent const&
 
 std::vector<QueuedTuiEvent> RuntimeEventQueue::drain(std::size_t maximum)
 {
-  std::lock_guard<std::mutex> lock(mutex);
   auto drained = std::vector<QueuedTuiEvent>{};
   auto const count = std::min(maximum, events.size());
   drained.reserve(count);
@@ -139,25 +135,21 @@ std::vector<QueuedTuiEvent> RuntimeEventQueue::drain(std::size_t maximum)
 
 bool RuntimeEventQueue::has_pending() const
 {
-  std::lock_guard lock(mutex);
   return !events.empty();
 }
 
 void RuntimeEventQueue::discard()
 {
-  std::lock_guard<std::mutex> lock(mutex);
   events.clear();
   received = false;
 }
 
 bool RuntimeEventQueue::received_any() const
 {
-  std::lock_guard<std::mutex> lock(mutex);
   return received;
 }
 
-// Startup hydration reads backend state before the UI lock exists, so it cannot
-// invert the backend-to-UI lock order. RuntimePresentationState is created only
+// Startup hydration runs on the TUI thread. RuntimePresentationState is created only
 // after the concrete frontend has finished construction, making virtual backend
 // reads safe here.
 RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, std::string const& initial_keybind_status)

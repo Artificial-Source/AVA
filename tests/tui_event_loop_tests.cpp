@@ -362,8 +362,12 @@ void test_local_stop_and_retired_wakeup()
 
 }  // namespace
 
+// Public owner contracts also cover inbox changes used by the event loop.
+void run_tui_runtime_owner_tests();
+
 void run_tui_event_loop_tests()
 {
+  run_tui_runtime_owner_tests();
   test_timer_deadline_replacement_and_late_repeat();
   test_timer_mutation_during_dispatch();
   test_timer_move_and_destruction();

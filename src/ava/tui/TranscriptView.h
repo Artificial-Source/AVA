@@ -24,7 +24,7 @@ enum class TranscriptSelectionProjection
 
 // TUI-thread viewport/selection owner. Borrowed presentation, sidebar and Composer
 // outlive this object. The renderer supplies immutable prepared layout authority;
-// callers use its UI lock when coordinating cross-owner updates.
+// the session serializes every update on the TUI thread.
 class TranscriptView final
 {
  public:
@@ -54,7 +54,6 @@ class TranscriptView final
   // Deferred output updates only scroll projection until synchronization or paint.
   void complete_transcript_update(TranscriptUpdate const& update, std::ptrdiff_t item_index_shift, std::size_t event_count);
   void defer_update(detail::TranscriptViewportAnchor anchor, std::ptrdiff_t item_index_shift);
-  void discard_deferred_update();
   void synchronize_deferred(detail::TranscriptLayoutCache const& layout, std::size_t maximum);
 
   void begin_frame();
@@ -65,8 +64,6 @@ class TranscriptView final
   void cancel_pointer_interaction();
   void note_live_selection_item_shift(std::ptrdiff_t item_index_shift) noexcept;
   [[nodiscard]] bool has_selection() const noexcept;
-  [[nodiscard]] bool has_pointer_interaction() const noexcept;
-  [[nodiscard]] std::optional<TranscriptSelectionRange> selection_range() const noexcept;
   [[nodiscard]] bool prepare_selection_authority(detail::TranscriptLayoutCache const& layout);
   void publish_selection(detail::TranscriptLayoutCache const& layout, TranscriptSelectionProjection projection);
   [[nodiscard]] TranscriptSelectionMouseResult handle_mouse(InputEvent const& event, detail::TranscriptLayoutCache const& layout,
@@ -88,6 +85,9 @@ class TranscriptView final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Internal TUI-thread selection steps; public feature operations preserve ordering.
+  void discard_deferred_update();
+  [[nodiscard]] bool has_pointer_interaction() const noexcept;
   void settle_scroll_change();
   RuntimePresentationState& presentation_;
   Composer& composer_;

@@ -553,8 +553,10 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
 
 TuiInputOutcome TuiSession::handle_composer_input(ComposerInputPhase phase, runtime_input::RuntimeInput const& input)
 {
-  auto result =
-      draft_state_.handle_key(input, frontend_.key_bindings(), presentation_state_.screen(), navigation_, renderer_.transcript().has_selection(), phase);
+  presentation_state_.publish_completion(draft_state_);
+  static_cast<void>(renderer_.refresh_completion_cache());
+  auto result = draft_state_.handle_key(input, frontend_.key_bindings(), presentation_state_.screen(), renderer_.completion_cache(),
+                                        renderer_.transcript().has_selection(), phase);
   if (!result.handled)
     return TuiInputOutcome::Pass;
   presentation_state_.publish_composer_feedback(result);

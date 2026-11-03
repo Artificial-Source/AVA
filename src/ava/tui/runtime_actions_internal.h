@@ -52,9 +52,8 @@ class RuntimeActionController final
   [[nodiscard]] bool open_scoped_model_selector();
   // Toggle the read-only startup overview select-list. No-op when no snapshot is present.
   [[nodiscard]] bool toggle_startup_overview();
-  // Shared with snapshot-apply / prompt-preempt paths that must close or rebuild overview.
-  [[nodiscard]] SelectorHost& selectors() noexcept { return selectors_; }
-  [[nodiscard]] SelectorHost const& selectors() const noexcept { return selectors_; }
+  // TUI thread: retire the overview before a host prompt claims the modal surface.
+  void close_startup_overview();
   [[nodiscard]] bool open_fork_user_turn_selector(std::string_view initial_query = {});
   [[nodiscard]] bool open_copy_user_turn_selector(std::string_view initial_query = {});
   void cycle_model(bool forward);
@@ -72,7 +71,6 @@ class RuntimeActionController final
   SessionSelector& session_selector_;
   PendingAttachments& attachments_;
   std::optional<ava::core::NoLogString> last_display_reload_error_;
-  bool loop_attached_ = false;
   bool display_reload_due_ = true;
   TuiTimer display_reload_timer_;
 };

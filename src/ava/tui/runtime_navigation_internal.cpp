@@ -51,28 +51,10 @@ bool RuntimeNavigationController::path_completion_palette_active()
   return model && model->surface == detail::CompletionSurface::PathCompletion && model->palette_visible;
 }
 
-std::size_t RuntimeNavigationController::completion_match_count()
-{
-  auto const* model = refresh_completion_cache();
-  return model ? model->ranked_source_indices.size() : std::size_t{0};
-}
-
 std::size_t RuntimeNavigationController::clamp_completion(std::size_t selected)
 {
   project_completion_input();
   return renderer_.clamp_completion(selected);
-}
-
-std::size_t RuntimeNavigationController::previous_completion(std::size_t selected)
-{
-  project_completion_input();
-  return renderer_.previous_completion(selected);
-}
-
-std::size_t RuntimeNavigationController::next_completion(std::size_t selected)
-{
-  project_completion_input();
-  return renderer_.next_completion(selected);
 }
 
 std::optional<std::string> RuntimeNavigationController::selected_completion_disabled_reason(std::size_t selected)
@@ -119,7 +101,10 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       renderer_.clear_transcript_selection();
       draft_state_.clear_selection();
       draft_state_.select_completion(*clicked);
-      static_cast<void>(apply_feedback(draft_state_.select_file_reference(*this)));
+      // Hit-test the published palette first, then apply the choice to the current
+      // draft, which may have changed earlier in the same input batch.
+      static_cast<void>(refresh_completion_cache());
+      static_cast<void>(apply_feedback(draft_state_.select_file_reference(renderer_.completion_cache(), presentation_.screen())));
       palette_claimed = true;
     }
     else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
@@ -127,7 +112,10 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       renderer_.clear_transcript_selection();
       draft_state_.clear_selection();
       draft_state_.select_completion(*clicked);
-      static_cast<void>(apply_feedback(draft_state_.select_path_completion(*this)));
+      // Hit-test the published palette first, then apply the choice to the current
+      // draft, which may have changed earlier in the same input batch.
+      static_cast<void>(refresh_completion_cache());
+      static_cast<void>(apply_feedback(draft_state_.select_path_completion(renderer_.completion_cache(), presentation_.screen())));
       palette_claimed = true;
     }
   }

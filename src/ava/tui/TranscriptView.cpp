@@ -185,10 +185,6 @@ bool TranscriptView::has_pointer_interaction() const noexcept
 {
   return selection_.dragging() || composer_.mouse_selecting();
 }
-std::optional<TranscriptSelectionRange> TranscriptView::selection_range() const noexcept
-{
-  return selection_.range();
-}
 bool TranscriptView::prepare_selection_authority(detail::TranscriptLayoutCache const& layout)
 {
   if (!deferred_viewport_ && pending_live_selection_item_index_shift_ != 0)
