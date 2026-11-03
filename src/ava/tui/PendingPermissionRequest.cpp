@@ -51,4 +51,9 @@ void PendingPermissionRequest::interrupt()
   ready_.notify_one();
 }
 
+void PendingPermissionRequest::abandon()
+{
+  complete(ava::permissions::PermissionResolution::Deny);
+}
+
 }  // namespace ava::tui

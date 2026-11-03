@@ -586,9 +586,9 @@ void RuntimePromptCoordinator::abandon_active_request()
 {
   auto request = retire_active_callbacks();
   if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))
-    (*permission)->complete(ava::permissions::PermissionResolution::Deny);
+    (*permission)->abandon();
   else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
-    (*question)->complete(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted")));
+    (*question)->abandon();
   // Release the waiter before best-effort UI cleanup can fail during unwinding.
   clear_prompt_projection();
 }
@@ -777,19 +777,19 @@ void RuntimePromptCoordinator::fail_pending_requests()
   // Queued requests have no UI callbacks and can be interrupted immediately.
   // The TUI thread alone resolves an active claim, preserving automatic answers
   // and retiring borrowed callbacks before its waiting worker can return.
-  std::deque<std::shared_ptr<PendingPermissionRequest>> permission_requests;
-  std::deque<std::shared_ptr<PendingQuestionRequest>> question_requests;
   {
     std::lock_guard lock(prompt_request_mutex_);
     accept_prompt_requests_ = false;
     cancellation_pending_ = true;
-    permission_requests.swap(pending_permission_requests_);
-    question_requests.swap(pending_question_requests_);
+    // Do not construct temporary deques here: even an empty deque can allocate.
+    // Request interruption runs no user callback and takes only its own mutex.
+    for (auto const& request : pending_permission_requests_)
+      request->interrupt();
+    for (auto const& request : pending_question_requests_)
+      request->interrupt();
+    pending_permission_requests_.clear();
+    pending_question_requests_.clear();
   }
-  for (auto const& request : permission_requests)
-    request->interrupt();
-  for (auto const& request : question_requests)
-    request->interrupt();
   wakeup_.notify();
 }
 

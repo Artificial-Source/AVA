@@ -420,6 +420,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   bool finish_called = false;
+  bool finish_throws = false;
   bool initial_identity_forwarded = false;
   bool backend_session_replaced = false;
   bool quit_requested = false;
@@ -435,7 +436,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "old_initial_tool"}},
   };
   tui_test_support::TuiFrontEndFixture frontend(options);
-  frontend.hooks().create_active_run_queues = [&finish_called, &queues_enabled](ava::event::EventEnvelopeSink sink) {
+  frontend.hooks().create_active_run_queues = [&finish_called, &finish_throws, &queues_enabled](ava::event::EventEnvelopeSink sink) {
     if (!queues_enabled)
       return ava::tui::TuiActiveRunQueues{};
     auto queued = ava::event::EventEnvelope{};
@@ -450,8 +451,10 @@ bool test_active_run_session_transition_discards_prior_session_events()
 
     auto queues = ava::tui::TuiActiveRunQueues{};
     queues.active_request_id = "old-request";
-    queues.finish = [&finish_called, sink](bool) {
+    queues.finish = [&finish_called, &finish_throws, sink](bool) {
       finish_called = true;
+      if (finish_throws)
+        throw std::runtime_error("test queue finish failure");
       auto skipped = ava::event::EventEnvelope{};
       skipped.schema_version = 1;
       skipped.event_id = "old-finish-event";
@@ -588,7 +591,17 @@ bool test_active_run_session_transition_discards_prior_session_events()
   expect(quit_outcome && quit_outcome->break_loop() && !quit_outcome->terminal_write_failed() && presentation.sidebar().todos.size() == 1 &&
              presentation.sidebar().todos.front().id == "new-todo",
          "quit completion performs no catalog or committed todo pull");
-  return passed && retained_input_discarded;
+  // Shutdown must retire the operation even when a queue-finish callback throws.
+  queues_enabled = true;
+  finish_called = false;
+  finish_throws = true;
+  if (!active_run.start("SHUTDOWN CALLBACK"))
+    return false;
+  static_cast<void>(active_run.shutdown());
+  bool const cleanup_completed = finish_called && !active_run.active() && !presentation.screen().processing;
+  static_cast<void>(active_run.shutdown());
+  expect(cleanup_completed, "throwing queue cleanup leaves no live operation and repeated shutdown is safe");
+  return passed && retained_input_discarded && cleanup_completed;
 }
 
 // Polling plugin UI during host prompts used to cancel queued and already-visible plugin dialogs.

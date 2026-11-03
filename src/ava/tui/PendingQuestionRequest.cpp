@@ -46,7 +46,18 @@ void PendingQuestionRequest::interrupt()
   {
     std::lock_guard lock(mutex_);
     if (!result_)
-      result_ = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
+      result_ = std::move(interrupted_);
+  }
+  ready_.notify_one();
+}
+
+void PendingQuestionRequest::abandon()
+{
+  {
+    std::lock_guard lock(mutex_);
+    if (!result_)
+      result_ = std::move(interrupted_);
+    resolving_ = false;
   }
   ready_.notify_one();
 }

@@ -594,38 +594,55 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
 {
   if (!active())
     return ActiveRunOutcome(true, terminal_write_failed_, terminal_signal_received_);
-  spinner_.stop();
-  // Cancellation and callback retirement precede join. A claimed question may
-  // borrow worker-local data until cancel_active destroys its UI callback scope.
-  if (inbox_)
-    static_cast<void>(inbox_->request_stop());
-  prompt_coordinator_.fail_pending_requests();
-  try
-  {
-    static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
-  }
-  catch (...)
-  {
-  }
-  plugin_ui_.finish_submission();
-  if (worker_.valid())
-  {
+  // A destructor must continue independent cleanup after a failed step. Use
+  // fixed stage names only: exceptions can contain prompt or command bodies.
+  auto cleanup = [](char const* stage, auto&& operation) noexcept {
     try
     {
-      worker_.get();
+      operation();
     }
     catch (...)
     {
+      try
+      {
+        Dout(dc::warning, "TUI shutdown cleanup failed at " << stage);
+      }
+      catch (...)
+      {
+        // Logging must not turn a recoverable cleanup failure into termination.
+      }
     }
-  }
-  try
-  {
-    finish_queues();
-  }
-  catch (...)
-  {
-  }
-  retire_operation();
+  };
+  spinner_.stop();
+  // Stop admission and retire all callbacks borrowing worker-local data before
+  // joining. These cancellation paths avoid allocation; mutex failure remains
+  // an unrecoverable platform failure, not a promised liveness guarantee.
+  cleanup("stop request", [&] {
+    if (inbox_)
+      static_cast<void>(inbox_->request_stop());
+  });
+  cleanup("queued prompts", [&] { prompt_coordinator_.fail_pending_requests(); });
+  cleanup("active prompt", [&] { static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown)); });
+  cleanup("plugin waiters", [&] { plugin_ui_.finish_submission(); });
+  cleanup("worker join", [&] {
+    if (worker_.valid())
+      worker_.get();
+  });
+  cleanup("queue receipts", [&] { finish_queues(); });
+  cleanup("audit retirement", [&] { prompt_coordinator_.set_audit_sink(nullptr); });
+  cleanup("inbox retirement", [&] {
+    if (inbox_)
+      inbox_->retire();
+  });
+  // Each local value is now independent of worker execution. Do not call the
+  // normal retirement sequence again: it would repeat fallible cleanup steps.
+  active_queues_.reset();
+  result_.reset();
+  events_.reset();
+  inbox_.reset();
+  submitted_.clear();
+  presentation_state_.screen().processing = false;
+  phase_ = Phase::Idle;
   return ActiveRunOutcome(true, terminal_write_failed_, terminal_signal_received_);
 }
 

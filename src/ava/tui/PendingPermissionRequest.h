@@ -25,6 +25,9 @@ class PendingPermissionRequest final
   [[nodiscard]] bool begin_resolution();
   void complete(ava::core::Result<ava::permissions::PermissionResolutionDecision> result);
   void interrupt();
+  // TUI thread only, after borrowed callbacks retire. Release a claimed waiter
+  // with its prepared cancellation result, without allocating during shutdown.
+  void abandon();
 
   // Permission prompts and decisions contain arbitrary commands and guidance.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

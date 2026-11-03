@@ -26,6 +26,9 @@ class PendingQuestionRequest final
   [[nodiscard]] bool begin_resolution();
   void complete(ava::core::Result<ava::agent::QuestionAnswer> result);
   void interrupt();
+  // TUI thread only, after borrowed callbacks retire. Release a claimed waiter
+  // with its prepared cancellation result, without allocating during shutdown.
+  void abandon();
 
   // Question prompts and answers may contain secret or arbitrary user text.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -35,6 +38,9 @@ class PendingQuestionRequest final
   std::mutex mutex_;
   std::condition_variable ready_;
   std::optional<ava::core::Result<ava::agent::QuestionAnswer>> result_;
+  // Prepared before queue admission so cancellation can release a worker even
+  // when memory allocation fails during teardown. Moved once under mutex_.
+  ava::core::Result<ava::agent::QuestionAnswer> interrupted_ = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
   bool resolving_ = false;
 };
 

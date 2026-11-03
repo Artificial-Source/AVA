@@ -30,15 +30,8 @@ struct PendingPluginUiModal
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-enum class PluginUiQueueRecordKind
-{
-  Request,
-  Clear,
-};
-
 struct PluginUiQueueRecord
 {
-  PluginUiQueueRecordKind kind = PluginUiQueueRecordKind::Request;
   std::uint64_t generation = 0;
   TuiPluginUiRequest request;
   // The queue and waiting worker retain independent ownership until resolution.
@@ -222,6 +215,9 @@ struct RuntimePluginUiCoordinatorState
   bool accepting = false;
   bool deadline_expired = false;
   bool expiry_report_pending = false;
+  // Cancellation publishes an allocation-free clear request under mutex. The
+  // TUI poll consumes it before applying any records from this generation.
+  bool clear_pending = false;
   std::uint64_t generation = 0;
   std::string invocation_id;
   std::chrono::steady_clock::time_point deadline{};
@@ -240,20 +236,6 @@ struct RuntimePluginUiCoordinatorState
 
 namespace {
 
-void queue_clear_locked(RuntimePluginUiCoordinatorState& state)
-{
-  TuiPluginUiRequest request;
-  if (state.owner)
-    request.binding = *state.owner;
-  if (state.queue.size() >= kTuiPluginUiMaxQueuedRecords)
-  {
-    complete_modal(state.queue.back().modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    state.queue.pop_back();
-  }
-  state.queue.push_back(
-      PluginUiQueueRecord{.kind = PluginUiQueueRecordKind::Clear, .generation = state.generation, .request = std::move(request), .modal = nullptr});
-}
-
 void cancel_locked(RuntimePluginUiCoordinatorState& state)
 {
   if (!state.active && !state.accepting && !state.owner && !state.outstanding_modal && !state.visible_modal)
@@ -263,7 +245,9 @@ void cancel_locked(RuntimePluginUiCoordinatorState& state)
   for (auto const& record : state.queue)
     complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   state.queue.clear();
-  queue_clear_locked(state);
+  // Release waiters before the TUI clears its projection. No queue allocation
+  // or binding-string copy may stand between cancellation and their wakeup.
+  state.clear_pending = true;
   complete_modal(state.outstanding_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   complete_modal(state.visible_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   state.outstanding_modal.reset();
@@ -296,7 +280,7 @@ TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> 
     modal = std::make_shared<PendingPluginUiModal>();
     if (is_modal)
       state->outstanding_modal = modal;
-    state->queue.push_back(PluginUiQueueRecord{.kind = PluginUiQueueRecordKind::Request, .generation = generation, .request = request, .modal = modal});
+    state->queue.push_back(PluginUiQueueRecord{.generation = generation, .request = request, .modal = modal});
     after_enqueue = std::exchange(state->after_enqueue_for_test, {});
     wakeup = state->wakeup;
   }
@@ -423,6 +407,7 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
     state_->owner = TuiPluginUiBinding{.plugin_id = binding->first, .command = binding->second, .invocation_id = invocation_id};
     state_->outstanding_modal.reset();
     state_->visible_modal.reset();
+    state_->clear_pending = false;
     state_->active = true;
     state_->accepting = true;
     state_->deadline_expired = false;
@@ -497,6 +482,8 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
       state_->expiry_report_pending = true;
       cancel_locked(*state_);
     }
+    if (std::exchange(state_->clear_pending, false))
+      result.changed = clear_surface() || result.changed;
     result.deadline_expired = std::exchange(state_->expiry_report_pending, false);
     records.swap(state_->queue);
     after_queue_swap = std::exchange(state_->after_queue_swap_for_test, {});
@@ -520,22 +507,6 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
 
   for (auto& record : records)
   {
-    if (record.kind == PluginUiQueueRecordKind::Clear)
-    {
-      bool current_generation = false;
-      {
-        std::lock_guard lock(state_->mutex);
-        current_generation = record.generation == state_->generation;
-      }
-      if (!current_generation)
-        continue;
-      if (record.request.binding.plugin_id.empty())
-        result.changed = clear_surface() || result.changed;
-      else
-        result.changed = clear_surface(record.request.binding) || result.changed;
-      continue;
-    }
-
     auto const& request = record.request;
     if (request.kind == TuiPluginUiKind::Status || request.kind == TuiPluginUiKind::Widget)
     {
