@@ -600,6 +600,7 @@ void test_queue_deduplication_cache_and_bounds()
   std::filesystem::remove_all(root, ignored);
 }
 
+// Protect stale-epoch rejection and copied bridge callbacks across renderer replacement and shutdown.
 void test_tui_bridge_epoch_reload_and_callback_lifetime()
 {
   ava::app::MermaidDisplaySettings disabled;
@@ -717,6 +718,7 @@ void test_completion_notification_publication_registration_and_unregister()
 
 }  // namespace
 
+// Exercise coordinator publication, cancellation, cache and bridge-lifetime regressions together.
 void run_mermaid_render_coordinator_tests()
 {
   ava::tests::HermeticTestEnvironment environment("mermaid-tests-");

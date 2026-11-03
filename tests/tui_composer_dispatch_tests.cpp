@@ -76,7 +76,7 @@ struct ComposerDispatchFixture
   ava::tui::Composer composer;
   // Owns completion caches and borrows the preceding frontend, presentation, and composer.
   ava::tui::RuntimeRenderer renderer;
-  // Provides completion queries while borrowing all preceding fixture owners.
+  // Exercises navigation against the same prepared viewport; all preceding owners outlive it.
   ava::tui::RuntimeNavigationController navigation;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

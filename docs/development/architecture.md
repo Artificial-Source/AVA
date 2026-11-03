@@ -5,6 +5,9 @@ This document is the maintainer-level map of the architecture implemented under
 configuration, persistence, or security contracts. Follow the linked normative
 documents when exact fields or behavior matter.
 
+The issue #93 [TUI implementation guide](../engineering/tui-architecture.md)
+explains the session owners, event loop and worker-to-UI publication paths.
+
 ## System context
 
 AVA is a C++23 local coding agent. The normal `ava` process owns configuration,

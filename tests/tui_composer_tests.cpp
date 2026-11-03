@@ -2,6 +2,7 @@
 #include "tests/support/test_harness.h"
 #include "tests/tui_composer_test_suites.h"
 
+// Run editor and feature regressions under the shared initialized terminal fixture.
 void run_tui_composer_tests()
 {
   ScopedEnvVar no_color_guard("NO_COLOR", "");

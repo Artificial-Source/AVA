@@ -1,3 +1,4 @@
+// Runs application-owned Mermaid helper work; the coordinator queue publishes results before invoking completion notification.
 #include "sys.h"
 #include "ava/app/mermaid_render_coordinator.h"
 #include "ava/app/tui/tui_display_settings.h"
@@ -636,31 +637,55 @@ MermaidRenderConfiguration mermaid_render_configuration_from_display_settings(Me
   return {.epoch = epoch, .enabled = settings.enabled, .argv = settings.argv};
 }
 
+// Coordinator-owned, heap-stable shared state for application callers and one rendering worker. mutex protects
+// all mutable queue/configuration/cache fields; wake_pipe is stable until join. Worker copies process inputs
+// under lock, performs helper I/O unlocked, then validates epoch before publishing. Owner must serialize
+// shutdown and join before destruction.
 struct MermaidRenderCoordinator::Impl
 {
+  // Owned queue/active value under Impl mutex. Identical source shares one helper execution; each admitted
+  // identity receives its own completion unless canceled/reconfigured.
   struct Work
   {
+    // Configuration identity captured at admission; worker publication rejects results when current epoch
+    // differs.
     std::uint64_t epoch = 0;
+    // Owned diagram source used for deduplication/cache identity; queue mutex protects stored values and worker
+    // renders its own copy.
     std::string source;
+    // Current admitted waiters under queue mutex; cancel removes one, and an empty active list tells worker to
+    // stop the helper.
     std::vector<std::uint64_t> identities;
   };
 
+  // Owned current-epoch result under Impl mutex. Successful text and deterministic fallback outcomes avoid
+  // repeated helper work; cancellation is never cached.
   struct CacheEntry
   {
+    // Owned diagram source used for deduplication/cache identity; queue mutex protects stored values and worker
+    // renders its own copy.
     std::string source;
+    // Cached validated result kind; accepted text contributes to the aggregate byte budget.
     MermaidRenderOutcome outcome = MermaidRenderOutcome::LaunchFailed;
+    // Owned cached helper text protected by queue mutex; only accepted results normally retain bytes.
     std::string text;
   };
 
+  // Construction thread: bind validated configuration and owned wake pipe before start publishes this stable
+  // target to worker.
   explicit Impl(MermaidRenderConfiguration configuration_in, Pipe wake_pipe_in) : configuration(std::move(configuration_in)), wake_pipe(std::move(wake_pipe_in))
   {
   }
 
+  // Construction thread, once: launch the owned joinable worker only after mutex, wake pipe, and configuration
+  // exist.
   void start()
   {
     worker = ava::core::JoinThread::create("mermaid_render", [this](std::stop_token stop_token) { worker_loop(stop_token); });
   }
 
+  // Caller thread with owner alive: nonblocking wake byte interrupts helper polling and condition notification
+  // releases queue/diagnostic waits.
   void signal_worker() noexcept
   {
     char const byte = '1';
@@ -669,6 +694,8 @@ struct MermaidRenderCoordinator::Impl
     changed.notify_all();
   }
 
+  // Caller/worker with mutex held: count queued plus active waiters; callers add undrained completion count for
+  // the admission bound.
   [[nodiscard]] std::size_t pending_identities_locked() const noexcept
   {
     std::size_t count = active ? active->identities.size() : 0;
@@ -677,6 +704,8 @@ struct MermaidRenderCoordinator::Impl
     return count;
   }
 
+  // Caller with mutex held: prevent duplicate identity admission across queued, active, and completed lifecycle
+  // phases.
   [[nodiscard]] bool identity_present_locked(std::uint64_t identity) const noexcept
   {
     if (std::ranges::any_of(completions, [&](auto const& completion) { return completion.identity == identity; }))
@@ -717,8 +746,12 @@ struct MermaidRenderCoordinator::Impl
     notify_completion_locked();
   }
 
+  // Caller/worker with mutex held: find current-epoch source cache entry; iterator is valid only while lock and
+  // cache remain unchanged.
   auto find_cache_locked(std::string const& source) { return std::ranges::find(cache, source, &CacheEntry::source); }
 
+  // Worker with mutex held: skip cancellation, replace source entry, and evict oldest results until
+  // count/accepted-byte bounds hold.
   void cache_result_locked(std::string const& source, RenderResult const& result)
   {
     if (result.outcome == MermaidRenderOutcome::Canceled)
@@ -738,20 +771,30 @@ struct MermaidRenderCoordinator::Impl
     accepted_cache_bytes += new_bytes;
   }
 
+  // Worker helper callback: briefly acquire mutex to observe shutdown, reconfiguration, or last-waiter
+  // cancellation without retaining active references.
   [[nodiscard]] bool active_canceled(std::uint64_t epoch, std::string const& source) const
   {
     std::lock_guard lock(mutex);
     return shutting_down || configuration.epoch != epoch || !active || active->epoch != epoch || active->source != source || active->identities.empty();
   }
 
+  // Worker thread: move one queued request into active under lock, render outside lock, then publish only
+  // still-needed same-epoch results; return retires active work before owner joins.
   void worker_loop(std::stop_token stop_token)
   {
     for (;;)
     {
       std::vector<std::string> argv;
+      // Owned diagram source used for deduplication/cache identity; queue mutex protects stored values and worker
+    // renders its own copy.
       std::string source;
+      // Configuration identity captured at admission; worker publication rejects results when current epoch
+    // differs.
       std::uint64_t epoch = 0;
       {
+        // Claim and copy process inputs under the queue lock, then release it before helper I/O so frontend
+        // admission/cancellation can proceed.
         std::unique_lock lock(mutex);
         changed.wait(lock, [&] { return stop_token.stop_requested() || shutting_down || !queue.empty(); });
         if ((stop_token.stop_requested() || shutting_down) && queue.empty())
@@ -765,9 +808,13 @@ struct MermaidRenderCoordinator::Impl
       changed.notify_all();
       drain_wake_fd(wake_pipe.read_end.get());
 
+      // Only this worker owns helper execution. Cancellation briefly reacquires mutex through active_canceled;
+      // it never borrows mutable active storage outside the lock.
       auto result = render_one(std::move(argv), source, wake_pipe.read_end.get(), [this, epoch, &source] { return active_canceled(epoch, source); });
       {
         std::lock_guard lock(mutex);
+        // Revalidate active identity/epoch after I/O before caching or publishing; canceled/reconfigured
+        // waiters must not receive stale output.
         if (active && active->epoch == epoch && active->source == source)
         {
           if (!shutting_down && configuration.epoch == epoch && !active->identities.empty())
@@ -788,19 +835,40 @@ struct MermaidRenderCoordinator::Impl
     changed.notify_all();
   }
 
+  // Sole lock for configuration, queue/active/completions, cache, notifier, and shutdown; notification may not
+  // reenter coordinator.
   mutable std::mutex mutex;
+  // Used with mutex for worker queue admission and caller diagnostic waits; mutations notify after changing
+  // predicates.
   mutable std::condition_variable changed;
+  // Queue-mutex-protected current epoch/argv/enabled state; worker snapshots argv before unlocking for helper
+  // execution.
   MermaidRenderConfiguration configuration;
+  // Queue-mutex-protected FIFO of unique source work; reconfigure/shutdown drop queued authority before waking
+  // worker.
   std::deque<Work> queue;
+  // Queue-mutex-protected current helper work; worker owns execution while callers may remove waiter identities
+  // to cancel it.
   std::optional<Work> active;
+  // Owned published results under mutex; append occurs before notification, and consumer swap releases
+  // admission capacity.
   std::vector<MermaidRenderCompletion> completions;
   // Replaced by registration and invoked after publication, both under mutex.
   // Captures must remain safe independently of the frontend owner lifetime.
   std::function<void()> completion_notifier;
+  // Current-epoch result cache under mutex, oldest first; cache hits move entries to newest position.
   std::deque<CacheEntry> cache;
+  // Queue-mutex-protected accepted text byte total; updated with every cache insert/erase and reset on
+  // configuration change.
   std::size_t accepted_cache_bytes = 0;
+  // Queue-mutex-protected one-way admission/cancellation predicate; worker observes it before further
+  // work/publication.
   bool shutting_down = false;
+  // Owned stable descriptors: callers write nonblocking wake bytes, worker drains/reads; remain alive through
+  // worker join.
   Pipe wake_pipe;
+  // Exclusive joinable worker; coordinator shutdown stops and joins it before earlier declared shared state is
+  // destroyed.
   ava::core::JoinThread worker;
 };
 
@@ -837,6 +905,8 @@ ava::core::VoidResult MermaidRenderCoordinator::reconfigure(MermaidRenderConfigu
 {
   if (auto valid = validate_configuration(configuration); !valid)
     return std::unexpected(std::move(valid.error()));
+  // Validate caller data before locking; mutate configuration, queues, results, and cache as one epoch change
+  // before waking active work.
   std::lock_guard lock(impl_->mutex);
   if (impl_->shutting_down)
     return std::unexpected(coordinator_error(ava::core::ErrorCategory::Io, "Mermaid coordinator is shut down"));
@@ -859,6 +929,8 @@ ava::core::VoidResult MermaidRenderCoordinator::reconfigure(MermaidRenderConfigu
 
 MermaidEnqueueResult MermaidRenderCoordinator::enqueue(MermaidRenderRequest request)
 {
+  // One mutex covers deduplication and capacity accounting across queued, active, and undrained results; no
+  // helper executes in this critical section.
   std::lock_guard lock(impl_->mutex);
   if (impl_->shutting_down || request.config_epoch != impl_->configuration.epoch)
     return MermaidEnqueueResult::StaleEpoch;
@@ -876,6 +948,8 @@ MermaidEnqueueResult MermaidRenderCoordinator::enqueue(MermaidRenderRequest requ
     impl_->add_completion_locked(request.identity, MermaidRenderOutcome::Disabled);
     return MermaidEnqueueResult::CompletedFallback;
   }
+  // Immediate cache/fallback results are published before notification just like worker results, so the
+  // consumer cannot miss synchronous completion.
   if (auto cached = impl_->find_cache_locked(request.source); cached != impl_->cache.end())
   {
     auto entry = std::move(*cached);
@@ -884,6 +958,8 @@ MermaidEnqueueResult MermaidRenderCoordinator::enqueue(MermaidRenderRequest requ
     impl_->add_completion_locked(request.identity, entry.outcome, entry.text, true);
     return MermaidEnqueueResult::CompletedFromCache;
   }
+  // Attach matching source waiters before creating new work; one helper execution can satisfy several opaque
+  // identities.
   if (impl_->active && impl_->active->epoch == request.config_epoch && impl_->active->source == request.source)
   {
     impl_->active->identities.push_back(request.identity);
@@ -901,6 +977,8 @@ MermaidEnqueueResult MermaidRenderCoordinator::enqueue(MermaidRenderRequest requ
 
 bool MermaidRenderCoordinator::cancel(std::uint64_t identity, std::uint64_t config_epoch)
 {
+  // Remove the caller identity while holding queue authority, then publish cancellation before waking the
+  // consumer/worker.
   std::lock_guard lock(impl_->mutex);
   if (impl_->shutting_down || config_epoch != impl_->configuration.epoch)
     return false;
@@ -940,6 +1018,8 @@ std::vector<MermaidRenderCompletion> MermaidRenderCoordinator::take_completions(
 
 void MermaidRenderCoordinator::set_completion_notifier(std::function<void()> notifier)
 {
+  // Register under the same lock used by publication; re-notify an existing backlog so attachment cannot lose a
+  // completion wake.
   std::lock_guard lock(impl_->mutex);
   impl_->completion_notifier = std::move(notifier);
   if (!impl_->completions.empty())
@@ -989,6 +1069,8 @@ void MermaidRenderCoordinator::shutdown() noexcept
     }
     impl_->signal_worker();
   }
+  // Release the queue mutex before joining: the worker must reacquire it to observe cancellation and retire
+  // active state.
   impl_->worker.request_stop();
   impl_->changed.notify_all();
   if (impl_->worker.joinable())

@@ -1,3 +1,5 @@
+// Stores bounded in-memory draft snapshots and wires their selector into the TUI.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "PendingAttachments.h"
 #include "SelectorHost.h"
@@ -20,6 +22,8 @@ namespace ava::tui {
 using ava::app::sanitize_terminal_text;
 namespace {
 
+// TUI thread: expand saved paste markers, sanitize terminal controls and produce one
+// bounded row label. The result owns its bytes; the caller keeps the source only for this call.
 std::string stash_preview(ComposerDraftState const& draft)
 {
   auto const expanded = expanded_composer_draft_text(draft);
@@ -27,6 +31,8 @@ std::string stash_preview(ComposerDraftState const& draft)
   std::string preview;
   preview.reserve(std::min<std::size_t>(sanitized.size(), 160));
   bool previous_space = false;
+  // Collapse whitespace while scanning so multiline drafts remain one selector row.
+  // Clamp the final cutoff afterward to avoid exposing a partial UTF-8 character.
   for (char const ch : sanitized)
   {
     auto const whitespace = ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
@@ -55,6 +61,8 @@ std::string stash_preview(ComposerDraftState const& draft)
   return preview;
 }
 
+// TUI thread: accept only a complete nonzero stash identity token from a selector row.
+// Malformed/stale text must never select a different entry through partial parsing.
 std::optional<std::uint64_t> stash_id_from_value(std::string_view value)
 {
   constexpr std::string_view kPrefix = "prompt-stash:";
@@ -82,6 +90,8 @@ PromptStashPushResult PromptStash::push(ComposerDraftState const& draft)
   if (expanded_bytes > kMaxAggregateExpandedBytes - aggregate_expanded_bytes_)
     return PromptStashPushResult::AggregateLimitReached;
 
+  // Admission checks precede snapshot copying and budget changes. Expanded text counts
+  // paste payloads rather than their compact editor markers.
   entries_.push_back(PromptStashEntry{.id = next_id_++,
                                       .text = draft.text,
                                       .cursor = draft.cursor,
@@ -100,6 +110,8 @@ PromptStashRestoreResult PromptStash::restore(std::uint64_t id, ComposerDraftSta
   if (found == entries_.end())
     return PromptStashRestoreResult::NotFound;
 
+  // Build fresh editor state so restored text cannot inherit another draft's undo/yank
+  // metadata. Consume the saved payload and its accounting before handing the draft back.
   ComposerDraftState restored;
   restored.text = std::move(found->text);
   restored.cursor = clamp_composer_draft_cursor(restored.text, found->cursor);
@@ -143,6 +155,8 @@ SelectListView PromptStash::select_list_view() const
                       .placeholder = "Search stashed prompts",
                       .empty_text = "No stashed prompts",
                       .footer_hint = "Type to filter · Enter restore · Esc close"};
+  // Rows own only display previews and stable identity tokens. Reconstructing paste
+  // state here lets preview expansion use the same semantics as later submission.
   view.items.reserve(entries_.size());
   for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry)
   {
@@ -188,6 +202,8 @@ bool RuntimePromptStashController::trigger()
     return renderer_.request_render();
   }
 
+  // Only Stored transfers responsibility to the stash; keep live input untouched on
+  // every limit failure and report it before requesting the next frame.
   switch (stash_.push(draft_state_.draft()))
   {
     case PromptStashPushResult::Stored:
@@ -220,6 +236,8 @@ bool RuntimePromptStashController::open_selector()
 
 bool RuntimePromptStashController::restore(std::uint64_t id)
 {
+  // Restoration consumes the entry before editor interaction resets and view closure.
+  // Failures preserve both the live draft and the selector so the user can recover.
   switch (draft_state_.restore_stashed(stash_, id))
   {
     case PromptStashRestoreResult::Restored:
@@ -288,6 +306,8 @@ std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEve
     result = handle_select_list_input(*selectors_.view(), event, key_bindings_);
   }
 
+  // Navigation changes only the host view. Resolve below extracts an owned identity
+  // before restoration can consume the stash entry and close that view.
   if (result.action == SelectListInputAction::Redraw)
   {
     selectors_.update_selection(result.selected_item_index, std::move(result.query));

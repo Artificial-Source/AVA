@@ -1,3 +1,5 @@
+// Owns session browsing and confirmation before frontend session actions.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
@@ -39,6 +41,8 @@ void SessionSelector::preserve_selection(SelectListInputResult const& input, Sel
 
 void SessionSelector::browse(SelectListInputResult const& input)
 {
+  // Catalog changes invalidate a pending archive intent. Each branch rebuilds through
+  // the same identity-preserving path so sorting/filtering cannot confirm a different row.
   switch (input.action)
   {
     case SelectListInputAction::CycleSort:
@@ -119,6 +123,8 @@ void SessionSelector::archive(SelectListInputResult const& input)
     presentation_state_.publish_status("session cannot be archived or restored from this row");
     terminal_context_.beep();
   }
+  // Treat archive and restore as separate intents for a stable session identity.
+  // The current session is rejected before either confirmation or authority callbacks.
   else
   {
     bool const archive = selected_item->badge != "archived";
@@ -128,6 +134,8 @@ void SessionSelector::archive(SelectListInputResult const& input)
       presentation_state_.publish_status("switch sessions before archiving the active session");
       terminal_context_.beep();
     }
+    // Only an unchanged second intent reaches backend authority. Retire confirmation
+    // regardless of success so an error cannot make a later key execute unexpectedly.
     else if (archive_confirmation_ && archive_confirmation_->session_id == selected_item->value && archive_confirmation_->archive == archive)
     {
       auto updated = archive ? frontend_.on_session_selector_archive(selected_item->value) : frontend_.on_session_selector_unarchive(selected_item->value);

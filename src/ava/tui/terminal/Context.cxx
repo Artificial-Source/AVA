@@ -588,6 +588,9 @@ int Context::read_wch(wint_t* wch_out)
   return ::get_wch(wch_out);
 }
 
+// Registered TUI thread: preserve read_wch's distinction between native ERR and a
+// consumed unsupported key, so input drainage does not strand ncurses-buffered keys.
+// Context remains live for the read; value is meaningful only with a returned key.
 std::optional<Key> Context::read_curses_key(wint_t& value)
 {
   int const result = read_wch(&value);
@@ -595,9 +598,14 @@ std::optional<Key> Context::read_curses_key(wint_t& value)
     return std::nullopt;
   if (result == KEY_CODE_YES)
   {
+    // Immutable table row used only by this TUI-thread decoder. The static table
+    // owns rows whose names borrow string literals, so no terminal buffer lifetime
+    // is retained and teardown requires no Context access.
     struct Entry
     {
+      // Literal terminfo name checked after hashing to reject collisions/empty slots.
       std::string_view name;
+      // Semantic key returned only when the TUI reader matches this row's full name.
       Key key;
     };
 
@@ -639,6 +647,8 @@ std::optional<Key> Context::read_curses_key(wint_t& value)
         {"kDC2", Key::ShiftDelete},
     }};
 
+    // Extended terminfo codes vary by terminal. Match their names first, verifying
+    // the full string after hashing, then fall back to portable ncurses constants.
     std::string_view const key_name = keyname(value);
 
     if (3 <= key_name.size() && key_name.size() <= 5)
@@ -776,10 +786,14 @@ std::optional<Key> Context::read_curses_key(wint_t& value)
         return Key::Mouse;
 #endif
       default:
+        // Consumption still counts even when AVA has no semantic mapping. Returning
+        // nullopt here would let composition sleep with later keys buffered in ncurses.
         return Key::Unknown;
     }
   }
 
+  // Ordinary characters use semantic control-key mappings before the caller encodes
+  // a WideCharacter into owned UTF-8; the native value remains available to that caller.
   wchar_t const character = static_cast<wchar_t>(value);
   if (character == L'\r')
     return Key::Enter;

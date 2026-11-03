@@ -1,3 +1,5 @@
+// Presents asynchronous parent-summary progress through frontend snapshots.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
@@ -78,6 +80,8 @@ void BranchSummaryOperation::present_status(std::string status)
 
 BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot const& operation)
 {
+  // Keep a usable checkpoint even if a post-commit catalog refresh fails. Refresh is
+  // synchronous on the TUI thread and never changes the backend operation outcome.
   auto restored = prior_session_view_;
   bool refresh_failed = false;
   if (operation.refresh_required)
@@ -95,6 +99,8 @@ BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot con
       refresh_failed = true;
     }
   }
+  // Restore view/status before retiring modal admission and its timer. Exit is acted on
+  // only after this local settlement; app worker join remains a separate lifetime boundary.
   auto const exit_requested = exit_requested_;
   restore_selector(std::move(restored));
   present_status(refresh_failed ? std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Refresh))
@@ -114,6 +120,8 @@ BranchSummaryOutcome BranchSummaryOperation::consume(TuiBranchSummarySnapshot co
 {
   if (!active_)
     return BranchSummaryOutcome::Inactive;
+  // The backend may expose a newer/older operation; only this start generation may
+  // replace the modal or release its exit gate.
   if (operation.generation != generation_)
     return BranchSummaryOutcome::Pending;
   phase_ = operation.phase;
@@ -133,6 +141,8 @@ BranchSummaryOutcome BranchSummaryOperation::poll()
   }
   catch (...)
   {
+    // Snapshot failure settles only the UI fallback. It cannot prove worker termination,
+    // so app-owned callback dependencies must still survive coordinator shutdown.
     TuiBranchSummarySnapshot failed;
     failed.generation = generation_;
     failed.phase = TuiBranchSummaryPhase::Failed;
@@ -145,6 +155,8 @@ BranchSummaryOutcome BranchSummaryOperation::poll()
 
 BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, std::size_t selected_index, std::string selected_value)
 {
+  // Do not expose a new modal generation until preparation succeeds. The previous
+  // selector remains usable when the callback refuses or throws.
   service_outcome_.reset();
   ava::core::Result<TuiBranchSummarySnapshot> prepared =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "parent summary prepare callback failed"));
@@ -160,6 +172,8 @@ BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, 
     present_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Prepare)));
     return renderer_.request_render() ? BranchSummaryOutcome::Settled : BranchSummaryOutcome::RenderFailed;
   }
+  // Own the restoration checkpoint before consuming a possibly already terminal
+  // snapshot; consume may immediately settle and cancel the need for discovery.
   active_ = true;
   exit_requested_ = false;
   generation_ = prepared->generation;
@@ -177,6 +191,8 @@ BranchSummaryOutcome BranchSummaryOperation::cancel(BranchSummaryCancelMode mode
 {
   if (!active_)
     return BranchSummaryOutcome::Inactive;
+  // Exit intent is sticky even if cancellation is rejected or throws. Cancellation only
+  // requests worker cooperation; input remains captured until a terminal snapshot arrives.
   exit_requested_ = exit_requested_ || mode == BranchSummaryCancelMode::ExitAfterSettlement;
   ava::core::Result<bool> canceled = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "cancel callback unavailable"));
   try
@@ -201,6 +217,8 @@ BranchSummaryOutcome BranchSummaryOperation::confirm()
     return BranchSummaryOutcome::Inactive;
   if (phase_ != TuiBranchSummaryPhase::AwaitingConfirmation)
     return BranchSummaryOutcome::Pending;
+  // Consent is sent once per accepted UI request for the same generation. A refused
+  // callback leaves the modal active so later snapshots can still report terminal work.
   ava::core::Result<bool> confirmed = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "confirm callback unavailable"));
   try
   {

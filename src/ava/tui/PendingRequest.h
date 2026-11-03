@@ -15,6 +15,9 @@ namespace ava::tui {
 // prompt may borrow worker-local callbacks, so a result alone cannot release the
 // worker: the UI must also retire its claim. Prompt and Answer select the payload;
 // Interrupted prepares the feature's cancellation result before queue admission.
+// The request owns its mutex/result; the resolver, queue and TUI claim own shares.
+// Only the TUI holds a claim, and final destruction can occur on either participant
+// after all shares are released. No UI callback may run after that claim retires.
 template <typename Prompt, typename Answer, ava::core::Result<Answer> (*Interrupted)()>
 class PendingRequest final
 {

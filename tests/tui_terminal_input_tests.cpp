@@ -1814,6 +1814,7 @@ void test_osc11_theme_precedence_and_reset()
   ava::tui::reset_detected_terminal_background_appearance();
 }
 
+// Protect startup key ordering and the bounded replay buffer.
 void test_startup_input_fifo_order_and_cap()
 {
   ava::tui::runtime_input::clear_startup_input_queue();
@@ -1890,6 +1891,7 @@ void test_poll_distinguishes_discarded_input()
   ava::tui::reset_detected_terminal_background_appearance();
 }
 
+// Protect the one-shot background-color reply handler and virtual-terminal probe behavior.
 void test_osc11_handler_arming_and_virtual_probe()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -2043,6 +2045,7 @@ void test_osc11_query_writer_and_environment_gate_seam()
   expect(read_tmpfile_bytes(output) == "\x1b]11;?\x1b\\", "Context owns and emits the exact ST-terminated OSC 11 query bytes");
 }
 
+// Protect paste text when a background-color reply arrives inside the startup paste stream.
 void test_osc11_reply_inside_startup_bracketed_paste(bool use_st)
 {
   ScopedEnvVar no_color_guard("NO_COLOR", "");
@@ -2089,6 +2092,7 @@ void test_osc11_reply_inside_startup_bracketed_paste(bool use_st)
   ava::tui::reset_detected_terminal_background_appearance();
 }
 
+// Protect escape sequences that the background probe does not own from being consumed as replies.
 void test_non_owned_escape_inside_startup_bracketed_paste_is_preserved()
 {
   ScopedEnvVar no_color_guard("NO_COLOR", "");
@@ -2132,6 +2136,7 @@ void test_non_owned_escape_inside_startup_bracketed_paste_is_preserved()
   ava::tui::reset_detected_terminal_background_appearance();
 }
 
+// Protect paste decoding when a background-color reply is malformed or no probe is armed.
 void test_disarmed_and_malformed_osc11_inside_startup_bracketed_paste_preserve_semantics()
 {
   ScopedEnvVar no_color_guard("NO_COLOR", "");
@@ -2406,6 +2411,7 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(int master_fd)
 
 }  // namespace
 
+// Run startup probe and input-preservation regressions in the terminal fixture.
 void run_tui_terminal_osc11_theme_tests()
 {
   test_osc11_background_parser();

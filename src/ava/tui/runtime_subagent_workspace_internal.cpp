@@ -1,3 +1,4 @@
+// Refreshes path-free subagent views and routes workspace input without owning backend job lifetimes.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "TuiEventLoop.h"
@@ -16,6 +17,7 @@
 namespace ava::tui {
 namespace {
 
+// TUI-thread pure comparison of rendered row facts; selector query/selection remain owned by SelectorHost.
 bool item_equal(SelectListItemView const& left, SelectListItemView const& right)
 {
   return left.non_searchable_suffix == right.non_searchable_suffix && left.value == right.value && left.label == right.label &&
@@ -23,18 +25,23 @@ bool item_equal(SelectListItemView const& left, SelectListItemView const& right)
          left.current == right.current && left.enabled == right.enabled && left.disabled_reason == right.disabled_reason;
 }
 
+// TUI-thread pure comparison of backend list facts; user filter/selection are preserved independently when
+// refreshing.
 bool selector_metadata_equal(SelectListView const& left, SelectListView const& right)
 {
   return left.title == right.title && left.subtitle == right.subtitle && left.placeholder == right.placeholder && left.empty_text == right.empty_text &&
          left.footer_hint == right.footer_hint && left.items.size() == right.items.size() && std::ranges::equal(left.items, right.items, item_equal);
 }
 
+// TUI-thread pure comparison of owned path-free inspector messages to avoid unnecessary frame invalidation.
 bool messages_equal(std::vector<ava::agent::SubagentLiveMessage> const& left, std::vector<ava::agent::SubagentLiveMessage> const& right)
 {
   return left.size() == right.size() &&
          std::ranges::equal(left, right, [](auto const& lhs, auto const& rhs) { return lhs.role == rhs.role && lhs.text == rhs.text; });
 }
 
+// TUI-thread value factory: provide a disabled fallback row that freezes underlying transcript layout until
+// list service recovers.
 SelectListView unavailable_selector()
 {
   SelectListView view;
@@ -123,6 +130,8 @@ void RuntimeSubagentWorkspaceController::publish()
     presentation_.publish_workspace(std::nullopt);
     return;
   }
+  // Inspector publication closes selector projection first and clamps its own scroll, keeping one visible
+  // workspace surface.
   workspace_.scroll_offset =
       std::min(workspace_.scroll_offset, subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height));
   selectors_.close();
@@ -140,6 +149,8 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   selector_ = unavailable_selector();
   refresh_unavailable_ = false;
   last_list_refresh_succeeded_ = true;
+  // Begin from a complete disabled placeholder so failure still produces a usable modal; only successful
+  // application reads replace its facts.
   auto listed = frontend_.list_subagents();
   if (listed)
   {
@@ -152,6 +163,7 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   }
   selector_.freeze_underlying_transcript_layout = true;
   selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
+  // Start discovery only after local mode/checkpoint state is coherent, then publish the complete selector.
   discovery_timer_.repeat(kPollInterval, now);
   publish();
   return true;
@@ -197,9 +209,12 @@ bool RuntimeSubagentWorkspaceController::refresh_selector()
   listed->freeze_underlying_transcript_layout = true;
   listed->query = selector_.query;
 
+  // Preserve selected job by opaque identity across row reorder; visible query/selection came from SelectorHost
+  // before this refresh.
   std::string selected_value;
   if (selector_.selected_item_index < selector_.items.size())
     selected_value = selector_.items[selector_.selected_item_index].value;
+  // In inspector mode the selected job, rather than a list row number, determines the refreshed checkpoint.
   if (mode_ == Mode::Workspace)
     selected_value = job_id_;
   if (!selected_value.empty())
@@ -268,6 +283,8 @@ bool RuntimeSubagentWorkspaceController::refresh_inspection()
   auto const& frame = **inspected;
   bool const prior_refresh_unavailable = refresh_unavailable_;
   refresh_unavailable_ = false;
+  // Remember whether the reader followed the old tail before replacing content; detached inspection must not
+  // jump on new output.
   auto const old_max = subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height);
   bool const followed_tail = workspace_.scroll_offset >= old_max;
   bool changed = prior_refresh_unavailable;
@@ -296,6 +313,8 @@ bool RuntimeSubagentWorkspaceController::refresh_inspection()
       changed = true;
     }
   }
+  // Commit generation only after applying frame facts, then follow the new tail only for readers who were
+  // already following it.
   if (frame.generation > 0)
     known_generation_ = frame.generation;
   if (changed && followed_tail)
@@ -382,6 +401,8 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
     return {};
   using Key = terminal::Key;
   RuntimeSubagentWorkspaceInputResult result{.handled = true};
+  // Chooser input stays with SelectorHost state; resolving or canceling performs a named mode transition before
+  // returning feedback.
   if (mode_ == Mode::Selector)
   {
     SelectListInputResult input;
@@ -419,6 +440,8 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
     return result;
   }
 
+  // Inspector actions use opaque job identity for backend requests; transcript scrolling below affects only
+  // this bounded presentation.
   auto const character_text = !event.text.empty() ? event.text : (event.character == '\0' ? std::string{} : std::string(1, event.character));
   if (event.key == Key::Escape || event.key == Key::CtrlC)
   {

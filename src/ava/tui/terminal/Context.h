@@ -329,9 +329,12 @@ class Context final
   // Re-enter ncurses program mode, repaint its retained virtual screen, and explicitly restore every AVA-owned protocol.
   void restore_terminal_after_handoff();
 
-  // TUI thread only. Read one native key with the current timeout. A missing
-  // value means no input was read; Key::Unknown means a native key was consumed.
-  // Callers must keep draining after Unknown before waiting on the descriptor.
+  // Registered TUI thread with an initialized Context: read canonical startup
+  // replay before native input using the current timeout. nullopt means native ERR
+  // (empty/timeout/read failure); Key::Unknown means an unsupported key was consumed.
+  // Keep draining after Unknown before waiting on the descriptor. On a returned key,
+  // value holds the native code/wide character for higher-level decoding; it is not
+  // meaningful on nullopt. The result borrows no Context state and dispatches no UI work.
   std::optional<Key> read_curses_key(wint_t& value);
 
   // Read the next character iff that is a plain wide character (not a KEY_CODE).

@@ -1,3 +1,5 @@
+// Maintains timer deadlines and dispatch generations, coalescing missed repeating
+// ticks without calling feature code or retaining registry iterators.
 #include "sys.h"
 #include "TuiTimerRegistration.h"
 
@@ -8,6 +10,9 @@
 namespace ava::tui {
 namespace {
 
+// Used by TUI-thread scheduling to avoid signed overflow for caller-supplied times.
+// Nonpositive delay means immediate eligibility; an unrepresentable future deadline
+// saturates at the clock limit. Pure calculation with no borrowed object lifetime.
 TuiTimerRegistration::Clock::time_point saturated_deadline(TuiTimerRegistration::Clock::time_point now, TuiTimerRegistration::Clock::duration delay)
 {
   using Clock = TuiTimerRegistration::Clock;
@@ -69,6 +74,8 @@ TuiTimerRegistration::Callback TuiTimerRegistration::prepare_dispatch(Clock::tim
   if (!due(now))
     return {};
 
+  // Copy before changing the schedule so allocation failure leaves the old state
+  // intact. The copy can survive removal of this record by the eventual callback.
   auto callback = callback_;
   ++generation_;
   if (interval_ > Clock::duration::zero() && now < Clock::time_point::max())
@@ -77,6 +84,8 @@ TuiTimerRegistration::Callback TuiTimerRegistration::prepare_dispatch(Clock::tim
     // overflowing when an explicit timestamp is far beyond the prior deadline.
     using UnsignedRep = std::make_unsigned_t<Clock::duration::rep>;
     auto const elapsed = static_cast<UnsignedRep>(now.time_since_epoch().count()) - static_cast<UnsignedRep>(deadline_->time_since_epoch().count());
+    // Keep the original interval phase while skipping all missed ticks. Scheduling
+    // from now + interval instead would accumulate drift whenever dispatch is late.
     auto const remainder = elapsed % static_cast<UnsignedRep>(interval_.count());
     auto const until_next = interval_ - Clock::duration(static_cast<Clock::duration::rep>(remainder));
     deadline_ = saturated_deadline(now, until_next);

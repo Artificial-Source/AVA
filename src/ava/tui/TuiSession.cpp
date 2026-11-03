@@ -1,3 +1,4 @@
+// Serializes feature work in the loop described by docs/engineering/tui-architecture.md.
 #include "sys.h"
 #include "ActiveRun.h"
 #include "Composer.h"
@@ -34,14 +35,18 @@ bool TuiSession::is_action(TuiAction action, InputEvent const& event) const
 
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
+// Fairness budget includes discarded replies, so buffered keys cannot starve updates.
 constexpr std::size_t kInputBatchLimit = 32;
 // Signals only set atomic bits, and the OS wait retries EINTR. This retained
 // timer supplies a nominal 100 ms observation cadence (ten idle wakes/second).
 // Decode, callbacks and synchronous work can delay the next control turn.
+// A plain wake gives control another opportunity; synchronous work can delay it.
 constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
 } // namespace
 using Key = terminal::Key;
 
+// TUI thread: construct owners in header declaration order, then attach their
+// registrations. No callback may run until every borrowed target exists.
 TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line)
     : frontend_(frontend),
       terminal_context_(terminal_context),
@@ -87,6 +92,8 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
            std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Navigation), std::bind_front(&TuiSession::handle_tail_input, this)}),
       control_timer_(loop_.member_timer(*this, &TuiSession::wake_for_control))
 {
+  // Owners now exist at stable addresses. Attach timers only after that point;
+  // construction must never dispatch a callback into a partially built session.
   renderer_.attach_loop(loop_);
   plugin_ui_.attach_loop(loop_);
   action_controller_.attach_loop(loop_);
@@ -96,6 +103,8 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
   control_timer_.repeat(kControlObservationInterval);
 }
 
+// TUI thread: keep all members alive during explicit shutdown; reverse member
+// destruction then removes registrations before their loop and target owners.
 TuiSession::~TuiSession()
 {
   // Each collaborator is still alive here; shutdown also covers early run returns.
@@ -156,6 +165,8 @@ bool TuiSession::synchronize_committed_session()
   return session_transitions_.apply(std::move(committed_session_id));
 }
 
+// Both control observation sites use this policy, so a signal arriving during
+// decoding has the same draft/exit semantics as one observed before timers.
 TuiInputOutcome TuiSession::handle_signals()
 {
   using Signals = core::Signals;
@@ -320,11 +331,15 @@ TuiInputOutcome TuiSession::handle_search_input(runtime_input::RuntimeInput cons
   return TuiInputOutcome::Pass;
 }
 
+// Selector owners decide row behavior. Composition performs only returned
+// transitions whose collaborators belong to different owners.
 TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput const& input)
 {
   if (!selectors_.view())
     return TuiInputOutcome::Pass;
   auto result = selectors_.dispatch(input, selector_input_, settings_, session_selector_);
+  // Dispatch has already resolved selector-local state. Apply its owned result
+  // before requesting a frame, so no intermediate selector state is painted.
   using Request = SelectorDispatchRequest;
   switch (result.request)
   {
@@ -378,6 +393,8 @@ TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput co
   return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
 }
 
+// Preserve binding collisions: copy and stash precede ordinary editor input;
+// terminal handoffs run only after those earlier owners decline the key.
 TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
@@ -397,6 +414,8 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
     }
     return TuiInputOutcome::Handled;
   }
+  // Editing wins over a colliding terminal-handoff binding. A consumed key
+  // cannot accidentally open an external editor or suspend the terminal.
   else if (auto const outcome = handle_composer_input(ComposerInputPhase::Primary, input); outcome != TuiInputOutcome::Pass)
   {
     return outcome;
@@ -430,6 +449,8 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
   return render_input();
 }
 
+// This stage follows editor clearing. For example Ctrl+C clears a nonempty
+// draft before it can request exit; later transcript keys never override it.
 TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
@@ -517,6 +538,8 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
       return TuiInputOutcome::Failure;
     }
   }
+  // Session creation uses the same command/submission boundary as typed input,
+  // preserving backend validation and the committed-session reset order.
   else if (is_action(TuiAction::SessionNew, event) || is_action(TuiAction::SessionFork, event))
   {
     auto const action = handle_submit(is_action(TuiAction::SessionNew, event) ? "/new" : "/fork");
@@ -535,6 +558,8 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
   return render_input();
 }
 
+// Transcript navigation has priority over composer cursor/history bindings.
+// Each branch changes its feature, then publishes editor fields for the next paint.
 TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
@@ -574,11 +599,15 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
   {
     navigation_.scroll_down(kTranscriptWheelScrollRows);
   }
+  // Pointer hit testing is last: a configured transcript binding has already
+  // had its chance to consume the event against the current viewport.
   else if (!navigation_.handle_pointer_input(event, terminal_context_))
     return TuiInputOutcome::Pass;
   return render_input();
 }
 
+// Keep the prepared completion model consistent with this phase's editor state.
+// Feedback is published before any cross-owner request and its invalidation.
 TuiInputOutcome TuiSession::handle_composer_input(ComposerInputPhase phase, runtime_input::RuntimeInput const& input)
 {
   presentation_state_.publish_completion(draft_state_);
@@ -590,6 +619,8 @@ TuiInputOutcome TuiSession::handle_composer_input(ComposerInputPhase phase, runt
   presentation_state_.publish_composer_feedback(result);
   if (result.beep)
     terminal_context_.beep();
+  // Composer owns editing but not these collaborators. Execute its value
+  // request here after publishing feedback, and stop immediately on exit.
   switch (result.request)
   {
     case ComposerInputRequest::None:
@@ -624,6 +655,8 @@ TuiInputOutcome TuiSession::handle_tail_input(runtime_input::RuntimeInput const&
   if (is_action(TuiAction::DetailsToggle, event))
   {
     draft_state_.cancel_escape();
+    // Freeze geometry before changing card detail, so a detached anchor keeps
+    // referring to the view the user was reading.
     renderer_.synchronize_detached_transcript_layout();
     presentation_state_.publish_tool_presentation(presentation_state_.screen().tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich
                                                                                                                                : ToolPresentation::Expanded);
@@ -663,6 +696,8 @@ void TuiSession::wake_for_control(TuiEventLoop::Clock::time_point)
   // next control stage, never to a due-timer callback.
 }
 
+// Control runs outside timer dispatch because it can release prompt waiters
+// and request cancellation. Terminal closure starts a drain, not another wait.
 void TuiSession::service_control()
 {
   apply_input_outcome(handle_signals());
@@ -682,6 +717,8 @@ void TuiSession::service_control()
     static_cast<void>(branch_summary_.cancel(BranchSummaryCancelMode::ExitAfterSettlement));
 }
 
+// Bounded live consumption preserves input fairness. A published completion
+// freezes its producers and settles the final finite backlog within complete().
 bool TuiSession::service_application_updates()
 {
   if (!active_run_controller_.active())
@@ -703,6 +740,8 @@ bool TuiSession::service_application_updates()
   return active_run_controller_.has_pending_updates();
 }
 
+// Resolve feature outcomes before input sees their new modal/projection state.
+// Stop immediately on failure so later features cannot hide the exit cause.
 void TuiSession::service_presentations()
 {
   if (loop_.stopped() || terminal_closing_)
@@ -722,6 +761,8 @@ void TuiSession::service_presentations()
     apply_input_outcome(TuiInputOutcome::Failure);
 }
 
+// Count decoded and discarded results alike. A full batch requests another
+// turn, which services providers and timers before polling buffered input again.
 bool TuiSession::service_input_batch()
 {
   for (std::size_t count = 0; count < kInputBatchLimit && !loop_.stopped(); ++count)
@@ -758,11 +799,15 @@ bool TuiSession::service_input_batch()
   return !loop_.stopped();
 }
 
+// The only live composition loop. Keep the six phases together: timer or
+// feature helpers must not secretly perform a second turn after painting.
 int TuiSession::run(std::function<bool()> const& before_shutdown)
 {
   using Signals = core::Signals;
   if (Signals::received(terminal_signals))
     return 130;
+  // Establish one initial frame before waiting. Later ordinary changes share
+  // the turn-end paint boundary; terminal handoffs remain synchronous.
   if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed || !renderer_.paint_for_handoff())
     return 1;
 
@@ -801,6 +846,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     loop_.wait(runnable ? TuiWaitMode::ReadyOnly : TuiWaitMode::Block);
   }
 
+  // Release worker waits before joining, then retire producer transports while
+  // the frontend and terminal still exist. Preserve exit causes across cleanup.
   control_timer_.cancel();
   auto const stopped = active_run_controller_.shutdown();
   terminal_write_failed_ = terminal_write_failed_ || stopped.terminal_write_failed();

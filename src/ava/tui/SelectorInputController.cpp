@@ -1,3 +1,5 @@
+// Classifies selector input and delegates catalog changes to frontend authority.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SelectorInputController.h"
@@ -27,6 +29,8 @@ SelectListInputResult SelectorInputController::classify(runtime_input::RuntimeIn
   ASSERT(selectors_.view());
   using Key = terminal::Key;
   auto const& view = *selectors_.view();
+  // Hit-testing uses the current layout before key classification. Settings clicks must
+  // remain preview-only, and disabled rows can be highlighted without invoking authority.
   if (input.event.key == Key::MouseLeftPress || input.event.key == Key::MouseLeftClick)
   {
     if (auto const clicked = select_list_selection_for_screen_position(presentation_state_.screen(), input.event.mouse_row, input.event.mouse_column))
@@ -39,6 +43,8 @@ SelectListInputResult SelectorInputController::classify(runtime_input::RuntimeIn
       return SelectListInputResult{.selected_item_index = *clicked, .query = view.query, .action = action};
     }
   }
+  // Scoped editing shortcuts precede generic list bindings because they mutate the
+  // current selection set rather than accepting and closing the list.
   if (selectors_.kind() == ActiveSelectList::ScopedModels)
   {
     constexpr std::array bindings{std::pair{TuiAction::ModelsSave, SelectListInputAction::ModelsSave},
@@ -72,6 +78,8 @@ bool SelectorInputController::handle_scoped_models(SelectListInputResult const& 
 {
   if (selectors_.kind() != ActiveSelectList::ScopedModels || !selectors_.view())
     return false;
+  // Scoped edits preserve the open list. Callbacks finish before replacement, so all
+  // borrowed row pointers are consumed within their branch and never retained.
   switch (input.action)
   {
     case SelectListInputAction::Resolve: {
@@ -141,6 +149,8 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
   if (input.action != SelectListInputAction::Resolve && input.action != SelectListInputAction::Cancel)
     return SelectorInputRequest::Pass;
 
+  // Capture identity and kind before close invalidates row borrows. Authority callbacks
+  // then operate on owned values, and cancellation cannot accidentally invoke them.
   auto const* item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = input.action == SelectListInputAction::Resolve && item ? item->value : std::string{};
   auto const resolved_list = selectors_.kind();
@@ -152,6 +162,8 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     presentation_state_.publish_status(resolved_list == ActiveSelectList::Reasoning ? "thinking mode unchanged" : "view canceled");
     return SelectorInputRequest::Handled;
   }
+  // Only frontend callbacks change backend state. Successful model/reasoning actions
+  // refresh committed facts before feedback; session-changing results return to Session.
   switch (resolved_list)
   {
     case ActiveSelectList::Hotkeys:

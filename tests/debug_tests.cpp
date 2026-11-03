@@ -43,6 +43,7 @@ enum class Color
   Green,
   Blue
 };
+// Give the debug formatter an ADL customization whose uppercase output distinguishes it from fallback formatting.
 std::string to_string(Color color)
 {
   switch (color)
@@ -108,6 +109,7 @@ std::string render_debug_values()
   return ss.str();
 }
 
+// Protect raw string-literal formatting while owned strings remain quoted.
 void test_string_literal_renders_raw()
 {
   std::stringstream ss;
@@ -166,6 +168,7 @@ void test_maxlen_under_20_removed_prints_full()
   expect(ss.str() == "\"" + std::string(101, 'a') + "\"", "string that would remove <20 chars prints in full");
 }
 
+// Protect the exact truncation threshold so boundary-length values cannot silently bypass the output limit.
 void test_maxlen_exactly_20_removed_truncates()
 {
   // A 102-char string under maxlen(100) removes exactly 20 chars, which meets the threshold, so the middle is cut.
@@ -196,6 +199,7 @@ void test_maxlen_three_digit_removal()
   expect(ss.str() == expected, "very long string truncates with a 3-digit removed count");
 }
 
+// Protect expression-local debug limits from leaking into the next log operation.
 void test_maxlen_is_scoped_to_expression()
 {
   // maxlen() derives from utils::iomanip::Unsticky: the limit is restored when
@@ -320,6 +324,7 @@ void test_optional_intrusive_ptr_renders()
   expect(ss_empty.str() == "$no_value$", "disengaged optional<intrusive_ptr> renders the marker");
 }
 
+// Protect readable boolean elements despite vector<bool> proxy references.
 void test_vector_bool_renders_boolalpha_list()
 {
   std::stringstream ss;
@@ -330,6 +335,7 @@ void test_vector_bool_renders_boolalpha_list()
   expect(ss.str() == "{true, false}", "vector of bools renders elements with boolalpha");
 }
 
+// Protect element quoting when the debug printer formats a string collection.
 void test_vector_string_renders_quoted_list()
 {
   std::stringstream ss;

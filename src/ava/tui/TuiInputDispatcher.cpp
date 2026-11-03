@@ -1,3 +1,5 @@
+// Applies modal priority to decoded input and adapts legacy optional paint results
+// to the session's explicit handled/exit/failure outcomes.
 #include "sys.h"
 #include "TuiInputDispatcher.h"
 #include "runtime_input_internal.h"

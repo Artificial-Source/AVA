@@ -130,6 +130,7 @@ void test_prompt_stash_store_semantics()
          "prompt stash restores text, cursor, and collapsed-paste ownership but intentionally excludes undo, redo, kill-ring, and selection state");
 }
 
+// Protect stash/edit/restore transitions through the real editor and selector owners.
 void test_prompt_stash_runtime_controller()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());

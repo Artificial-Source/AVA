@@ -1653,6 +1653,7 @@ void test_tui_active_nonblocking_command_lane()
          "classification");
 }
 
+// Protect selector dismissal and repaint ordering before an authority-bearing callback runs.
 void test_tui_selector_authority_dispatch_paints_before_callback()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -1734,6 +1735,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
          "failed selector authority dispatch keeps modal cleared, reports authority failure, and retains draft and cursor");
 }
 
+// Protect FIFO ordering and captured request context across mixed runtime-event types.
 void test_tui_mixed_runtime_event_queue_preserves_order_and_context()
 {
   ava::tui::RuntimeEventQueue queue;
@@ -1787,6 +1789,7 @@ void test_tui_mixed_runtime_event_queue_preserves_order_and_context()
          "mixed TUI event queue drains typed runtime records and controls in arrival order with exact un-serialized context");
 }
 
+// Protect private launch metadata and exact event reduction without exposing backend identity.
 void test_tui_private_subagent_launch_queue_and_exact_reducer()
 {
   auto task_event = [](bool result = false) {
@@ -2151,6 +2154,7 @@ void test_tui_retry_activity_settles_and_restores_contextual_hint()
                       "tui event-state-to-render restores retry chrome after later reactivation following A/B/tick0 settlement");
 }
 
+// Protect todo projection through both streamed events and committed snapshot hydration.
 void test_tui_todowrite_event_state_and_snapshot_hydration()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -2258,6 +2262,7 @@ void test_frontend_data_changed_routes_each_canonical()
   }
 }
 
+// Protect startup hydration from overwriting local presentation and retained input state.
 void test_runtime_initialization_preserves_local_and_retained_inputs()
 {
   ava::tui::TuiRuntimeOptions options;

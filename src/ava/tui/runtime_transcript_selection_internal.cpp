@@ -1,3 +1,4 @@
+// Maps pointer input and copied text through the layout authority that actually supplies transcript rows.
 #include "sys.h"
 #include "runtime_state_internal.h"
 #include "ava/tui/composer_internal.h"
@@ -17,20 +18,26 @@ namespace {
 
 constexpr std::size_t kSelectionCopySoftCeiling = runtime_transcript::kMaxTerminalClipboardTextBytes;
 
+// Pure byte classification used to exclude terminal controls from copied rows.
 bool is_c0_or_del(unsigned char byte)
 {
   return byte < 0x20U || byte == 0x7FU;
 }
 
+// Pure Unicode control classification after decoding; copied text must not retain C1 terminal controls.
 bool is_c1_control(char32_t codepoint)
 {
   return codepoint >= 0x80 && codepoint <= 0x9F;
 }
 
+// Pure extraction helper: retain layout separators while stripping terminal sequences/invalid clusters; caller
+// receives owned text.
 std::string strip_controls_keep_newline_tab(std::string_view text)
 {
   std::string out;
   out.reserve(text.size());
+  // Separate recognized terminal escapes from printable clusters; newline/tab remain extraction separators
+  // while other controls and invalid UTF-8 are dropped.
   for (std::size_t index = 0; index < text.size();)
   {
     auto const before = index;
@@ -67,6 +74,7 @@ std::string strip_controls_keep_newline_tab(std::string_view text)
   return out;
 }
 
+// Pure stable-layout helper: count only rows owned by the item, excluding the next item's leading spacer.
 std::size_t item_line_count(detail::TranscriptLayout const& layout, std::size_t position)
 {
   if (position >= layout.message_starts.size() || position >= layout.block_boundaries.size())
@@ -78,6 +86,7 @@ std::size_t item_line_count(detail::TranscriptLayout const& layout, std::size_t 
   return start <= end && end <= layout.lines.size() ? end - start : 0;
 }
 
+// Pure stable-layout lookup: resolve retained item identity to layout position; absence rejects evicted items.
 std::optional<std::size_t> position_for_item(detail::TranscriptLayout const& layout, std::size_t item_index)
 {
   auto const it = std::ranges::find(layout.message_item_indices, item_index);
@@ -86,6 +95,8 @@ std::optional<std::size_t> position_for_item(detail::TranscriptLayout const& lay
   return static_cast<std::size_t>(it - layout.message_item_indices.begin());
 }
 
+// Pure helper: preserve item-relative location across reflow by clamping row/cluster boundaries; absence
+// invalidates selection.
 std::optional<TranscriptSelectionEndpoint> remap_endpoint(detail::TranscriptLayout const& layout, TranscriptSelectionEndpoint endpoint)
 {
   auto const position = position_for_item(layout, endpoint.item_index);
@@ -104,6 +115,7 @@ std::optional<TranscriptSelectionEndpoint> remap_endpoint(detail::TranscriptLayo
   return endpoint;
 }
 
+// Pure helper: copy complete display clusters intersecting the selected column span, never partial UTF-8 bytes.
 std::string plain_slice(std::string_view plain_row, std::size_t column_start, std::size_t column_end)
 {
   if (column_start >= column_end)
@@ -122,16 +134,20 @@ std::string plain_slice(std::string_view plain_row, std::size_t column_start, st
   return out;
 }
 
+// Pure value comparison for detecting pointer movement without consulting mutable screen state.
 bool same_endpoint(TranscriptSelectionEndpoint const& left, TranscriptSelectionEndpoint const& right)
 {
   return left.item_index == right.item_index && left.line_offset == right.line_offset && left.display_column == right.display_column;
 }
 
+// Pure comparison of both word bounds; multi-click progression requires the same remapped unit.
 bool same_unit(TranscriptSelectionUnit const& left, TranscriptSelectionUnit const& right)
 {
   return same_endpoint(left.start, right.start) && same_endpoint(left.end, right.end);
 }
 
+// Pure bounded builder on caller-owned output: reject overflow and discard partial content rather than allowing
+// clipboard submission of a truncated selection.
 bool append_bounded(std::string& out, std::string_view chunk, std::size_t max_bytes, bool& oversize)
 {
   if (oversize)
@@ -143,6 +159,8 @@ bool append_bounded(std::string& out, std::string_view chunk, std::size_t max_by
     oversize = true;
     return false;
   }
+  // Check before appending a whole chunk so overflow never leaves a payload that a caller could mistake for a
+  // complete selection.
   auto const remaining = max_bytes - out.size();
   if (chunk.size() > remaining)
   {
@@ -171,6 +189,8 @@ std::size_t snap_display_column(std::string_view plain_row, std::size_t display_
 {
   std::size_t column = 0;
   std::size_t last_boundary = 0;
+  // Walk the same display clusters as rendering; an interior wide-cell hit chooses a whole-cluster edge rather
+  // than splitting the glyph.
   for (std::size_t index = 0; index < plain_row.size();)
   {
     auto const cell = detail::terminal_text_cell(plain_row, index);
@@ -254,12 +274,19 @@ std::optional<TranscriptSelectionUnit> transcript_word_selection_unit(detail::Tr
   if (plain.empty())
     return std::nullopt;
 
+  // Function-local owned display-cluster description used to expand a hit to one word segment. Access is
+  // confined to this synchronous helper; no source/layout references survive.
   struct SegmentCell
   {
+    // Inclusive plain display boundary used to expand selection to the first cluster in a segment.
     std::size_t column_start = 0;
+    // Exclusive plain display boundary; wide or combined clusters remain indivisible.
     std::size_t column_end = 0;
+    // Word/space/punctuation class groups adjacent clusters into the selected unit.
     detail::WordSegmentClass segment_class = detail::WordSegmentClass::Space;
   };
+  // Materialize cluster boundaries once so word expansion operates on display units while UTF-8 bytes remain
+  // intact.
   std::vector<SegmentCell> cells;
   std::size_t column = 0;
   for (std::size_t index = 0; index < plain.size();)
@@ -283,6 +310,8 @@ std::optional<TranscriptSelectionUnit> transcript_word_selection_unit(detail::Tr
       break;
     }
   }
+  // Expand across adjacent clusters of the same word-segment class, then translate those bounds back into
+  // content-relative endpoints.
   auto first = selected;
   while (first > 0 && cells[first - 1].segment_class == cells[selected].segment_class)
     --first;
@@ -332,6 +361,7 @@ TranscriptSelectionExtractResult extract_transcript_selection_text(detail::Trans
                                                                    std::size_t max_bytes)
 {
   TranscriptSelectionExtractResult result;
+  // Validate and order both endpoints against one immutable authority before extracting any bytes.
   auto const ordered = ordered_endpoints(range, layout);
   auto const start_abs = absolute_line_for_endpoint(layout, ordered.first);
   auto const end_abs = absolute_line_for_endpoint(layout, ordered.second);
@@ -405,6 +435,8 @@ std::string apply_transcript_selection_highlight(std::string_view styled_line, s
     }
   };
 
+  // Overlay reverse video around selected display clusters while allowing each original style sequence to
+  // reestablish its own rendering state.
   for (std::size_t index = 0; index < styled_line.size();)
   {
     auto before = index;
@@ -445,6 +477,8 @@ void apply_transcript_selection_overlay(std::vector<std::string>& visible_lines,
   if (!start_abs || !end_abs || *start_abs > *end_abs)
     return;
 
+  // Only touch rows intersecting the validated range; visible copies receive styling while authoritative text
+  // remains unchanged for hit-testing/copy.
   for (std::size_t row = 0; row < visible_lines.size(); ++row)
   {
     auto const absolute = visible_start + row;
@@ -561,6 +595,8 @@ std::optional<RuntimeTranscriptSelectionState::ItemSourceAuthority> RuntimeTrans
                              .stream_id = item.stream_id,
                              .append_only_stream = item.append_only_stream,
                              .tool = item.tool.has_value()};
+  // Tool output may grow independently of its source identity; retain stable tool identifiers and fallback
+  // arguments separately from message body comparison.
   if (item.tool)
   {
     source.tool_name = item.tool->name;
@@ -616,6 +652,8 @@ void RuntimeTranscriptSelectionState::rebind_authority(detail::TranscriptLayout 
   authority_thinking_visible_ = thinking_visible;
   authority_compact_spacing_ = compact_spacing;
   authority_valid_ = true;
+  // Validate source identity before remapping coordinates; matching positions alone cannot prove the selected
+  // message survived replacement.
   if (snapshot && !refresh_source_authorities_or_clear(*snapshot))
     return;
   remap_or_clear(layout);
@@ -636,6 +674,8 @@ void RuntimeTranscriptSelectionState::rebind_authority(detail::TranscriptLayout 
     cancel_pointer_interaction();
     return;
   }
+  // An uncommitted header press also retains a coordinate. Remap it or retire its action so release cannot
+  // toggle a different row.
   if (armed_press_endpoint_)
   {
     auto remapped = remap_endpoint(layout, *armed_press_endpoint_);
@@ -677,6 +717,8 @@ void RuntimeTranscriptSelectionState::apply_item_index_shift(std::ptrdiff_t item
       cancel_pointer_interaction();
     return;
   }
+  // Use the same checked item shift for click history and granular anchors before the committed range; eviction
+  // must retire every hidden reference too.
   auto shift_unit = [&](TranscriptSelectionUnit& unit) {
     auto start = shift_transcript_selection_item_index(unit.start.item_index, item_index_shift);
     auto end = shift_transcript_selection_item_index(unit.end.item_index, item_index_shift);
@@ -698,6 +740,8 @@ void RuntimeTranscriptSelectionState::apply_item_index_shift(std::ptrdiff_t item
   if (granular_anchor_ && !shift_unit(*granular_anchor_))
   {
     cancel_pointer_interaction();
+    // After hidden interaction state is realigned, update committed endpoints together; losing either item
+    // clears the whole range.
     if (!range_)
       return;
   }
@@ -813,6 +857,8 @@ std::optional<TranscriptSelectionHit> RuntimeTranscriptSelectionState::hit_test(
                                                                                 std::size_t row, std::size_t column,
                                                                                 std::ptrdiff_t frozen_to_live_item_index_shift) const
 {
+  // Reject unavailable body geometry before translating terminal coordinates; drawn cache supplies both row
+  // ownership and display-cluster boundaries.
   auto const viewport = viewport_for(snapshot, cache);
   if (!viewport || row == 0 || column == 0)
     return std::nullopt;
@@ -989,6 +1035,8 @@ bool RuntimeTranscriptSelectionState::toggle_header_at_frozen_item(ComposerSnaps
   auto const live_item = shift_transcript_selection_item_index(frozen_item_index, frozen_to_live_item_index_shift);
   if (!live_item)
     return false;
+  // Map to live source only for action validation; selection geometry remains in the frozen authority the user
+  // clicked.
   auto const current = source_authority(snapshot, *live_item);
   if (!current)
     return false;
@@ -1017,6 +1065,8 @@ bool RuntimeTranscriptSelectionState::finish_header_click(ComposerSnapshot const
   auto const tool = armed_tool_header_;
   auto const thinking = armed_thinking_header_;
   auto const expected_source = armed_source_authority_;
+  // Retire the armed action before invoking a toggle: that synchronous callback may prepare layout and reenter
+  // selection authority handling.
   armed_header_item_.reset();
   armed_press_endpoint_.reset();
   armed_source_authority_.reset();
@@ -1024,6 +1074,8 @@ bool RuntimeTranscriptSelectionState::finish_header_click(ComposerSnapshot const
   armed_thinking_header_ = false;
   drag_ = DragKind::None;
 
+  // Recheck source after mapping the accumulated frozen-to-live shift; an evicted/replaced item must not
+  // inherit the old header action.
   auto const live_item = shift_transcript_selection_item_index(frozen_item, frozen_to_live_item_index_shift);
   if (!live_item)
     return false;
@@ -1045,6 +1097,8 @@ bool RuntimeTranscriptSelectionState::autoscroll_for_row(RuntimePresentationStat
   // Transcript hit rows start at the first frame row; a drag beyond the painted body
   // clamps to the matching scroll edge.
   auto const transcript_row = screen_row - 1;
+  // Compute a bounded one-row change against drawn viewport geometry, then publish it before the caller re-hit-
+  // tests the pointer.
   bool changed = false;
   if (transcript_row == 0 && transcript_scroll_offset < viewport.max_scroll_offset)
   {
@@ -1104,6 +1158,8 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
     cancel_pointer_interaction();
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
+  // Revalidate visible body geometry each tick; retained pointer coordinates do not authorize scrolling after a
+  // modal or layout change.
   auto viewport = viewport_for(snapshot, layout_cache);
   if (!viewport)
   {
@@ -1126,6 +1182,8 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
       cancel_pointer_interaction();
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
+    // After moving the viewport, hit-test a clamped edge coordinate in the same authority and extend the
+    // correct character/word/line unit.
     auto const edge_row = edge_mouse_row_ <= 1 ? std::size_t{1} : viewport->transcript_height;
     auto const edge_column = std::clamp(edge_mouse_column_, viewport->canvas_left + 1, viewport->canvas_left + viewport->content_width);
     hit = hit_test(snapshot, layout_cache, edge_row, edge_column, frozen_to_live_item_index_shift);
@@ -1180,6 +1238,8 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
   auto const hit = hit_test(snapshot, layout_cache, event.mouse_row, event.mouse_column, frozen_to_live_item_index_shift);
   auto const word = hit ? transcript_word_selection_unit(layout_cache.layout, hit->endpoint) : std::nullopt;
 
+  // Press chooses body selection versus a deferred header action; completed click history controls word/line
+  // granularity without toggling on press.
   if (key == Key::MouseLeftPress)
   {
     edge_autoscroll_due_.reset();
@@ -1233,6 +1293,8 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
 
+  // Motion retires multi-click history and may scroll before re-hit-testing; a header arm converts using its
+  // original press endpoint.
   if (key == Key::MouseLeftDrag)
   {
     if (drag_ == DragKind::None && !hit)
@@ -1292,6 +1354,8 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
 
+  // Release first removes edge cadence, then commits either a validated header action or a finished range/click
+  // chain.
   if (key == Key::MouseLeftRelease)
   {
     edge_autoscroll_due_.reset();
@@ -1432,6 +1496,8 @@ bool RuntimeTranscriptSelectionState::copy_selection(RuntimePresentationState& p
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
+  // Copy only from compatible drawn rows and enforce the clipboard byte bound before touching terminal
+  // clipboard transport.
   auto extracted = extract_transcript_selection_text(layout_cache.layout, *range_, kSelectionCopySoftCeiling);
   if (extracted.oversize)
   {

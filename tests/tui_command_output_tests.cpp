@@ -279,6 +279,7 @@ void test_unified_tool_index_chronology()
          "hydrated provider transcript tools seed the bounded index in transcript order");
 }
 
+// Protect command-output isolation and pending-tool reconciliation without conversation authority.
 void test_unauthorized_command_event_tool_merge()
 {
   auto completed_tool = [](std::optional<std::string> request_id, std::string call_id, std::string name, std::string result, std::string status) {

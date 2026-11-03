@@ -158,11 +158,16 @@ void test_projection_rendering_is_nonrecursive_and_shared_by_geometry()
          "missing, stale, pending, failed, or evicted projection lookup preserves ordinary fenced-code rendering byte-for-byte");
 }
 
+// Test-thread fake backend storage; copied bridge callbacks share ownership until they retire.
 struct FakeBridgeState
 {
+  // Test-thread admission history, retained for request identity assertions.
   std::vector<ava::tui::TuiMermaidRenderRequest> requests;
+  // Test-thread result queue transferred by the fake drain callback.
   std::vector<ava::tui::TuiMermaidRenderCompletion> completions;
+  // Test-thread cancellation identities recorded without running a backend worker.
   std::vector<std::pair<std::uint64_t, std::uint64_t>> cancellations;
+  // Test thread sets admission pressure before asking the controller to enqueue.
   bool queue_full = false;
 };
 
@@ -192,6 +197,7 @@ ava::tui::TuiMermaidRenderBridge fake_bridge(std::shared_ptr<FakeBridgeState> st
   };
 }
 
+// Protect diagram identity reconciliation so stale results never replace current content.
 void test_runtime_projection_reconciliation_and_stale_fail_closed()
 {
   auto state = std::make_shared<FakeBridgeState>();
@@ -247,6 +253,7 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   controller.shutdown();
 }
 
+// Protect bounded diagram projection and placement against a detached transcript anchor.
 void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
 {
   auto state = std::make_shared<FakeBridgeState>();
@@ -323,6 +330,7 @@ struct B5BridgeState
   bool drain_busy = false;
   // Attempt counts detect bridge work in callbacks and premature retries.
   unsigned enqueues = 0;
+  // Test-thread drain attempts distinguish notified work from periodic polling.
   unsigned drains = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -516,6 +524,7 @@ void test_attached_mermaid_late_notification_lifetime()
 
 }  // namespace
 
+// Run diagram projection and notification/backoff regressions through the TUI owner.
 void run_tui_mermaid_tests()
 {
   test_attached_mermaid_completion_without_transcript_change();

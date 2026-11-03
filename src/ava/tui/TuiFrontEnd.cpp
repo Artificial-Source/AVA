@@ -1,3 +1,4 @@
+// Enters the terminal session and retires application work on every exit path.
 #include "sys.h"
 #include "TuiFrontEnd.h"
 #include "TuiSession.h"
@@ -21,8 +22,11 @@ namespace ava::tui {
 
 namespace {
 
+// Startup probe budget; per-read terminal decoding can overrun this outer deadline.
 constexpr auto kTerminalBackgroundProbeDeadline = std::chrono::milliseconds(50);
 
+// TUI startup only: borrow an environment value through the immediate probe
+// decision; no caller may retain it across environment mutation.
 std::optional<std::string_view> optional_environment_view(char const* name)
 {
   auto const* value = std::getenv(name);
@@ -31,6 +35,8 @@ std::optional<std::string_view> optional_environment_view(char const* name)
   return std::string_view(value);
 }
 
+// TUI startup before first paint: probe only eligible terminals and replay
+// unrelated input afterward. Late replies must not change an already shown theme.
 void maybe_probe_terminal_background_appearance(terminal::Context& terminal_context)
 {
   if (!tui_theme_needs_terminal_background_probe())
@@ -47,16 +53,26 @@ void maybe_probe_terminal_background_appearance(terminal::Context& terminal_cont
   disarm_terminal_background_response_handler();
 }
 
+// Stack-owned by TuiFrontEnd::run on the TUI thread. Both normal session exit
+// and early unwinding use this guard, but application shutdown runs at most once.
+// The frontend outlives the guard and all work joined by its hook.
 class RuntimeBeforeShutdownGuard
 {
  public:
+  // TUI thread: borrow the frontend before any startup operation can fail.
   explicit RuntimeBeforeShutdownGuard(TuiFrontEnd& frontend) : frontend_(frontend) { }
+  // One guard owns the single shutdown attempt for this run.
   RuntimeBeforeShutdownGuard(RuntimeBeforeShutdownGuard const&) = delete;
+  // Reassignment could lose the pending cleanup obligation.
   RuntimeBeforeShutdownGuard& operator=(RuntimeBeforeShutdownGuard const&) = delete;
+  // TUI thread: cover every early exit; invoke suppresses repeated attempts.
   ~RuntimeBeforeShutdownGuard() { static_cast<void>(invoke()); }
 
+  // TUI thread: mark attempted before entering application code so exceptions
+  // or reentry cannot trigger a second shutdown. False reports a thrown hook.
   [[nodiscard]] bool invoke() noexcept
   {
+    // Set the latch before calling out: even a throwing hook has been attempted.
     if (invoked_)
       return true;
     invoked_ = true;
@@ -75,31 +91,38 @@ class RuntimeBeforeShutdownGuard
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  TuiFrontEnd& frontend_;
-  bool invoked_ = false;
+  TuiFrontEnd& frontend_; // Borrowed application boundary; the run scope keeps it alive.
+  bool invoked_ = false; // TUI-thread attempt latch, set before calling potentially throwing application code.
 };
 
+// Stack-owned TUI cleanup for terminal image overlays. The initialized Context
+// outlives this guard; session destruction precedes graphics cleanup.
 class ComposerTerminalGraphicsGuard
 {
  private:
-  terminal::Context& terminal_context_;
+  terminal::Context& terminal_context_; // TUI-thread borrowed terminal used only during final overlay cleanup.
 
  public:
+  // TUI thread: acquire cleanup responsibility after Context initialization.
   ComposerTerminalGraphicsGuard(terminal::Context& terminal_context) : terminal_context_(terminal_context) { }
+  // Exactly one guard clears the overlays for this session scope.
   ComposerTerminalGraphicsGuard(ComposerTerminalGraphicsGuard const&) = delete;
+  // Preserve the original terminal and cleanup responsibility until scope exit.
   ComposerTerminalGraphicsGuard& operator=(ComposerTerminalGraphicsGuard const&) = delete;
+  // TUI thread after session retirement: erase overlays while Context still lives.
   ~ComposerTerminalGraphicsGuard() { detail::clear_composer_terminal_graphics(terminal_context_); }
 
   // This is an anonymous namespace - we can't generate print_members.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Session-scoped OSC 11 detection and startup-input FIFO ownership. Reset before
+// Stack-owned TUI-thread OSC 11 detection and startup-input FIFO cleanup. Reset before
 // each interactive TUI session and again on every exit so sequential sessions and
 // tests never inherit a prior probe result or queued startup events.
 class TerminalBackgroundDetectionGuard
 {
  public:
+  // TUI thread: discard prior-session probe state before accepting startup replies.
   TerminalBackgroundDetectionGuard()
   {
     disarm_terminal_background_response_handler();
@@ -107,9 +130,12 @@ class TerminalBackgroundDetectionGuard
     runtime_input::clear_startup_input_queue();
   }
 
+  // Probe admission and startup input have one scope owner, not copyable snapshots.
   TerminalBackgroundDetectionGuard(TerminalBackgroundDetectionGuard const&) = delete;
+  // Reassignment would confuse which scope retires the global probe handler.
   TerminalBackgroundDetectionGuard& operator=(TerminalBackgroundDetectionGuard const&) = delete;
 
+  // TUI thread: close probe admission before clearing queued startup input.
   ~TerminalBackgroundDetectionGuard()
   {
     disarm_terminal_background_response_handler();
@@ -128,6 +154,8 @@ int TuiFrontEnd::run()
 {
   DoutEntering(dc::notice, "TuiFrontEnd::run()");
 
+  // Install the application cleanup obligation before terminal validation or
+  // initialization can fail. Inner session/graphics scopes retire first.
   RuntimeBeforeShutdownGuard before_shutdown(*this);
 
   if (!terminal_is_tty())

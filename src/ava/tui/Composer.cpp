@@ -1,3 +1,5 @@
+// Owns draft editing, completion acceptance and input precedence within the TUI.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/composer_internal.h"
@@ -17,6 +19,8 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
   using Key = terminal::Key;
   auto is_action = [&](TuiAction action) { return key_matches_action(bindings, action, input.event.key); };
   ComposerInputResult result;
+  // An armed jump gets first refusal so its target cannot accidentally enter the draft.
+  // Unrelated nonprintable keys may still continue through the later dispatcher stages.
   if (phase == ComposerInputPhase::Jump)
   {
     if (jump_mode() == ComposerJumpMode::None)
@@ -37,6 +41,7 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
         input.event.key == Key::Character || input.event.key == Key::Space || is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward);
     return result;
   }
+  // Plain text and explicit newline are considered before configurable editor/session keys.
   if (phase == ComposerInputPhase::Primary)
   {
     if (input.event.key == Key::Character)
@@ -126,6 +131,8 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
     result.handled = true;
     return result;
   }
+  // This phase is reached after transcript bindings. Within it, completion rows precede
+  // history, and unclaimed arrow keys become cross-owner transcript scrolling requests.
   if (phase == ComposerInputPhase::Navigation)
   {
     auto const& event = input.event;
@@ -280,6 +287,8 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
 
 ComposerInputResult Composer::step_completion(CompletionStep step, detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)
 {
+  // Use the same surface priority as painting. The const prepared model belongs to the
+  // caller and remains a read-only snapshot throughout this selection step.
   bool const slash = (!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands));
   bool const reference =
       !slash && (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible);
@@ -290,6 +299,7 @@ ComposerInputResult Composer::step_completion(CompletionStep step, detail::Compl
   cancel_escape();
   auto const count = slash ? filter_slash_commands(draft_.text, draft_.cursor, snapshot.slash_commands).size()
                            : (completions.model ? completions.model->ranked_source_indices.size() : 0);
+  // An empty visible palette still claims navigation, preventing accidental history movement.
   if (count == 0)
     return {.handled = true, .status = slash ? "no matching slash commands" : reference ? "no matching file references" : "no matching paths"};
   if (slash)
@@ -363,6 +373,7 @@ ComposerInputResult Composer::force_path_completion(ComposerSnapshot const& snap
   detail::refresh_completion_match_cache(completions, draft_.text, draft_.cursor, slash_palette_suppressed_, path_completion_force_active_,
                                          snapshot.slash_commands, snapshot.file_references, snapshot.file_references_generation);
   auto const match_count = (completions.model ? completions.model->ranked_source_indices.size() : 0);
+  // A forced query must not leave a newly visible palette behind when it declines the key.
   if (match_count == 0)
   {
     slash_palette_suppressed_ = was_suppressed;
@@ -375,6 +386,8 @@ ComposerInputResult Composer::force_path_completion(ComposerSnapshot const& snap
     leave_history();
     selected_slash_command_index_ = 0;
   }
+  // Only a single enabled match is safe to insert immediately; several matches require
+  // a visible choice, while disabled content reports why no replacement occurred.
   if (match_count == 1)
   {
     if (auto const reason = detail::completion_selection_disabled_reason(completions, snapshot.file_references, 0))
@@ -515,6 +528,8 @@ bool Composer::apply_action(TuiAction action)
 }
 bool Composer::apply_edit(TuiAction action, ComposerEditContext context)
 {
+  // Reset policy precedes editing, including unsuccessful edits. Active-run actions leave
+  // history broadly; idle cursor/undo routes deliberately retain narrower interaction state.
   auto const deletion = action == TuiAction::DeleteBackward || action == TuiAction::DeleteForward || action == TuiAction::DeleteWordBackward ||
                         action == TuiAction::DeleteWordForward || action == TuiAction::DeleteToLineStart || action == TuiAction::DeleteToLineEnd;
   if (context == ComposerEditContext::ActiveRun || deletion || action == TuiAction::ClearInput)
@@ -527,6 +542,7 @@ bool Composer::apply_edit(TuiAction action, ComposerEditContext context)
   }
   if (context == ComposerEditContext::Idle && action == TuiAction::ClearInput)
     path_completion_force_active_ = false;
+  // A selected range consumes a deletion before the ordinary character/word action runs.
   if (deletion)
     return delete_selection() || apply_action(action);
   clear_selection();
@@ -671,6 +687,8 @@ void Composer::end_pointer_selection()
 ComposerInputResult Composer::handle_escape()
 {
   ComposerInputResult result{.handled = true};
+  // Selection and palette dismissal were handled by the caller. This flag is an explicit
+  // arm with no timer; only paths that call cancel_escape or reset it break the sequence.
   if (!draft_.text.empty())
   {
     if (pending_escape_clear_)
@@ -841,6 +859,8 @@ ComposerInputResult Composer::extend_selection_to(std::size_t target)
   slash_palette_suppressed_ = false;
   path_completion_force_active_ = false;
   draft_scroll_offset_ = 0;
+  // Keep the initial anchor stable while direct document-boundary selection moves only
+  // the far endpoint; invalidate metadata that belonged to the prior cursor position.
   auto const anchor = draft_selection_anchor_ == std::string::npos ? clamp_composer_draft_cursor(draft_.text, draft_.cursor) : draft_selection_anchor_;
   draft_.cursor = clamp_composer_draft_cursor(draft_.text, target);
   draft_.vertical_column = std::string::npos;
@@ -855,6 +875,8 @@ ComposerInputResult Composer::extend_selection_to(std::size_t target)
 ComposerInputResult Composer::extend_selection_for_key(terminal::Key key)
 {
   using Key = terminal::Key;
+  // Shifted movement shares one anchor and reset path. Unsupported keys decline without
+  // mutating selection, allowing normal binding dispatch to continue.
   switch (key)
   {
     case Key::ShiftArrowUp:

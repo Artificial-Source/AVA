@@ -161,6 +161,8 @@ bool ActiveRun::start(std::string submitted)
   operation_->is_command_submission = operation_->submitted.starts_with('/') || shell_helper_submission(operation_->submitted);
   try
   {
+    // Prepare transport identities and the pre-submit baseline before any worker
+    // can publish; queue callbacks retain inbox ownership independently of this operation.
     auto const& snapshot = presentation_state_.screen();
     if (operation_->is_command_submission && runtime_commands::session_switching_command(operation_->submitted))
       attachments_.clear();
@@ -191,6 +193,8 @@ bool ActiveRun::start(std::string submitted)
       shutdown();
       return false;
     }
+    // Show the initial processing frame before admitting prompts and launching work.
+    // The catch path retires any partially constructed operation through shutdown.
     prompt_coordinator_.open_admission();
     // The plugin owner and its synchronized deadline state outlive this joined
     // worker. This predicate has no projection or terminal access.
@@ -418,6 +422,8 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
 {
   if (!active() || operation_->close_after_submit)
     return true;
+  // A claimed host prompt owns the retained key before plugin or search routing.
+  // Returning a value prevents ordinary active-input stages from seeing it.
   if (prompt_coordinator_.has_active())
   {
     auto const outcome = prompt_coordinator_.handle_input(input);
@@ -448,6 +454,8 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
                                                                                           std::bind_front(&ActiveRun::before_prompt, this));
     return outcome != SearchInputPromptDispatchResult::InputFailed;
   }
+  // One last claim attempt covers a worker publication after earlier service.
+  // Consume the old key when acquisition wins; it was decoded for a different view.
   auto const prompt = prompt_coordinator_.start_pending(std::bind_front(&ActiveRun::stop_requested, this), std::bind_front(&ActiveRun::before_prompt, this));
   if (prompt != PromptServiceOutcome::None)
     return true; // A raced claim consumes the retained key; it never enters the new modal.
@@ -501,6 +509,8 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
     static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
     plugin_ui_.finish_submission();
     operation_->worker.get();
+    // Backend completion receipts decide command conversation authority before any
+    // final projection. A committed session change discards prior-session evidence.
     operation_->events->authorize_receipts(result.ordinary_turn_request_ids);
     auto committed_session_id = frontend_.read_committed_session_id();
     auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
@@ -547,6 +557,8 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
         for (auto const& tool : result.local_command_result->tool_timeline)
           presentation_state_.publish_tool(tool, TuiToolIndexOrigin::LocalCommand);
     }
+    // Capture the final decision while operation flags still exist. Retirement below
+    // can then destroy all per-run values without losing signal or I/O evidence.
     auto const outcome = operation_->terminal_signal_received || operation_->terminal_write_failed || operation_->completion_failed
                              ? exit_outcome()
                              : settle_completion(result, session_changed);
@@ -627,6 +639,8 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
 
 RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 {
+  // Reduce before choosing projection: command events can update sidebar authority
+  // even while conversation text is still awaiting completion receipts.
   auto batch = operation_->inbox->drain(max_events);
   auto const& snapshot = presentation_state_.screen();
   operation_->events->apply_batch(batch, presentation_state_);
@@ -647,6 +661,8 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
         presentation_state_.publish_tool(*item.tool, TuiToolIndexOrigin::Provider);
   }
   {
+    // Preserve viewport/search positions around transcript replacement and cap eviction.
+    // Only after those owners agree on indices may a frame be requested.
     auto const update = renderer_.begin_transcript_update();
     apply_assistant_turn_meta(*projection, assistant_meta_for_snapshot(&frontend_, snapshot, std::chrono::steady_clock::now() - operation_->turn_started_at),
                               snapshot.thinking_visible);
@@ -665,6 +681,8 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 }
 ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, bool session_changed)
 {
+  // Select receipt-filtered evidence before fallback. Local command output and
+  // conversation output have different authority even when they share tool events.
   auto const& snapshot = presentation_state_.screen();
   auto const& event_state = operation_->events->aggregate();
   auto const events_received = operation_->is_command_submission ? operation_->events->authorized_events_received() : operation_->inbox->received_any();
@@ -699,6 +717,8 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
   {
     settle_turn_activity();
   }
+  // Use final backend payloads only when no eligible streamed evidence arrived.
+  // Do not duplicate bounded Bash output already retained in its tool card.
   if (settlement.policy.project_conversation && !events_received)
   {
     auto const turn_elapsed = std::chrono::steady_clock::now() - operation_->turn_started_at;
@@ -732,6 +752,8 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
     transcript_search_.refresh_after_transcript_mutation(item_index_shift, std::min(changed_from_item_index, snapshot.transcript.size()));
     renderer_.note_transcript_eviction(item_index_shift);
   }
+  // Publish the chosen output surface after transcript settlement; only then finish
+  // processing metadata and render the final state used by the next idle turn.
   if (settlement.policy.present_command_output)
   {
     presentation_state_.publish_local_completion(operation_->submitted, std::move(settlement.command_output), std::move(settlement.command_tools), false);
@@ -755,11 +777,15 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
 
   return operation_->close_after_submit || result.quit ? ActiveRunOutcome::close_session() : ActiveRunOutcome::continue_session();
 }
+// TUI thread with an active queue capability: delegate only to the backend-provided
+// command handler. Absence means ordinary routing must decide what happens next.
 std::optional<std::vector<std::string>> dispatch_tui_active_nonblocking_command(TuiActiveRunQueues const& queues, std::string const& submitted)
 {
   return queues.run_nonblocking_command ? queues.run_nonblocking_command(submitted) : std::nullopt;
 }
 
+// TUI thread: reject a disabled visible completion before invoking the backend
+// capability, so typed text cannot bypass the palette restriction.
 TuiActiveNonblockingCommandDispatchResult dispatch_tui_active_nonblocking_command_gated(ComposerSnapshot const& completion_snapshot,
                                                                                         TuiActiveRunQueues const& queues, std::string const& submitted)
 {

@@ -1,3 +1,4 @@
+// Publishes spinner phases at timer cadence; the session later paints any invalidated frame.
 #include "sys.h"
 #include "Spinner.h"
 #include "composer_internal.h"

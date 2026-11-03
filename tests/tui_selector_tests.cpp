@@ -41,6 +41,7 @@
 #include <vector>
 #include <sys/eventfd.h>
 
+// Run selector filtering, input and typed-dispatch regressions under the shared terminal fixture.
 void run_tui_selector_tests()
 {
   tui_test_support::TuiFrontEndFixture frontend;

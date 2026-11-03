@@ -1,3 +1,5 @@
+// Decodes native/replayed terminal input into owned events and preserves the
+// Empty/Discarded distinction required by the session's bounded input stage.
 #include "sys.h"
 #include "composer_editor.h"
 #include "encode_wide_character.h"
@@ -21,32 +23,48 @@ using Key = terminal::Key;
 
 namespace {
 
+// Bound retained untrusted paste bytes; the TUI decoder may still spend time waiting
+// between characters, so this limits memory rather than whole-operation duration.
 constexpr std::size_t kMaxBracketedPasteBytes = 1024 * 1024;
+// Limit escape/control accumulation before malformed terminal input grows without bound.
 constexpr std::size_t kMaxEscapeSequenceBytes = 16 * 1024;
+// Preserve only this many startup events before leaving later input for normal polling.
 constexpr std::size_t kStartupInputQueueCap = 64;
 
+// TUI thread only: return the process-static FIFO used across startup-probe calls.
+// Session entry clears it explicitly; no terminal storage is borrowed and no worker
+// may access it concurrently, even though local-static initialization is thread-safe.
 std::deque<RuntimeInput>& startup_input_queue_storage()
 {
   static std::deque<RuntimeInput> queue;
   return queue;
 }
 
+// TUI decoder: create an owned nontext event from a semantic key; callers use
+// character_input/space_input when insertion text must accompany the key.
 RuntimeInput key_input(Key key)
 {
   return RuntimeInput{
       .event = InputEvent{.key = key, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0}, .text = {}, .bracketed_paste = false, .resize = false};
 }
 
+// TUI decoder: transfer already decoded escape/mouse metadata into an owned event
+// without inventing composer insertion text or retaining terminal buffers.
 RuntimeInput event_input(InputEvent event)
 {
   return RuntimeInput{.event = std::move(event), .text = {}, .bracketed_paste = false, .resize = false};
 }
 
+// TUI decoder: represent a consumed unsupported/protocol event. Legacy read APIs
+// also use this for no input; poll_curses_input preserves native emptiness separately.
 RuntimeInput unknown_input()
 {
   return key_input(Key::Unknown);
 }
 
+// TUI decoder: own UTF-8 text in both the full input and legacy InputEvent view.
+// Paste stays one event even when empty; the caller supplies already encoded or
+// normalized text and the returned value retains no reference to that argument.
 RuntimeInput character_input(std::string text, bool bracketed_paste = false)
 {
   auto const first_byte = text.empty() ? '\0' : text[0];
@@ -57,6 +75,8 @@ RuntimeInput character_input(std::string text, bool bracketed_paste = false)
                       .resize = false};
 }
 
+// TUI decoder: preserve Space as both a bindable key and insertion text so command
+// routing and composer insertion can share the same owned event.
 RuntimeInput space_input()
 {
   return RuntimeInput{.event = InputEvent{.key = Key::Space, .character = ' ', .text = " ", .mouse_column = 0, .mouse_row = 0},
@@ -65,14 +85,17 @@ RuntimeInput space_input()
                       .resize = false};
 }
 
-// Read the body of an escape/control sequence after ESC was already consumed.
-// Encode decoded wide characters and accumulate at most kMaxEscapeSequenceBytes.
-// Stops on a complete sequence, timeout, unencodable character, or a special key other than Backspace.
-// Caller owns the surrounding screen timeout budget.
+// TUI thread with a live Context, after consuming ESC: accumulate and encode the
+// sequence body up to the byte cap. The caller scopes the per-read timeout; this
+// function owns returned bytes and stops on completion, timeout/read failure,
+// unencodable input or a special key other than Backspace. It does not replay a
+// character already consumed when a size/encoding check ends assembly.
 std::string read_escape_sequence_body(terminal::Context& terminal_context)
 {
   std::string consumed;
   consumed.reserve(32);
+  // Stop as soon as the protocol recognizes a complete body so a following key
+  // stays available for the next input-budget item rather than joining this one.
   while (consumed.size() < kMaxEscapeSequenceBytes)
   {
     auto const character = terminal_context.read_escape_sequence_character();
@@ -88,6 +111,10 @@ std::string read_escape_sequence_body(terminal::Context& terminal_context)
   return consumed;
 }
 
+// TUI thread after consuming paste-start, with Context alive: assemble one owned
+// normalized paste until end marker, signal, read failure/timeout or byte cap.
+// The temporary 1 s timeout applies to each read, not to the complete paste; restore
+// the previous timeout before returning and never dispatch partial paste characters.
 RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
 {
   std::string pasted;
@@ -126,6 +153,10 @@ RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
   return character_input(normalize_composer_paste_text(pasted), true);
 }
 
+// TUI thread after ESC, with Context alive: read continuation under the configured
+// per-read escape timeout and restore the caller's setting. No continuation means
+// a standalone Escape; a consumed unrecognized/protocol sequence yields Unknown,
+// while paste-start delegates to atomic paste assembly. Returned text owns its bytes.
 std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& terminal_context)
 {
   std::string consumed;
@@ -136,6 +167,8 @@ std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& termin
 
   if (consumed.empty())
     return std::nullopt;
+  // A query reply consumes input even though no key should reach a feature. Keep
+  // that distinction from a lone Escape so polling continues through buffered keys.
   if (terminal_background_response_handle(consumed))
     return unknown_input();
   if (consumed == "[200~")
@@ -150,6 +183,8 @@ std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& termin
   return unknown_input();
 }
 
+// TUI thread: transfer the oldest preserved startup event out of the FIFO before
+// touching newer terminal input; absence leaves the caller free to perform a native read.
 std::optional<RuntimeInput> take_startup_input()
 {
   auto& queue = startup_input_queue_storage();
@@ -162,6 +197,8 @@ std::optional<RuntimeInput> take_startup_input()
 
 }  // namespace
 
+// TUI input handlers borrow input only for this call; return owned bytes for one
+// jump target without terminal access. Paste cannot accidentally trigger a jump.
 std::optional<std::string> printable_jump_target(RuntimeInput const& input)
 {
   if (input.bracketed_paste)
@@ -181,6 +218,8 @@ std::optional<std::string> printable_jump_target(RuntimeInput const& input)
   if ((first & 0x80U) == 0)
     return text.substr(0, 1);
 
+  // Use the first UTF-8 sequence's byte shape rather than one byte of a multibyte
+  // character; this checks width/continuations, not full Unicode scalar validity.
   auto length = std::size_t{0};
   if (first >= 0xC2U && first <= 0xDFU)
     length = 2;
@@ -198,16 +237,20 @@ std::optional<std::string> printable_jump_target(RuntimeInput const& input)
   return text.substr(0, length);
 }
 
+// TUI session boundary: drop owned replay values so they cannot leak into a later session.
 void clear_startup_input_queue()
 {
   startup_input_queue_storage().clear();
 }
 
+// TUI startup code uses this nonconsuming count to avoid reading beyond replay capacity.
 std::size_t startup_input_queue_size()
 {
   return startup_input_queue_storage().size();
 }
 
+// TUI startup decoder: save an actionable owned event in arrival order. Full means
+// the passed value is not saved; callers must check capacity before reading more input.
 bool enqueue_startup_input(RuntimeInput input)
 {
   auto& queue = startup_input_queue_storage();
@@ -217,14 +260,18 @@ bool enqueue_startup_input(RuntimeInput input)
   return true;
 }
 
-// Preserve native emptiness until polling classifies the read. Unsupported input
-// still has a value, so it cannot hide a following key already buffered by ncurses.
+// TUI thread with a live Context: decode one native/replayed item using the current
+// timeout, bypassing this module's startup queue. Only native ERR gives nullopt;
+// unsupported input retains a value so polling cannot mistake it for drained input.
+// Escape/paste may consume additional reads; the returned event owns all of its text.
 static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& terminal_context)
 {
   wint_t value = 0;
   auto key = terminal_context.read_curses_key(value);
   if (!key)
     return std::nullopt;
+  // Signal handling remains composition's job. When a read did consume a key,
+  // preserve the existing CtrlC routing for a terminal signal already observed here.
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
   if (key == Key::WideCharacter)
@@ -245,6 +292,8 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
     return space_input();
   if (key == Key::Resize)
   {
+    // Resize is actionable without a normal key or text payload; its separate flag
+    // prevents empty_curses_input from discarding the required layout update.
     return RuntimeInput{.event = InputEvent{.key = Key::Unknown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
                         .text = {},
                         .bracketed_paste = false,
@@ -261,16 +310,22 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
   return key_input(*key);
 }
 
+// TUI startup path with Application initialized: use its live Context while leaving
+// this module's startup FIFO untouched, so probe drainage cannot recycle saved events.
 RuntimeInput read_curses_input_from_terminal()
 {
   return read_curses_input_from_terminal(core::Application::instance().terminal_context());
 }
 
+// TUI thread: borrow Context for one decode and return owned input. This legacy
+// interface maps both native emptiness and unsupported input to Unknown.
 RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context)
 {
   return decode_terminal_input(terminal_context).value_or(unknown_input());
 }
 
+// TUI thread with Application initialized: consume older startup replay first, then
+// use the terminal's current timeout. No queue or Context reference escapes the call.
 RuntimeInput read_curses_input()
 {
   if (auto queued = take_startup_input())
@@ -278,15 +333,23 @@ RuntimeInput read_curses_input()
   return read_curses_input_from_terminal();
 }
 
+// TUI decoding paths use this pure borrowed-value check to suppress unsupported
+// events. It cannot prove the native queue is empty; resize and empty paste still
+// count as real events because their flags convey work independently of text.
 bool empty_curses_input(RuntimeInput const& input)
 {
   return !input.resize && input.event.key == Key::Unknown && input.text.empty() && !input.bracketed_paste;
 }
 
+// TUI input stage: consume replay or try one initial native read without sleeping.
+// Keep discarded input distinct from ERR, and restore the prior timeout before
+// returning. Callers charge both Input and Discarded against the turn's input budget.
 InputPollResult poll_curses_input()
 {
   if (auto queued = take_startup_input())
     return {.kind = InputPollKind::Input, .input = std::move(*queued)};
+  // Only the initial native read is nonblocking. The decoder temporarily applies
+  // its existing escape/paste continuation timeouts once a sequence has started.
   auto& terminal_context = core::Application::instance().terminal_context();
   auto scoped_timeout = terminal_context.timeout(std::chrono::milliseconds(0));
   auto input = decode_terminal_input(terminal_context);
@@ -297,6 +360,9 @@ InputPollResult poll_curses_input()
   return {.kind = InputPollKind::Input, .input = std::move(*input)};
 }
 
+// TUI legacy caller with Application initialized: prefer replay, otherwise scope
+// the initial-read timeout and restore it on return. Nullopt includes consumed
+// unsupported input, so this API is unsuitable for deciding the event loop may sleep.
 std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout)
 {
   if (auto queued = take_startup_input())
@@ -312,11 +378,16 @@ std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::millisec
   return input;
 }
 
+// TUI startup stage with Application initialized: preserve user input while query
+// replies are consumed. deadline is an outer duration checked between decodes;
+// a started escape/paste decode may exceed it. Stop before reading past FIFO capacity.
 void drain_startup_probe_input(std::chrono::milliseconds deadline)
 {
   using clock = std::chrono::steady_clock;
   auto& terminal_context = core::Application::instance().terminal_context();
   auto const started = clock::now();
+  // Bypass the startup queue below; reading through read_curses_input would take
+  // the oldest saved event and enqueue it again instead of draining the terminal.
   while (startup_input_queue_storage().size() < kStartupInputQueueCap)
   {
     auto const elapsed = clock::now() - started;

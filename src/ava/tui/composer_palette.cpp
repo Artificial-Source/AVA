@@ -806,6 +806,8 @@ std::string render_palette_item_compact(SlashCommandItem const& item, bool selec
 
 }  // namespace
 
+// TUI thread: adapt the published screen fields to the same ranking mechanism
+// used for prospective editor flags. No snapshot or candidate catalog is copied.
 void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapshot const& snapshot, std::size_t source_revision)
 {
   refresh_completion_match_cache(cache, snapshot.input, snapshot.input_cursor, snapshot.slash_palette_suppressed, snapshot.path_completion_force_active,
@@ -814,11 +816,14 @@ void refresh_completion_match_cache(CompletionMatchCache& cache, ComposerSnapsho
 
 // TUI thread: rank against call-scoped editor/catalog values. Forced completion
 // uses this same algorithm before publishing its changed force flag. No owner or
-// snapshot is copied, and the cache owns only indices into the unchanged catalog.
+// snapshot is copied. The cache owns catalog indices plus input/prefix metadata;
+// candidate objects stay in the catalog and its revision validates those indices.
 void refresh_completion_match_cache(CompletionMatchCache& cache, std::string const& input, std::size_t cursor, bool suppressed, bool force_path,
                                     std::vector<SlashCommandItem> const& commands, std::vector<FileReferenceItem> const& references,
                                     std::size_t source_revision)
 {
+  // Resolve competing completion surfaces before consulting the cache: the same
+  // draft can mean a slash command, an @ reference, or a forced path query.
   auto surface = CompletionSurface::None;
   auto prefix = CompletionPrefix{};
   if (!suppressed && !slash_palette_visible(input, cursor, commands))
@@ -840,6 +845,8 @@ void refresh_completion_match_cache(CompletionMatchCache& cache, std::string con
     }
   }
 
+  // Indices remain valid only for the same catalog revision and editor context.
+  // Reuse that complete match; otherwise publish one newly ranked model below.
   if (cache.model && cache.model->input == input && cache.model->cursor == cursor && cache.model->force_path == force_path &&
       cache.model->source_revision == source_revision && cache.model->surface == surface)
   {

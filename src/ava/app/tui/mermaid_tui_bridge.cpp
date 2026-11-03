@@ -1,3 +1,4 @@
+// Serializes Mermaid configuration/lifetime while exposing non-I/O admission, drainage, and notification callbacks.
 #include "sys.h"
 #include "ava/app/tui/mermaid_tui_bridge.h"
 
@@ -7,11 +8,15 @@
 namespace ava::app {
 namespace {
 
+// Application-thread pure adapter: copy validated display settings into coordinator configuration with caller-
+// owned epoch.
 MermaidRenderConfiguration coordinator_config(MermaidDisplaySettings const& settings, std::uint64_t epoch)
 {
   return mermaid_render_configuration_from_display_settings(settings, epoch);
 }
 
+// Pure comparison while callers hold bridge settings stable; unchanged enable/argv avoids invalidating cached
+// results.
 bool same_effective_settings(MermaidDisplaySettings const& left, MermaidDisplaySettings const& right)
 {
   return left.enabled == right.enabled && left.argv == right.argv;
@@ -40,6 +45,8 @@ MermaidTuiBridge::~MermaidTuiBridge()
 
 ava::core::VoidResult MermaidTuiBridge::apply(MermaidDisplaySettings const& settings)
 {
+  // Bridge lock precedes coordinator lock: configuration and epoch publication must remain atomic to exported
+  // callbacks. Notifiers may never reenter this bridge.
   std::lock_guard lock(mutex_);
   if (shutdown_ || !coordinator_)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "Mermaid TUI bridge is shut down"));
@@ -64,6 +71,8 @@ MermaidTuiPresentationConfiguration MermaidTuiBridge::presentation_configuration
 
 ava::tui::TuiMermaidRenderBridge MermaidTuiBridge::tui_bridge()
 {
+  // Each exported callback retains shared adapter ownership so application coordinator lifetime does not depend
+  // on the TUI controller remaining alive.
   auto self = shared_from_this();
   auto const configuration = presentation_configuration();
   return ava::tui::TuiMermaidRenderBridge{
@@ -78,6 +87,8 @@ ava::tui::TuiMermaidRenderBridge MermaidTuiBridge::tui_bridge()
 
 ava::tui::TuiMermaidEnqueueResult MermaidTuiBridge::enqueue(ava::tui::TuiMermaidRenderRequest request) noexcept
 {
+  // Expose bridge contention as Busy without waiting on settings/shutdown. Once admitted, coordinator queue
+  // serialization performs no helper I/O.
   std::unique_lock lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock())
     return ava::tui::TuiMermaidEnqueueResult::Busy;
@@ -125,6 +136,7 @@ bool MermaidTuiBridge::cancel(std::uint64_t identity, std::uint64_t config_epoch
 
 std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> MermaidTuiBridge::drain() noexcept
 {
+  // Preserve contention as nullopt so the TUI schedules bounded retry instead of treating the mailbox as empty.
   std::unique_lock lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock())
     return std::nullopt;
@@ -139,6 +151,8 @@ std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> MermaidTuiBridg
   {
     return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
   }
+  // Take owned application results before projecting accepted text; the TUI receives values only, never
+  // helper/process authority.
   std::vector<ava::tui::TuiMermaidRenderCompletion> projected;
   projected.reserve(completions.size());
   for (auto& completion : completions)
@@ -154,6 +168,8 @@ std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> MermaidTuiBridg
 
 void MermaidTuiBridge::set_completion_notifier(std::function<void()> notifier)
 {
+  // Registration shares the bridge-to-coordinator lock order with shutdown; installed callbacks must only touch
+  // independent readiness/wake state.
   std::lock_guard lock(mutex_);
   if (coordinator_)
     coordinator_->set_completion_notifier(std::move(notifier));
@@ -161,6 +177,8 @@ void MermaidTuiBridge::set_completion_notifier(std::function<void()> notifier)
 
 void MermaidTuiBridge::shutdown() noexcept
 {
+  // Hold bridge lifetime/settings serialization while joining coordinator work; worker notification must not
+  // acquire this mutex.
   std::lock_guard lock(mutex_);
   if (shutdown_)
     return;

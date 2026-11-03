@@ -1,3 +1,4 @@
+// Reduces worker event batches into receipt-authorized conversation and local output.
 #include "sys.h"
 #include "ActiveRunEvents.h"
 #include "ava/tui/command_output.h"
@@ -9,6 +10,8 @@
 namespace ava::tui {
 namespace detail {
 
+// Pure identity check used by TUI projection: only a nonempty exact receipt match
+// authorizes conversation text, regardless of other event metadata.
 bool command_event_request_has_conversation_authority(std::optional<std::string> const& event_request_id,
                                                       std::span<std::string const> ordinary_turn_request_ids) noexcept
 {
@@ -18,23 +21,31 @@ bool command_event_request_has_conversation_authority(std::optional<std::string>
 } // namespace detail
 namespace {
 
+// TUI reduction: prompt audit envelopes carry control evidence, not proof that
+// a command produced an ordinary conversation turn.
 bool envelope_has_prompt_only_authority(ava::event::EventEnvelope const& envelope)
 {
   return envelope.name == "permission_requested" || envelope.name == "permission_replied" || envelope.name == "question_requested" ||
          envelope.name == "question_replied";
 }
 
+// TUI fallback decision: pending text and tool cards count as streamed evidence
+// even before they become completed transcript items.
 bool has_transcript_events(TuiEventState const& state)
 {
   return !state.transcript.empty() || !state.pending_assistant_text.empty() || !state.pending_reasoning_text.empty() || !state.pending_tools.empty();
 }
 
+// TUI projection: snapshot a partition without parsing unfinished text, then
+// transfer owned items to the authorized conversation sequence.
 void append_transcript(std::vector<TranscriptItem>& destination, TuiEventState const& state)
 {
   auto items = event_state_transcript_snapshot(state, PendingTextProjection::Unparsed);
   destination.insert(destination.end(), std::make_move_iterator(items.begin()), std::make_move_iterator(items.end()));
 }
 
+// TUI merge key: prefer call identity, then request/correlation, with kind prefixes
+// to keep equal strings from different identity domains distinct.
 std::string tool_identity(ToolTimelineItem const& tool)
 {
   if (!tool.call_id.empty())
@@ -46,12 +57,16 @@ std::string tool_identity(ToolTimelineItem const& tool)
   return {};
 }
 
+// TUI local output retains only finished tools; a terminal lifecycle paired with
+// Running status is still insufficient evidence of settlement.
 bool settled_tool(ToolTimelineItem const& tool)
 {
   return tool.status != ToolTimelineStatus::Running &&
          (tool.lifecycle == ToolLifecycleState::Complete || tool.lifecycle == ToolLifecycleState::Canceled || tool.lifecycle == ToolLifecycleState::Error);
 }
 
+// TUI local output: replace an existing identified card with the latest settled
+// value; anonymous cards append because no safe equality key exists.
 void merge_tool(std::vector<ToolTimelineItem>& tools, ToolTimelineItem const& tool)
 {
   auto const key = tool_identity(tool);
@@ -67,6 +82,8 @@ void merge_tool(std::vector<ToolTimelineItem>& tools, ToolTimelineItem const& to
   tools.push_back(tool);
 }
 
+// TUI settlement: merge settled cards from both storage locations, preserving
+// transcript-before-pending order and replacing matching identities.
 void append_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState const& state)
 {
   for (auto const& item : state.transcript)

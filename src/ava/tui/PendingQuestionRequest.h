@@ -13,7 +13,8 @@ inline ava::core::Result<ava::agent::QuestionAnswer> interrupted_question_result
   return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
 }
 
-// Shared ownership keeps the prompt's worker-borrowed callbacks alive until retirement.
+// Resolver and TUI share the request; its held claim keeps the worker blocked
+// while question callbacks can borrow the worker's stack. See PendingRequest.
 using PendingQuestionRequest = PendingRequest<ava::agent::QuestionPrompt, ava::agent::QuestionAnswer, interrupted_question_result>;
 
 } // namespace ava::tui

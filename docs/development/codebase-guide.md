@@ -454,6 +454,12 @@ frontend approval UI, or provider behavior.
 
 ### `tui/`
 
+Start with the [TUI implementation guide](../engineering/tui-architecture.md).
+`TuiSession` owns composition and loop order; `ActiveRun` owns submission
+lifetime, and `ActiveRunInput` routes ordinary keys during a submission. Feature
+owners publish through `RuntimePresentationState`; the renderer owns viewport
+transitions and prepared layouts.
+
 **Owns:** ncurses TUI semantic state, composer/editor/input, transcript and
 selection/search, keybindings, themes/text wrapping, tool cards, views,
 runtime actions, and rendering/hit testing.

@@ -1,3 +1,4 @@
+// Applies completion, pointer, and transcript navigation while keeping viewport layout preparation ordered.
 #include "sys.h"
 #include "runtime_state_internal.h"
 #include "ava/tui/TuiFrontEnd.h"
@@ -119,6 +120,8 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       palette_claimed = true;
     }
   }
+  // After palette precedence, transcript selection gets the report before the draft so only one surface starts
+  // a new selection.
   if (!palette_claimed)
   {
     auto const transcript_mouse =
@@ -263,6 +266,8 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
     return renderer_.request_render();
   }
 
+  // Once drawer owns the event, clamp every navigation action to its own geometry and request a frame without
+  // immediate painting.
   auto const max_scroll = renderer_.sidebar_drawer_max_scroll();
   if (key_matches_action(frontend_.key_bindings(), TuiAction::PageUp, event.key))
   {
@@ -338,6 +343,8 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
   renderer_.synchronize_detached_transcript_layout();
   auto const max_scroll = renderer_.prepare_transcript_layout();
   auto const& layout = renderer_.prepared_transcript_layout().layout;
+  // Collect only retained user-message boundaries from synchronized layout; tool rows and duplicate starts must
+  // not become navigation stops.
   std::vector<std::size_t> user_starts;
   user_starts.reserve(layout.message_starts.size());
   for (std::size_t position = 0; position < layout.message_starts.size() && position < layout.message_item_indices.size(); ++position)
@@ -358,6 +365,8 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
     return;
   }
 
+  // Choose the adjacent boundary relative to the current visible start, preserving explicit oldest/live-tail
+  // feedback when no neighbor exists.
   auto const clamped_scroll = std::min(renderer_.transcript().scroll_offset(), max_scroll);
   auto const current_start = max_scroll - clamped_scroll;
   auto target_start = std::optional<std::size_t>{};

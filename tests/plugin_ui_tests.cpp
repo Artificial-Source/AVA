@@ -1058,6 +1058,7 @@ void test_app_ui_permission_deny_and_exact_binding_fail_closed()
          "default-null headless, RPC, ACP, print, queued, and synthetic command requests cannot present UI or expose raw UI bytes");
 }
 
+// Protect revocation of an already admitted plugin UI command when the plugin is disabled externally.
 void test_external_disable_revokes_active_ui_command()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -1236,6 +1237,7 @@ ava::tui::TuiPluginUiRequest tui_request(ava::tui::TuiPluginUiBinding binding, s
       .binding = std::move(binding), .request_id = std::move(request_id), .kind = kind, .text = {}, .title = {}, .description = {}, .lines = {}, .options = {}};
 }
 
+// Run the producer off-thread while the test thread consumes UI requests; cancel before joining on timeout.
 ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::TuiPluginUiEndpoint const& endpoint,
                                                    ava::tui::TuiPluginUiRequest request)
 {
@@ -1256,6 +1258,7 @@ ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoor
   return reply.get();
 }
 
+// Wait for TUI publication, preserving an optional host-modal conflict and releasing the worker on timeout.
 bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::ComposerSnapshot const& snapshot,
                        std::future<ava::tui::TuiPluginUiReply>& reply, bool conflict = false)
 {
@@ -1274,6 +1277,7 @@ bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::t
   return snapshot.plugin_ui_modal.has_value();
 }
 
+// Protect FIFO publication, queue limits and waiter release across submission boundaries.
 void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
 {
   ava::tests::expect_all("TUI plugin authority recognizes only an exact canonical direct foreground submission",
@@ -1354,6 +1358,7 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
          "TUI shutdown invalidates the runtime token and clears all plugin-owned presentation");
 }
 
+// Protect host-modal precedence and exactly one plugin reply through input, cancellation and expiry.
 void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
 {
   std::array<int, 2> descriptors{-1, -1};
@@ -1488,6 +1493,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
          "child exit/cancel polling finitely unblocks a modal without waiting under coordinator locks");
 }
 
+// Protect plugin attribution and modal fitting when terminal space is constrained.
 void test_tui_plugin_ui_attribution_fit_policy()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -1740,6 +1746,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
                           {"visible modal cleared", !visible_snapshot.plugin_ui_modal}});
 }
 
+// Protect submission invalidation against a concurrent producer and TUI poll.
 void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
 {
   tui_test_support::TuiFrontEndFixture snapshot_frontend;

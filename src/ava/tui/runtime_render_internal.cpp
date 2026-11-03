@@ -1,3 +1,4 @@
+// Prepares feature projections and layout authority before the session's single paint stage.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "runtime_state_internal.h"
@@ -130,6 +131,8 @@ void RuntimeRenderer::synchronize_timers()
 {
   if (!loop_attached_)
     return;
+  // A failed terminal write retires every render-related callback; deadlines must not keep waking a closing
+  // session.
   if (frame_scheduler_.failed())
   {
     frame_timer_.cancel();
@@ -140,6 +143,8 @@ void RuntimeRenderer::synchronize_timers()
     armed_autoscroll_deadline_.reset();
     return;
   }
+  // Mirror semantic deadlines only when changed. Urgent thaw work is painted at the batch boundary without
+  // waiting for the ordinary frame cadence.
   auto const frame = pending_thaw_ ? std::nullopt : frame_scheduler_.deadline();
   if (frame != armed_frame_deadline_)
   {
@@ -423,6 +428,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
   auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
+    // Project editor and viewport chrome before geometry: reserved new-output/modal rows must participate in
+    // the same layout that will be painted.
     presentation_.publish_composer(draft_state_);
     // Publish viewport chrome before freeze/sync/clamp so the N-new reserved row
     // participates in geometry even when the prior stream update was not painted.
@@ -446,6 +453,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
     auto const synchronized_detached_viewport = transcript_.has_deferred_update() && !freeze_detached_viewport;
     if (synchronized_detached_viewport)
       synchronize_detached_transcript_layout();
+    // Clamp independent surfaces after deciding which transcript authority can remain frozen; none may reuse an
+    // offset beyond current geometry.
     presentation_.publish_sidebar_drawer(snapshot.sidebar_drawer_visible,
                                          std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(frontend_, snapshot)));
     if (snapshot.command_output)
@@ -474,6 +483,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
       detail::refresh_transcript_layout_cache(transcript_layout_cache_, snapshot.transcript, snapshot.transcript_generation, width, snapshot.tool_presentation,
                                               snapshot.thinking_visible, compact, detail::active_mermaid_projection(snapshot));
     }
+    // Resolve selection against the chosen drawn authority only after modal precedence and geometry are
+    // settled, then emit one consistent frame.
     auto const selection_projection = selection_blocked          ? TranscriptSelectionProjection::Suppressed
                                       : freeze_detached_viewport ? TranscriptSelectionProjection::Frozen
                                                                  : TranscriptSelectionProjection::Live;
@@ -510,6 +521,8 @@ bool RuntimeRenderer::paint_ready_frame()
   auto const freeze_transcript_layout = !std::exchange(pending_thaw_, false);
   frame_timer_.cancel();
   armed_frame_deadline_.reset();
+  // Consume timer/deadline state before terminal output so a later invalidation starts a fresh pending frame;
+  // then latch failure and reconcile remaining timers.
   auto const succeeded = paint(*kind, freeze_transcript_layout);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
   synchronize_timers();

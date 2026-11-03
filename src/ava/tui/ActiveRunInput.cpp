@@ -58,6 +58,8 @@ ActiveRunInput::ActiveRunInput(TuiFrontEnd& frontend, RuntimePresentationState& 
       run_(run),
       command_output_(output),
       terminal_context_(terminal_context),
+      // Bind modal/surface capture before ordinary edits. Submit precedes the final
+      // Space fallback, and previous navigation precedes next when user bindings collide.
       dispatcher_({std::bind_front(&ActiveRunInput::handle_modal_input, this), std::bind_front(&ActiveRunInput::handle_surface_input, this),
                    std::bind_front(&ActiveRunInput::handle_preemptive_input, this), std::bind_front(&ActiveRunInput::handle_completion_acceptance, this),
                    std::bind_front(&ActiveRunInput::handle_active_command_input, this), std::bind_front(&ActiveRunInput::handle_composer_edit, this),
@@ -153,6 +155,8 @@ std::optional<bool> ActiveRunInput::run_active_command()
 {
   auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
+  // Handle view-only commands locally while the worker remains owned by ActiveRun;
+  // reset drafts only along the branch that accepted the local command.
   if (draft.text == "/sidebar")
   {
     draft_state_.record_submission(draft.text);
@@ -278,6 +282,8 @@ std::optional<bool> ActiveRunInput::run_active_command()
     draft_state_.reset_local_command();
     return renderer_.request_render();
   }
+  // Other active commands require the backend queue capability plus completion
+  // gating. Unrecognized text remains available for the queue/submission decision.
   auto const dispatch = run_.dispatch_command(completion_snapshot(), submitted_command);
   if (dispatch.kind == TuiActiveNonblockingCommandDispatchKind::Unrecognized)
     return std::nullopt;
@@ -322,6 +328,8 @@ bool ActiveRunInput::queue_active_draft(bool follow_up_only)
   {
     return restore_latest_queued_message();
   }
+  // Only an explicit steering prefix may turn command-looking text into queue text.
+  // Keep all rejected drafts intact so the user can edit or submit them between runs.
   auto const steering_prefix = std::string_view("/steer ");
   bool const steering_draft = !follow_up_only && draft.text.starts_with(steering_prefix);
   if ((draft.text.starts_with('/') || shell_helper_submission(draft.text)) && !steering_draft)
@@ -332,12 +340,15 @@ bool ActiveRunInput::queue_active_draft(bool follow_up_only)
   auto queued_text = expanded_composer_draft_text(draft);
   if (!run_.queue_message(steering_draft ? queued_text.substr(steering_prefix.size()) : queued_text, steering_draft))
     return renderer_.request_render();
+  // Backend acceptance is the commit point for history and editor reset.
   draft_state_.record_submission(queued_text);
   draft_state_.reset_after_queue();
   presentation_state_.publish_status(steering_draft ? "steering queued" : "follow-up queued");
   return renderer_.request_render();
 }
 
+// Pure TUI selection policy: dismiss the nearest active selection before allowing
+// Cancel to reach worker-stop authority.
 detail::ActiveRunCancelDisposition detail::active_run_cancel_disposition(bool has_draft_selection, bool has_transcript_selection) noexcept
 {
   if (has_draft_selection)
@@ -347,14 +358,16 @@ detail::ActiveRunCancelDisposition detail::active_run_cancel_disposition(bool ha
   return ActiveRunCancelDisposition::RequestStop;
 }
 
-// Sidebar drawer, jump mode, cancel/copy/interrupt/exit, character/selection
-// and CtrlHome/CtrlEnd. These preempt all draft, completion, and view input.
+// TUI input precedence keeps current selection/jump ownership ahead of run stop
+// and ordinary edits. These keys must not fall through to completion or queues.
 TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
   auto const& draft = draft_state_.draft();
 
+  // A drawer or armed character jump consumes its input before global cancel/edit
+  // keys. An unrelated key disarms jump and continues through the normal precedence.
   if (auto handled = navigation_.handle_sidebar_drawer_input(active_event))
     return render_outcome(*handled);
   if (draft_state_.jump_mode() != ComposerJumpMode::None)
@@ -406,6 +419,8 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
     static_cast<void>(renderer_.copy_transcript_selection());
     return render_outcome(renderer_.request_render());
   }
+  // A nonempty draft gives Interrupt a local clear operation. Only an empty draft
+  // requests session close; Ctrl+D retains its delete behavior when text exists.
   if (is_action(active_event, TuiAction::Interrupt))
   {
     if (!draft.text.empty())
@@ -442,13 +457,16 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
   return TuiInputOutcome::Pass;
 }
 
-// Slash, file-reference, path-forced and open-selection autocomplete acceptance.
+// TUI completion accepts one enabled candidate without submitting it. Palette
+// priority follows the visible surface so a key cannot act on a hidden candidate.
 TuiInputOutcome ActiveRunInput::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
+  // Accept only an enabled candidate in the first visible palette. Completion edits
+  // the draft; the later Submit stage decides whether it can be queued or executed.
   if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.slash_palette_active())
   {
     draft_state_.select_completion(clamp_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()));
@@ -500,12 +518,14 @@ TuiInputOutcome ActiveRunInput::handle_completion_acceptance(runtime_input::Runt
   return TuiInputOutcome::Pass;
 }
 
-// Restore, nonblocking command, disabled-completion rejection, steering/follow-up
-// queue, NewLine/editor/suspend/image/dequeue/jump/submit.
+// TUI editor handoffs and local commands precede queue submission. Retain the
+// draft until the selected action or backend queue has actually accepted it.
 TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
 
+  // Newline/editor actions capture matching bindings before Submit, so editor
+  // operations cannot accidentally enqueue text when user bindings overlap.
   if (is_action(active_event, TuiAction::NewLine))
   {
     draft_state_.insert_newline();
@@ -538,6 +558,8 @@ TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::Runti
     renderer_.clear_transcript_selection();
     return render_outcome(queue_active_draft(true));
   }
+  // Reject disabled visible choices before interpreting Enter or dispatching commands.
+  // Backslash-Enter remains an edit; accepted local commands never enter the queue.
   if (is_action(active_event, TuiAction::Submit))
   {
     if (auto handled = reject_disabled_visible_completion())
@@ -552,13 +574,16 @@ TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::Runti
   return TuiInputOutcome::Pass;
 }
 
-// Composer edit/delete/cursor/undo/redo/yank.
+// TUI edits share Composer policy while retaining active-turn reset behavior
+// and the earlier Interrupt/Exit decisions.
 TuiInputOutcome ActiveRunInput::handle_composer_edit(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
   bool const active_ctrl_d_delete_forward =
       active_event.key == Key::CtrlD && is_action(active_event, TuiAction::DeleteForward) && !draft_state_.draft().text.empty();
+  // Use the ordered action list to break configurable binding collisions. Ctrl+D
+  // is an edit only with text; the earlier exit stage handles its empty-draft meaning.
   for (auto const action :
        {TuiAction::DeleteBackward, TuiAction::DeleteForward, TuiAction::DeleteWordBackward, TuiAction::DeleteWordForward, TuiAction::DeleteToLineStart,
         TuiAction::DeleteToLineEnd, TuiAction::ClearInput, TuiAction::CursorLeft, TuiAction::CursorRight, TuiAction::CursorLineStart, TuiAction::CursorLineEnd,
@@ -572,12 +597,15 @@ TuiInputOutcome ActiveRunInput::handle_composer_edit(runtime_input::RuntimeInput
   return TuiInputOutcome::Pass;
 }
 
-// Transcript/palette/history/vertical navigation in exact original order.
+// TUI Previous navigation gives explicit transcript actions priority, then
+// visible completion and history, before fallback cursor behavior.
 TuiInputOutcome ActiveRunInput::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto const& snapshot = completion_snapshot();
 
+  // Explicit transcript navigation wins before palette/history actions; this keeps
+  // custom binding collisions from mutating the draft when a view action matched.
   if (is_action(active_event, TuiAction::TranscriptHalfPageUp))
   {
     navigation_.scroll_up(navigation_.transcript_page_size());
@@ -613,6 +641,8 @@ TuiInputOutcome ActiveRunInput::handle_navigation_input(runtime_input::RuntimeIn
     navigation_.jump_to_bottom("live tail");
     return render_outcome(renderer_.request_render());
   }
+  // A visible palette owns Previous before history; unavailable history falls back
+  // to transcript scrolling, then cursor motion gets its final chance.
   if (is_action(active_event, TuiAction::PalettePrev) &&
       apply_composer_result(draft_state_.step_completion(CompletionStep::Previous, renderer_.completion_cache(), snapshot)))
     return render_outcome(renderer_.request_render());
@@ -638,12 +668,15 @@ TuiInputOutcome ActiveRunInput::handle_navigation_input(runtime_input::RuntimeIn
   return TuiInputOutcome::Pass;
 }
 
-// Palette-next/history-next/arrow-down/cursor-down navigation in exact original order.
+// TUI Next navigation follows Previous so overlapping user bindings keep the
+// same winner across palette, history and transcript views.
 TuiInputOutcome ActiveRunInput::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto const& snapshot = completion_snapshot();
 
+  // This stage follows all Previous bindings. Within Next, palette then history
+  // own input before fallback scrolling and vertical cursor motion.
   if (is_action(active_event, TuiAction::PaletteNext) &&
       apply_composer_result(draft_state_.step_completion(CompletionStep::Next, renderer_.completion_cache(), snapshot)))
     return render_outcome(renderer_.request_render());
@@ -669,7 +702,8 @@ TuiInputOutcome ActiveRunInput::handle_navigation_next_input(runtime_input::Runt
   return TuiInputOutcome::Pass;
 }
 
-// Mouse hit-testing/wheel.
+// TUI pointer dispatch chooses one visible hit target; selection drags remain
+// with their owning view instead of activating unrelated controls.
 TuiInputOutcome ActiveRunInput::handle_mouse_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
@@ -681,6 +715,8 @@ TuiInputOutcome ActiveRunInput::handle_mouse_input(runtime_input::RuntimeInput c
       active_event.key == Key::MouseLeftRelease || active_event.key == Key::MousePointerCancel)
   {
     auto const begins_click = active_event.key == Key::MouseLeftPress || active_event.key == Key::MouseLeftClick;
+    // Palette hit targets precede transcript/editor selection; accepted candidates
+    // use pointer-origin reset rules and do not submit the resulting text.
     if (begins_click)
     {
       if (auto const clicked = slash_palette_selection_for_screen_position(snapshot, active_event.mouse_row, active_event.mouse_column))
@@ -736,6 +772,8 @@ TuiInputOutcome ActiveRunInput::handle_mouse_input(runtime_input::RuntimeInput c
       }
     }
 
+    // After palette misses, transcript selection and detail toggles get first refusal.
+    // Only their ignored events may start or extend a draft selection.
     auto const transcript_mouse =
         renderer_.handle_transcript_selection_mouse(active_event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, &navigation_),
                                                     std::bind_front(&RuntimeNavigationController::toggle_thinking_at, &navigation_));
@@ -777,12 +815,15 @@ TuiInputOutcome ActiveRunInput::handle_mouse_input(runtime_input::RuntimeInput c
   return TuiInputOutcome::Pass;
 }
 
-// Active-run restricted toggles/model actions and Space fallback.
+// TUI display toggles can act during a worker run; backend configuration actions
+// stay deferred. Space reaches the editor only after higher-priority bindings.
 TuiInputOutcome ActiveRunInput::handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
   auto const& snapshot = presentation_state_.screen();
 
+  // Display changes are safe during work; backend model/reasoning changes receive
+  // status feedback and remain deferred until a later turn.
   if (is_action(active_event, TuiAction::DetailsToggle))
   {
     renderer_.synchronize_detached_transcript_layout();
@@ -825,6 +866,8 @@ TuiInputOutcome ActiveRunInput::handle_restricted_toggle_input(runtime_input::Ru
     presentation_state_.publish_status("queued-message restore is available during active runs");
     return render_outcome(renderer_.request_render());
   }
+  // Space is ordinary text only after all configured actions, including Submit,
+  // have declined it; moving this earlier changes overlapping bindings.
   if (active_event.key == terminal::Key::Space)
   {
     presentation_state_.clear_local_feedback();

@@ -1,3 +1,4 @@
+// Implements registry-safe timer dispatch and the final wait stage of a TUI turn.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "TuiWaitState.h"
@@ -75,6 +76,8 @@ void TuiEventLoop::service_due(Clock::time_point now)
   servicing_due_ = true;
   try
   {
+    // Fix this pass's eligible work before invoking clients: callbacks can add,
+    // remove or reschedule timers, and newly armed work belongs to a later pass.
     std::vector<std::pair<std::uint64_t, std::uint64_t>> due;
     due.reserve(timers_.size());
     for (auto const& [id, timer] : timers_)
@@ -88,6 +91,8 @@ void TuiEventLoop::service_due(Clock::time_point now)
         break;
       TuiTimerRegistration::Callback callback;
       {
+        // Re-find by ID and generation because an earlier callback may have
+        // invalidated this entry even though it was due when the pass began.
         auto timer = timers_.find(id);
         if (timer == timers_.end() || timer->second.generation() != generation || !timer->second.due(now))
           continue;
@@ -100,6 +105,8 @@ void TuiEventLoop::service_due(Clock::time_point now)
   }
   catch (...)
   {
+    // A throwing callback must not leave the loop permanently marked as inside
+    // dispatch if the session catches the exception and performs cleanup.
     servicing_due_ = false;
     throw;
   }
@@ -125,9 +132,13 @@ void TuiEventLoop::wait(TuiWaitMode mode)
 
   std::optional<Clock::time_point> deadline;
   if (mode == TuiWaitMode::ReadyOnly)
+    // Even a runnable turn collects readiness so hangup/error and notification
+    // consumption follow the same path as a sleeping turn.
     deadline = Clock::now();
   else
   {
+    // Only armed registrations constrain sleep. Their callbacks run next turn,
+    // after composition's control stage, rather than inside this OS wait.
     for (auto const& [id, timer] : timers_)
     {
       auto const next = timer.deadline();
@@ -135,6 +146,8 @@ void TuiEventLoop::wait(TuiWaitMode mode)
         deadline = next;
     }
   }
+  // wait consumes coalesced notification bits, not the producer payloads. The
+  // next turn must revisit every application mailbox regardless of wake reason.
   wait_state_->wait(deadline);
 }
 

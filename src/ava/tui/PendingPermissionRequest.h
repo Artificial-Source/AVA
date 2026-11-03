@@ -12,7 +12,9 @@ inline ava::core::Result<ava::permissions::PermissionResolutionDecision> interru
   return ava::permissions::PermissionResolution::Deny;
 }
 
-// Shared by the resolver and coordinator; see PendingRequest for claim lifetime.
+// Resolver worker and TUI coordinator share this request specialization. Denial
+// is prepared before admission; a claimed permission keeps its worker blocked
+// until callbacks retire, even after cancellation. See PendingRequest.
 using PendingPermissionRequest =
     PendingRequest<ava::permissions::PermissionPrompt, ava::permissions::PermissionResolutionDecision, interrupted_permission_result>;
 

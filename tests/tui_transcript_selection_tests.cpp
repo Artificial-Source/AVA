@@ -72,6 +72,7 @@ void change_transcript(ava::tui::RuntimePresentationState& presentation, Change&
   presentation.publish_transcript(std::move(transcript));
 }
 
+// Route fixture mouse input through the real selection owner with a caller-controlled clock and viewport shift.
 template <typename ToggleTool, typename ToggleThinking>
 ava::tui::TranscriptSelectionMouseResult handle(
     ava::tui::RuntimeTranscriptSelectionState& state, ava::tui::InputEvent const& event, ava::tui::RuntimePresentationState& presentation,
@@ -84,6 +85,7 @@ ava::tui::TranscriptSelectionMouseResult handle(
 
 }  // namespace
 
+// Run pointer selection and copy regressions against published transcript generations.
 void run_tui_transcript_selection_tests()
 {
   tui_test_support::TuiFrontEndFixture frontend;

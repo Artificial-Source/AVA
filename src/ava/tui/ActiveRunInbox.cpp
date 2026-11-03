@@ -1,3 +1,4 @@
+// Serializes worker publication and TUI drainage without sharing presentation state.
 #include "sys.h"
 #include "ActiveRunInbox.h"
 
@@ -48,6 +49,8 @@ ava::core::VoidResult ActiveRunInbox::follow_up_started(FollowUpStarted const& o
     context_.request_id = request_id;
     context_.correlation_id = std::move(request_id);
   }
+  // Invoke outside mutex_: backend receipt publication can reenter this inbox.
+  // The context update above must precede all events emitted by that callback.
   return original ? original(follow_up) : ava::core::VoidResult{};
 }
 
@@ -60,6 +63,8 @@ ava::core::VoidResult ActiveRunInbox::enqueue_event(ava::event::RuntimeEvent con
     if (auto queued = events_.enqueue(event, context_); !queued)
       return queued;
   }
+  // The event is visible before the wake; waking while still constructing it could
+  // let the TUI find no work and return to sleep.
   wakeup_.notify();
   return {};
 }
@@ -139,6 +144,8 @@ void ActiveRunInbox::publish_terminal(ActiveRunTerminal terminal)
       return;
     terminal_.emplace<ActiveRunTerminal>(std::move(terminal));
   }
+  // The locked terminal transition precedes readiness notification. No payload or
+  // backend callback scope may still need the TUI before its immediate join.
   wakeup_.notify();
 }
 
@@ -149,6 +156,8 @@ std::optional<ActiveRunTerminal> ActiveRunInbox::take_terminal()
   if (!ready)
     return std::nullopt;
   auto result = std::move(*ready);
+  // Keep historical admission closed after moving out the value; an empty variant
+  // would incorrectly allow a second terminal publication.
   terminal_.emplace<TerminalHistory>(TerminalHistory::Consumed);
   return result;
 }

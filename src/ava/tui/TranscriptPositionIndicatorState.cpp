@@ -1,3 +1,4 @@
+// Tracks the indicator deadline without owning a timer; RuntimeRenderer schedules the wake.
 // Implements the transcript indicator deadline used by the renderer timer.
 #include "sys.h"
 #include "TranscriptPositionIndicatorState.h"

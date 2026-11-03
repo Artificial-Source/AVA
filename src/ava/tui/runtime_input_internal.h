@@ -1,3 +1,5 @@
+// Defines owned decoded input and the polling seam between terminal decoding and
+// TuiSession's input budget, including replay of input captured during startup.
 #pragma once
 
 #include "ava/tui/terminal.h"
@@ -15,56 +17,97 @@ class Context;
 
 namespace ava::tui::runtime_input {
 
+// Value owned by the startup queue, a polling result or the current TUI turn and
+// borrowed by feature handlers only during dispatch. Built and consumed on the
+// TUI thread; its strings own their storage, so no terminal buffer must outlive it.
+// Resize and bracketed-paste flags preserve events that lack an ordinary key.
 struct RuntimeInput
 {
+  // Decoder-provided key/mouse metadata used by modal dispatch on the TUI thread;
+  // Character and Space include text for handlers that consume only InputEvent.
   InputEvent event;
+  // Owned UTF-8 insertion payload set by the decoder and read by the composer on
+  // the TUI thread; NoLogString keeps user input out of generated debug output.
   ava::core::NoLogString text;
+  // Decoder sets this for one assembled paste; TUI handlers preserve its atomic
+  // insertion semantics and avoid treating its first character as a jump command.
   bool bracketed_paste = false;
+  // Decoder marks terminal resize even with an Unknown key; TUI composition must
+  // retain it as actionable work rather than discard it as an unsupported key.
   bool resize = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// TUI input stage: borrow an event and copy its first printable character for a
+// jump command. Reject paste, control keys and incomplete/ill-shaped byte sequences;
+// the returned bytes own their storage and perform no terminal read.
 [[nodiscard]] std::optional<std::string> printable_jump_target(RuntimeInput const& input);
+// TUI thread with an initialized Application terminal: consume startup replay first,
+// then decode using the current terminal timeout. Unknown conflates no input with
+// discarded input here; event-loop drainage uses poll_curses_input instead.
 [[nodiscard]] RuntimeInput read_curses_input();
-// Polling distinguishes a consumed protocol reply from an empty native queue.
-// TuiSession counts discarded replies against its input budget and keeps draining.
+// TUI poll classification keeps consumed protocol replies distinct from native
+// emptiness, so TuiSession charges discarded replies to its budget and keeps draining.
 enum class InputPollKind
 {
-  Empty,      // No native/startup input remains; the loop may wait.
-  Discarded,  // A protocol reply or unsupported key was consumed; poll again.
-  Input       // The decoded event belongs to the next dispatch stage.
+  // No startup item and native read returned ERR (empty/timeout/read failure);
+  // another source may still require a runnable turn before composition can wait.
+  Empty,
+  // Consumed a protocol reply or unsupported key; charge the input budget and poll again.
+  Discarded,
+  // Owns an actionable decoded event; composition may dispatch it before polling again.
+  Input
 };
 
-// Returned by value on the TUI thread. input is meaningful only for Input.
+// Value returned to TuiSession on the TUI thread; it owns its payload independently
+// of ncurses. Only Input makes input meaningful, while Empty and Discarded guide
+// drainage without dispatch. Destruction requires no terminal or decoder lifetime.
 struct InputPollResult
 {
-  InputPollKind kind = InputPollKind::Empty;  // Decoder outcome for this read.
-  RuntimeInput input{};                       // Owned event; no terminal buffer is borrowed.
+  // Poller sets this on the TUI thread; composition tests it before touching input
+  // so a discarded key cannot masquerade as evidence that buffered input is exhausted.
+  InputPollKind kind = InputPollKind::Empty;
+  // Poller moves an owned event here only for Input; TUI dispatch borrows it until
+  // the result is destroyed, and may copy it when a later stage must retain it.
+  RuntimeInput input{};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// TUI thread only. Performs one bounded decode without waiting for an initial key.
-// Escape/paste assembly retains its existing timeout after the first byte arrives.
+// TUI thread with an initialized Application terminal: take startup replay first,
+// otherwise decode without waiting for an initial key. Restore the previous timeout
+// before returning. Escape/paste assembly may still wait after the first byte; poll
+// again after Discarded and apply the turn budget before deciding to block.
 [[nodiscard]] InputPollResult poll_curses_input();
+// TUI thread with an initialized Application terminal: take replay first or apply
+// timeout to the initial read, restoring the prior setting on return. Return no value
+// for both discarded and absent input; escape/paste continuation has its own timeout.
 [[nodiscard]] std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout);
 
-// Session-scoped startup probe queue: complete RuntimeInput events observed while
-// draining the OSC 11 background query are preserved here and drained before any
-// later blocking or polling read. Cap is 64 events.
+// TUI thread at the session boundary before collecting new startup input: discard
+// the process-static replay queue so a later session cannot inherit old events.
 void clear_startup_input_queue();
+// TUI thread: inspect preserved startup events without consuming them; capacity is
+// 64 and no producer thread may read or mutate this unsynchronized queue.
 [[nodiscard]] std::size_t startup_input_queue_size();
+// TUI thread after decoding an actionable startup event: move it into FIFO replay
+// for later normal reads. False means capacity is full and the passed event was not saved.
 [[nodiscard]] bool enqueue_startup_input(RuntimeInput input);
-// Raw terminal read path used by the startup probe. Does not drain the startup queue.
+// TUI startup probe with an initialized Application terminal: bypass startup replay
+// to avoid consuming and re-enqueueing it. Unknown means absent or discarded native input.
 [[nodiscard]] RuntimeInput read_curses_input_from_terminal();
-// Deterministic Context seam for canonical startup-buffer replay tests.
+// TUI thread with a live initialized Context: decode through that Context's canonical
+// replay/native reader using its current timeout, bypassing this module's startup
+// queue. The Context is borrowed only for the call; the returned event owns its text.
 [[nodiscard]] RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context);
-// Drain ncurses input for up to `deadline`, enqueueing complete non-discard events.
-// Escape assembly begun at the deadline edge may still use its ordinary 50 ms budget.
-// A bracketed paste already begun may finish under its ordinary 1 s cap so the paste
-// stays atomic. Stops early if the queue reaches capacity (remaining unread input is
-// left for later normal reads).
+// TUI startup probe with an initialized terminal: preserve complete events while
+// consuming protocol replies until the requested duration elapses or 64 events are
+// queued. Check the deadline between decodes; a decode already started can overrun it.
+// Escape continuation uses config::default_terminal_escape_delay_ms (100 ms) per
+// native read, in addition to ncurses ESCDELAY; paste uses a 1 s per-read timeout.
+// These are not whole-operation time limits. Restore scoped timeouts and leave
+// unread input for normal polling when capacity or the outer deadline is reached.
 void drain_startup_probe_input(std::chrono::milliseconds deadline);
 
 }  // namespace ava::tui::runtime_input

@@ -6,6 +6,8 @@
 namespace ava::tui {
 // A TUI-thread value returned after settlement or shutdown. Named operations
 // preserve simultaneous signal and I/O failures without positional bool arguments.
+// ActiveRun creates the value and TuiSession consumes it after worker retirement.
+// It owns no resources; copies require no lifetime coordination beyond TUI dispatch.
 class ActiveRunOutcome final
 {
  public:

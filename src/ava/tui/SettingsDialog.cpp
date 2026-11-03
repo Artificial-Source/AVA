@@ -1,3 +1,5 @@
+// Keeps Settings navigation and reversible display previews in one TUI owner.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SettingsDialog.h"
@@ -112,6 +114,8 @@ void SettingsDialog::preview_highlight()
     presentation_state_.publish_display_preview(navigation_.preview);
     return;
   }
+  // Only supported Display actions produce an overlay. A non-previewable row cancels
+  // the prior highlight so it cannot leave unrelated display values staged.
   auto const& item = selectors_.view()->items[index];
   if (auto overlay = runtime_views::settings_preview_overlay_for_action(item.value, presentation_state_.screen()))
     navigation_.preview.update(std::move(*overlay));
@@ -167,6 +171,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
 {
   using namespace runtime_views;
 
+  // Copy action and navigation before rebuilding/closing can invalidate row storage.
+  // The enabled check below uses the pointer only on paths that have not replaced it.
   auto const* selected_item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = selected_item ? selected_item->value : std::string{};
   auto const current_query = input.query;
@@ -182,6 +188,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     rebuild(*section);
     presentation_state_.publish_status("settings section opened");
   }
+  // A cross-feature request retires the preview first. Session receives a typed request
+  // or owned DraftCommand, so it does not infer behavior from command spelling.
   else if (selected_value == kSettingsOpenModels)
   {
     close();
@@ -251,6 +259,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     presentation_state_.publish_status("settings action unavailable from this row");
     terminal_context_.beep();
   }
+  // A preview is temporary presentation only. Restore its baseline before the app
+  // persists the confirmed action, then adopt the returned settings as the new baseline.
   else if (navigation_.in_display())
   {
     auto const confirm_token = selected_value;
@@ -335,6 +345,8 @@ void SettingsDialog::rebase_after_display_reload()
     if (navigation_.preview.overlay && !navigation_.preview.overlay->action_token.empty())
       staged_overlay_action = navigation_.preview.overlay->action_token;
 
+    // The reload already hydrated authoritative values. Rebase first, then rebuild rows
+    // and align the overlay with the restored action identity before Session paints.
     presentation_state_.reapply_display_preview(navigation_.preview);
     if (navigation_.in_display() && selectors_.view())
     {

@@ -1,3 +1,5 @@
+// Coordinates selector policy around the single published selector view.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
 #include "runtime_state_internal.h"
@@ -30,7 +32,9 @@ enum class SelectorDispatchRequest
   Beep, // The feature already published the reason; Session emits the bell.
 };
 
-// Owned handoff values survive selector replacement; no row or string view escapes.
+// SelectorHost returns this owned value to Session on the TUI thread. It survives
+// selector replacement because no row or string view escapes; its request determines
+// which payload fields apply. Destruction releases only the copied handoff data.
 struct SelectorDispatchResult
 {
   // Session performs only the requested cross-owner transition.
@@ -47,14 +51,19 @@ struct SelectorDispatchResult
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Owns selector changes on the TUI thread. The session snapshot supplies the
-// single view storage and outlives this host; readers borrow that view as const.
-// No second row vector is copied into the renderer when selection changes.
+// Session owns this TUI-thread coordinator of selector policy and publication.
+// Presentation outlives it and holds the single view; renderer and feature owners
+// borrow that view as const. Named publications keep kind and view in step within
+// each dispatch. No UI mutex or worker accesses this state. Destruction is local
+// after borrowers retire; feature owners separately undo any temporary previews.
 class SelectorHost final
 {
  public:
+  // TUI thread: borrow presentation and begin with no published selector.
   explicit SelectorHost(RuntimePresentationState& presentation);
+  // A copied host could disagree about the kind of the one published view.
   SelectorHost(SelectorHost const&) = delete;
+  // Keep the host identity stable for controllers that borrow it.
   SelectorHost& operator=(SelectorHost const&) = delete;
 
   // TUI thread: synchronize feature policy, classify one input, and route it to
@@ -63,17 +72,29 @@ class SelectorHost final
   [[nodiscard]] SelectorDispatchResult dispatch(runtime_input::RuntimeInput const& input, SelectorInputController& classifier, SettingsDialog& settings,
                                                 SessionSelector& sessions);
 
+  // TUI thread: choose the feature policy corresponding to the currently published view.
   [[nodiscard]] ActiveSelectList kind() const noexcept;
+  // TUI thread: borrow the sole projection; any host mutation may invalidate its rows.
   [[nodiscard]] std::optional<SelectListView> const& view() const noexcept;
-  // Borrowed items expire at the next selector mutation.
+  // TUI thread: borrow a source row by index, or return null for absent/out-of-range
+  // rows. The pointer expires at the next selector mutation or host destruction.
   [[nodiscard]] SelectListItemView const* selected_item(std::size_t index) const noexcept;
+  // TUI thread: copy enabled identities matching a prospective query for bulk model actions.
   [[nodiscard]] std::vector<std::string> visible_values(std::string const& query) const;
 
+  // TUI thread: replace kind and view within one dispatch; callers must retire
+  // any previous feature preview before another owner observes the replacement.
   void open(ActiveSelectList kind, SelectListView view);
+  // TUI thread: replace rows for an already open kind; all previous row borrows expire.
   void replace(SelectListView view);
+  // TUI thread: retain query and reselect the old row by value, then clamp to valid results.
   void replace_preserving_selection(SelectListView view, std::size_t selected_index, std::string query);
+  // TUI thread: retire the published view and kind. Feature-specific preview cleanup
+  // belongs to the caller; close alone does not notify a previous feature owner.
   void close();
+  // TUI thread: publish selection/query for an open view without copying its row vector.
   void update_selection(std::size_t index, std::string query);
+  // TUI thread: publish operation feedback into open selector chrome; closed views ignore it.
   void set_subtitle(std::string subtitle);
   // TUI thread only. Keep unchanged search rows, replace the changed suffix, and
   // publish selection/chrome together. No borrowed row survives this mutation.
@@ -85,7 +106,9 @@ class SelectorHost final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Session-owned sole view storage; outlives this host and is mutated through named publications.
   RuntimePresentationState& presentation_;
+  // TUI-thread discriminator changed with open/close; None accompanies an absent view.
   ActiveSelectList kind_ = ActiveSelectList::None;
 };
 

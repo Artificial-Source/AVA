@@ -1,3 +1,4 @@
+// Implements TUI-thread viewport transitions while preserving the layout authority used for selection.
 #include "sys.h"
 #include "TranscriptView.h"
 #include "runtime_state_internal.h"
@@ -129,6 +130,8 @@ void TranscriptView::synchronize_deferred(detail::TranscriptLayoutCache const& l
     presentation_.publish_transcript_chrome(presentation_.screen().transcript_scroll_offset, 0);
     return;
   }
+  // Restore viewport and selection with the same accumulated eviction shift before releasing the first detached
+  // anchor.
   auto const deferred = *deferred_viewport_;
   restore_layout_anchor(deferred.anchor(), layout, maximum, deferred.item_index_shift());
   if (scroll_offset_ == 0)
@@ -201,6 +204,8 @@ void TranscriptView::publish_selection(detail::TranscriptLayoutCache const& layo
     selection_.clear();
     pending_live_selection_item_index_shift_ = 0;
   }
+  // Only live authority consumes live eviction debt; a frozen paint keeps endpoints bound to the rows the user
+  // actually saw.
   if (!selection_.empty())
   {
     if (projection == TranscriptSelectionProjection::Live && pending_live_selection_item_index_shift_ != 0)

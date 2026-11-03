@@ -1,3 +1,5 @@
+// Keeps staged attachment references paired with their draft badges.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "PendingAttachments.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -12,6 +14,8 @@ PendingAttachments::PendingAttachments(RuntimePresentationState& presentation) :
 
 void PendingAttachments::stage(ava::session::ImageAttachmentRef reference, PendingAttachmentItem badge)
 {
+  // Store the submission reference first, then roll it back if badge publication fails.
+  // The TUI thread cannot observe a partial pair between these synchronous steps.
   references_.push_back(std::move(reference));
   try
   {
@@ -26,6 +30,8 @@ void PendingAttachments::stage(ava::session::ImageAttachmentRef reference, Pendi
 
 std::vector<ava::session::ImageAttachmentRef> PendingAttachments::take()
 {
+  // Remove the submission payload before clearing its badges so the next draft cannot
+  // resubmit references already transferred to the caller.
   auto references = std::exchange(references_, {});
   presentation_.clear_attachment_badges();
   return references;

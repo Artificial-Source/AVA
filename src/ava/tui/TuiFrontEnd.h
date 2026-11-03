@@ -1,3 +1,4 @@
+// Application boundary and startup owner for the TUI session architecture.
 #pragma once
 
 #include "composer.h"                   // StartupOverviewSnapshot
@@ -12,14 +13,26 @@ namespace ava::tui {
 
 struct TuiRuntimeOptions;
 
+// The application owns the concrete frontend; interactive calls run on the TUI thread.
+// run() owns one TuiSession; that session and its joined submission worker must
+// finish before the frontend is destroyed. Presentation owners request backend
+// work through these virtual operations instead of borrowing backend storage.
+// Unless stated otherwise, calls are synchronous on the TUI thread. Arguments
+// are borrowed for the call; implementations must copy any data retained for
+// asynchronous work. Returned DTOs own their presentation data. See
+// docs/engineering/tui-architecture.md for the session and worker lifetimes.
 class TuiFrontEnd : public frontend::FrontEnd
 {
  protected:
+  // TUI-thread effective bindings, initialized at construction and replaced by validated reloads.
   TuiKeyBindings key_bindings_;
+  // Startup presentation/capabilities owned by this frontend; session hydration copies needed values.
   TuiRuntimeOptions options_;
 
  protected:
   // Construct startup presentation state for one derived application frontend.
+  // Construct before a session borrows this owner; terminal initialization
+  // happens later in run(), so construction performs no curses work.
   TuiFrontEnd(TuiRuntimeOptions&& options) : key_bindings_(default_key_bindings()), options_(std::move(options)) { }
 
   // Load display settings and append any recoverable startup failure to status_line.
@@ -34,21 +47,23 @@ class TuiFrontEnd : public frontend::FrontEnd
   // operations without gaining protected-member access. The application
   // implementations retain validation and backend authority.
 
-  // Return the notification bridge while the application-owned renderer is alive.
+  // Return producer endpoints for diagram work while the application renderer is alive.
+  // TUI thread: the application renderer must outlive every copied bridge
+  // callback; UI notifier retirement alone does not destroy its worker.
   virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;
 
   // Toggle the committed Build/Plan mode or return the command error.
   virtual core::VoidResult on_toggle_mode() const = 0;
 
-  // Advance session sort and return the refreshed selector projection.
+  // TUI thread: update application-owned sort preferences before rebuilding selector rows.
   virtual SelectListView on_session_selector_sort_cycle() = 0;
-  // Toggle named-only filtering and return the refreshed selector projection.
+  // TUI thread: change catalog filtering before publishing the replacement selector rows.
   virtual SelectListView on_session_selector_named_filter_toggle() = 0;
-  // Toggle path display and return the refreshed selector projection.
+  // TUI thread: rebuild row labels from the new path-display preference, retaining backend row identity.
   virtual SelectListView on_session_selector_path_display_toggle() = 0;
-  // Toggle archived filtering and return the refreshed selector projection.
+  // TUI thread: rebuild the catalog projection after changing which archived sessions are visible.
   virtual SelectListView on_session_selector_archived_filter_toggle() = 0;
-  // Toggle label timestamps and return the refreshed selector projection.
+  // TUI thread: rebuild row labels after changing timestamp visibility without changing session identity.
   virtual SelectListView on_session_selector_label_timestamp_toggle() = 0;
   // Archive session_id and return the refreshed selector, or a command/catalog error.
   virtual core::Result<SelectListView> on_session_selector_archive(std::string_view session_id) = 0;
@@ -60,7 +75,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<std::string> on_session_selector_branch_child(std::string_view session_id) = 0;
   // Prepare a summary for session_id and return its path-free operation snapshot.
   virtual core::Result<TuiBranchSummarySnapshot> on_branch_summary_prepare(std::string_view session_id) const = 0;
-  // Read the current path-free branch-summary operation snapshot.
+  // TUI thread: read the application operation without joining its worker; the returned value is a presentation copy.
   virtual TuiBranchSummarySnapshot branch_summary_snapshot() const = 0;
   // Confirm generation; false means it was not confirmable and errors preserve backend detail boundaries.
   virtual core::Result<bool> on_branch_summary_confirm(std::uint64_t generation) const = 0;
@@ -95,25 +110,24 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<std::string> on_session_selected(std::string_view value) = 0;
 
  private:
-  // Load key bindings for startup and return an empty string or the formatted load error.
+  // TUI thread before session construction: load effective bindings so all owners
+  // see one validated map; retain default bindings and return feedback on failure.
   std::string load_key_bindings();
-  // Run the internal composer loop; only run() exposes this operation to callers.
-  [[nodiscard]] int run_interactive_composer();
 
  public:
-  // Return a value snapshot of current application-owned display settings.
+  // TUI thread: copy effective settings for preview staging; changing the copy cannot persist configuration.
   virtual TuiLocalDisplaySettings display_settings_snapshot() const = 0;
 
-  // Return the currently committed application session identity.
+  // TUI thread: read committed identity after a backend action, so UI reset follows the actual session transition.
   virtual std::string read_committed_session_id() const = 0;
 
   // TUI thread: pull pending catalog generations before publishing their projection.
   virtual TuiCatalogDelivery read_catalog_delivery() = 0;
 
-  // Return the latest committed todo projection without exposing backend storage authority.
+  // TUI thread: hydrate todo presentation from committed state after session changes; the returned copy owns its values.
   virtual std::vector<agent::TodoItem> read_committed_todos() const = 0;
 
-  // Return an owning, filtered overview DTO once per popup open; never call during rendering.
+  // TUI thread: build an owning, filtered overview once per popup open; never perform this backend read during rendering.
   virtual StartupOverviewSnapshot read_startup_overview() const = 0;
 
   // Reload and apply display settings, returning the effective presentation or error.
@@ -129,6 +143,8 @@ class TuiFrontEnd : public frontend::FrontEnd
 
   // Runs after the composer loop exits while curses is still active. Application-scoped
   // workers that can notify this runtime must be canceled and joined here.
+  // TUI thread after active-run cleanup, while the terminal is still usable.
+  // Join application-owned discovery/summary work before the frontend can die.
   virtual void on_before_tui_shutdown() = 0;
 
   // Reset session-selector preferences and return the current application-owned session view.
@@ -136,10 +152,14 @@ class TuiFrontEnd : public frontend::FrontEnd
   // Snapshot project trust for settings presentation without retaining backend authority.
   virtual ProjectTrustSnapshot read_project_trust() const = 0;
   // Create queue callables bound to event_sink and exact per-run application authority.
+  // TUI thread before launch: bind queue capabilities to this submission.
+  // Returned callbacks can be used by its worker until finish/retirement.
   virtual TuiActiveRunQueues create_active_run_queues(ava::event::EventEnvelopeSink event_sink) const = 0;
   // Execute submitted with request-local context and return presentation-only output.
+  // Submission worker: context owns this request's endpoints. The frontend
+  // outlives the joined call; return only after backend callback scopes retire.
   virtual TuiSubmitResult on_submit(std::string const& submitted, TuiSubmitContext context) = 0;
-  // Import path as an image attachment or return a validated path/import error.
+  // TUI thread: ask the application to validate and import the path before staging its returned attachment reference.
   virtual core::Result<session::ImageAttachmentRef> on_attach_image(std::string const& path) const = 0;
   // Import a clipboard image; nullopt means no supported image was available.
   virtual core::Result<std::optional<session::ImageAttachmentRef>> on_paste_clipboard_image() const = 0;
@@ -172,20 +192,25 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<SelectListView> on_open_fork_user_turn_selector(std::string_view initial_query) const = 0;
   // Open the copy source picker seeded with initial_query or return listing errors.
   virtual core::Result<SelectListView> on_open_copy_user_turn_selector(std::string_view initial_query) const = 0;
-  // Persist action for prompt and return the narrow remembered-rule receipt or storage error.
+  // TUI thread: persist a selected rule before acknowledging it; return only a receipt, leaving validation in the backend.
   virtual core::Result<TuiRememberedPermissionRule> remember_permission_rule(permissions::PermissionPrompt const& prompt,
                                                                              permissions::PermissionAction action) const = 0;
-  // Launch the terminal user interface (TUI) using runtime options `options`.
+  // Launch the terminal UI from the startup options owned by this frontend.
   // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
   //
-  // Returns the application exit status, typically returned by `main`, after the frontend has shut down.
+  // TUI thread: Context initialization precedes session construction; the session
+  // and worker borrows retire before return. The outer guard invokes application
+  // shutdown even when startup or run exits early. Returns the final exit status.
   int run();
 
-  // Access immutable startup presentation data owned by this frontend.
+  // TUI thread: borrow startup presentation while this frontend lives; workers
+  // receive request-local copies instead of sharing this reference.
   TuiRuntimeOptions const& options() const { return options_; }
 
-  // Runtime keybindings are mutable only on the serialized TUI thread.
+  // TUI thread: update effective bindings only at a serialized publication
+  // boundary so key hints and dispatch agree; the reference expires with this owner.
   TuiKeyBindings& key_bindings() { return key_bindings_; }
+  // TUI thread: inspect current dispatch bindings; copy them into a worker request.
   TuiKeyBindings const& key_bindings() const { return key_bindings_; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON_BASE(frontend::FrontEnd)

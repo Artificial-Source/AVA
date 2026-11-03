@@ -1,3 +1,4 @@
+// Debug stream adapters; generated member references print identity without exposing borrowed content.
 #pragma once
 
 #include "print_members_on.h"

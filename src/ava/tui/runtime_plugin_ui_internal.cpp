@@ -1,3 +1,4 @@
+// Implements plugin transport lifetimes separately from TUI surface publication.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "TuiWakeup.h"
@@ -21,19 +22,31 @@ using ava::app::sanitize_terminal_text;
 
 namespace {
 
+// One worker call and transport queue/visible slots share this reply rendezvous.
+// Both worker and TUI can complete it; mutex protects the first reply and the
+// waiting worker retains a share until it consumes that reply. Final destruction
+// can occur on either thread, after all shared owners have released it.
 struct PendingPluginUiModal
 {
+  // Both participants serialize first-reply publication and predicate inspection.
   std::mutex mutex;
+  // Worker waits here between cancellation/deadline checks; completers notify unlocked.
   std::condition_variable ready;
+  // First reply wins under mutex; the waiting worker copies it before returning.
   std::optional<TuiPluginUiReply> reply;
 
   // Internal-linkage synchronization state also contains arbitrary plugin replies.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
+// Worker-built record transferred to a finite TUI poll batch under the state mutex.
+// The owned request survives the caller; generation rejects stale batches. The modal
+// share pins its reply independently of queue membership and worker lifetime.
 struct PluginUiQueueRecord
 {
+  // Captured at worker enqueue; TUI compares against current admission after batch swap.
   std::uint64_t generation = 0;
+  // Owned plugin payload; only a current validated record may reach TUI projection.
   TuiPluginUiRequest request;
   // The queue and waiting worker retain independent ownership until resolution.
   std::shared_ptr<PendingPluginUiModal> modal;
@@ -42,6 +55,8 @@ struct PluginUiQueueRecord
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
+// Worker thread outside transport/modal locks: treat a failing cancellation
+// callback as cancellation so exceptions cannot strand the synchronous presenter.
 bool callback_canceled(TuiPluginUiCancelCallback const& cancel_requested) noexcept
 {
   try
@@ -54,16 +69,21 @@ bool callback_canceled(TuiPluginUiCancelCallback const& cancel_requested) noexce
   }
 }
 
+// Pure boundary validation for plugin strings: reject invalid UTF-8, terminal
+// controls and size violations before any text enters a TUI surface.
 bool safe_text(std::string_view text, std::size_t maximum, bool require_nonempty = false)
 {
   return text.size() <= maximum && (!require_nonempty || !text.empty()) && ava::core::json::is_valid_utf8(text) && sanitize_terminal_text(text) == text;
 }
 
+// Pure transport check: all three identity components must be bounded printable text.
 bool safe_binding(TuiPluginUiBinding const& binding)
 {
   return safe_text(binding.plugin_id, 256, true) && safe_text(binding.command, 256, true) && safe_text(binding.invocation_id, 256, true);
 }
 
+// Worker admission validation: bound aggregate content and enforce each request
+// kind before allocating a waiter or trusting any presentation fields.
 bool safe_request(TuiPluginUiRequest const& request)
 {
   if (!safe_binding(request.binding) || !safe_text(request.request_id, 256, true) || request.lines.size() > kTuiPluginUiMaxWidgetLines ||
@@ -72,6 +92,8 @@ bool safe_request(TuiPluginUiRequest const& request)
     return false;
   }
 
+  // Check the aggregate byte budget as each collection entry is added; each later
+  // subtraction is safe because the running count was already bounded.
   std::size_t bytes = request.text.size() + request.title.size() + request.description.size();
   if (bytes > kTuiPluginUiMaxTextBytes || !safe_text(request.text, kTuiPluginUiMaxTextBytes) || !safe_text(request.title, kTuiPluginUiMaxTextBytes) ||
       !safe_text(request.description, kTuiPluginUiMaxTextBytes))
@@ -96,6 +118,8 @@ bool safe_request(TuiPluginUiRequest const& request)
     bytes += option.id.size() + option.label.size() + description_bytes;
   }
 
+  // Shape checks keep unused fields from smuggling content around the selected
+  // surface's limits or forcing the renderer to interpret an ambiguous request.
   switch (request.kind)
   {
     case TuiPluginUiKind::Status:
@@ -111,6 +135,8 @@ bool safe_request(TuiPluginUiRequest const& request)
   return false;
 }
 
+// Either thread: retain the rendezvous while publishing its first reply under
+// the modal lock. Notify after unlock; empty cancellation replies need no allocation.
 void complete_modal(std::shared_ptr<PendingPluginUiModal> const& modal, TuiPluginUiReply reply)
 {
   if (!modal)
@@ -124,6 +150,8 @@ void complete_modal(std::shared_ptr<PendingPluginUiModal> const& modal, TuiPlugi
   modal->ready.notify_all();
 }
 
+// Either thread while retaining a shared modal: test reply readiness under its
+// mutex. A caller validating transport takes state mutex before this modal mutex.
 bool modal_pending(std::shared_ptr<PendingPluginUiModal> const& modal)
 {
   if (!modal)
@@ -132,6 +160,7 @@ bool modal_pending(std::shared_ptr<PendingPluginUiModal> const& modal)
   return !modal->reply;
 }
 
+// TUI candidate validation: account for all retained dock text before publication.
 std::size_t dock_text_bytes(TuiPluginUiDockView const& dock)
 {
   std::size_t bytes = dock.status ? dock.status->size() : 0;
@@ -144,6 +173,7 @@ std::size_t dock_text_bytes(TuiPluginUiDockView const& dock)
   return bytes;
 }
 
+// TUI candidate validation: cap accumulated widget rows across the entire dock.
 std::size_t dock_line_count(TuiPluginUiDockView const& dock)
 {
   std::size_t lines = 0;
@@ -152,6 +182,8 @@ std::size_t dock_line_count(TuiPluginUiDockView const& dock)
   return lines;
 }
 
+// Pure parser gate for endpoint admission; accept only the bounded spelling used
+// by direct plugin submission recognition.
 bool canonical_plugin_id(std::string_view value)
 {
   if (value.empty() || value.size() > 128)
@@ -168,6 +200,7 @@ bool canonical_plugin_id(std::string_view value)
   return !previous_separator;
 }
 
+// Pure parser gate: delimit the command token before any optional JSON argument.
 bool canonical_command_name(std::string_view value)
 {
   return !value.empty() && value.size() <= 96 && std::ranges::all_of(value, [](char ch) {
@@ -175,6 +208,9 @@ bool canonical_command_name(std::string_view value)
   });
 }
 
+// Pure submission parser: grant an endpoint only to the direct command spelling
+// with canonical identity and an optional bounded-depth JSON object. Return owned
+// identity strings so the endpoint never borrows the input buffer.
 std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_binding(std::string_view submitted)
 {
   constexpr std::string_view prefix = "/plugin run ";
@@ -183,6 +219,8 @@ std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_bind
   {
     return std::nullopt;
   }
+  // Recognize the direct command grammar before copying identities. Trailing and
+  // repeated separator spaces are deliberately rejected by these token boundaries.
   auto remaining = submitted.substr(prefix.size());
   auto const plugin_end = remaining.find(' ');
   if (plugin_end == std::string_view::npos || !canonical_plugin_id(remaining.substr(0, plugin_end)))
@@ -195,6 +233,8 @@ std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_bind
   auto const command = remaining.substr(0, command_end);
   if (!canonical_command_name(command))
     return std::nullopt;
+  // Optional arguments must be one valid bounded-depth object; a recognized prefix
+  // alone must not issue an endpoint for another command form.
   if (command_end != std::string_view::npos)
   {
     remaining.remove_prefix(command_end + 1);
@@ -213,6 +253,8 @@ std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_bind
 // state for a call. All private fields are protected by mutex_. TUI-only methods
 // take the projection for a synchronous call and never retain it. Lock order is
 // state mutex, then modal mutex; worker cancellation releases modal locks first.
+// No timer or projection is retained here. A worker pin can become the last owner,
+// so final destruction may run on that worker after coordinator shutdown.
 class RuntimePluginUiCoordinatorState final
 {
  public:
@@ -220,8 +262,8 @@ class RuntimePluginUiCoordinatorState final
   bool attach_wakeup(TuiWakeup wakeup);
   // TUI thread: cancel old waiters, then open one new generation until its deadline.
   [[nodiscard]] std::optional<std::uint64_t> begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline);
-  // Worker thread, while holding a shared pin. Publish before waking; a synchronous
-  // modal keeps this call alive until its result, cancellation, or deadline.
+  // Worker thread, while holding a shared pin. Every kind waits for publication
+  // Ack or a modal choice, cancellation or deadline. Publish before notifying.
   [[nodiscard]] TuiPluginUiReply present(std::uint64_t request_generation, TuiPluginUiRequest const& request,
                                          std::chrono::steady_clock::time_point request_deadline, TuiPluginUiCancelCallback cancel_requested);
   // Worker endpoint: a stale generation/binding cannot close a later submission.
@@ -253,8 +295,8 @@ class RuntimePluginUiCoordinatorState final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Caller holds mutex_. Release all waiters before setting up projection removal;
-  // no allocation or binding copy may interrupt the cancellation sequence.
+  // Caller holds mutex_. Close admission, release waits and flag projection removal.
+  // No allocation or binding copy may interrupt the cancellation sequence.
   void cancel_locked();
   // Guards every transport field below across worker and TUI calls.
   mutable std::mutex mutex_;
@@ -280,9 +322,11 @@ class RuntimePluginUiCoordinatorState final
   std::optional<TuiPluginUiBinding> owner_;
   // Worker publications drained by TUI poll; cancellation releases their waiters first.
   std::deque<PluginUiQueueRecord> queue_;
-  // Shared with the waiting worker; prevents admission of a second synchronous modal.
+  // Worker admission installs this share; TUI resolution/cancellation clears it.
+  // Keeps a second interactive modal out while the first is queued or visible.
   std::shared_ptr<PendingPluginUiModal> outstanding_modal_;
-  // Shared with the waiting worker while the published modal can receive TUI input.
+  // TUI poll installs this share when publishing an interactive modal. Resolution
+  // or cancellation clears it before worker release; protected by the state mutex.
   std::shared_ptr<PendingPluginUiModal> visible_modal_;
   // One-shot race-test hook, transferred to a worker-local callable before invocation.
   std::function<void()> after_enqueue_for_test_;
@@ -328,6 +372,8 @@ std::optional<std::uint64_t> RuntimePluginUiCoordinatorState::begin(TuiPluginUiB
   std::lock_guard lock(mutex_);
   if (shutdown_)
     return std::nullopt;
+  // Retire the old generation's waits before replacing identity and admission.
+  // State-before-modal lock order matches every other transport completion path.
   complete_modal(outstanding_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   complete_modal(visible_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   for (auto const& record : queue_)
@@ -370,6 +416,8 @@ TuiPluginUiReply RuntimePluginUiCoordinatorState::present(std::uint64_t request_
   if (!safe_request(request) || callback_canceled(cancel_requested))
     return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
 
+  // The worker and transport keep independent shares of the reply rendezvous.
+  // Even status/widget requests wait for TUI publication acknowledgement.
   std::shared_ptr<PendingPluginUiModal> modal;
   std::function<void()> after_enqueue;
   TuiWakeup wakeup;
@@ -383,6 +431,8 @@ TuiPluginUiReply RuntimePluginUiCoordinatorState::present(std::uint64_t request_
     if (!owner_ || *owner_ != request.binding || queue_.size() >= kTuiPluginUiMaxQueuedRecords - 1)
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
 
+    // Reserve a single interactive modal, then enqueue the owned request and waiter
+    // before notifying. No caller-supplied callback runs under this transport lock.
     bool const is_modal = request.kind == TuiPluginUiKind::Select || request.kind == TuiPluginUiKind::Confirm;
     if (is_modal && (outstanding_modal_ || visible_modal_))
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
@@ -397,6 +447,8 @@ TuiPluginUiReply RuntimePluginUiCoordinatorState::present(std::uint64_t request_
   if (after_enqueue)
     after_enqueue();
 
+  // Wait with only the modal mutex, then release it before cancellation callbacks
+  // or state checks. This avoids inverting the state-then-modal completion order.
   while (true)
   {
     {
@@ -484,6 +536,8 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
   if (after_queue_swap)
     after_queue_swap(records.size());
 
+  // The batch is detached, so workers may cancel or enqueue while it is examined.
+  // Resolve an existing conflicting modal before considering any new record.
   if (host_modal_conflict && snapshot.plugin_ui_modal)
   {
     std::shared_ptr<PendingPluginUiModal> modal;
@@ -498,6 +552,9 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
     result.changed = true;
   }
 
+  // Revalidate each record under the state lock after the swap. Keep validation,
+  // publication and Ack in one critical section so cancellation cannot win between
+  // a current-state check and acknowledgement of content that never became visible.
   for (auto& record : records)
   {
     auto const& request = record.request;
@@ -553,6 +610,8 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
       continue;
     }
 
+    // Interactive publication retains its waiter instead of acknowledging immediately.
+    // Confirm defaults to Cancel; only later TUI input may send an affirmative reply.
     auto const selected = request.kind == TuiPluginUiKind::Confirm ? std::size_t{1} : std::size_t{0};
     auto candidate = TuiPluginUiModalView{.binding = request.binding,
                                           .request_id = request.request_id,
@@ -579,8 +638,8 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
   TuiWakeup wakeup;
   {
     std::lock_guard lock(mutex_);
-    // A rejected surface may publish Clear while consuming this batch. Keep
-    // that later record runnable after releasing the mailbox lock.
+    // Workers can enqueue after the batch swap. Keep their newer records runnable
+    // after this pass releases the transport lock.
     if (!queue_.empty())
       wakeup = wakeup_;
   }
@@ -661,6 +720,8 @@ void RuntimePluginUiCoordinatorState::set_after_queue_swap_for_test(std::functio
   after_queue_swap_for_test_ = std::move(hook);
 }
 
+// TUI policy query shares the exact parser used to issue endpoints; recognition
+// alone does not open admission or create worker resources.
 bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
 {
   return direct_foreground_plugin_binding(submitted).has_value();
@@ -689,6 +750,8 @@ void RuntimePluginUiCoordinator::attach_loop(TuiEventLoop& loop)
 std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(std::string_view submitted, std::string invocation_id,
                                                                                 std::chrono::steady_clock::time_point now)
 {
+  // Validate submission identity before changing transport generation or arming time.
+  // Only the admitted generation receives copied worker endpoints.
   auto const binding = direct_foreground_plugin_binding(submitted);
   if (!binding || invocation_id.empty())
     return std::nullopt;
@@ -734,6 +797,8 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
   if (fits)
     return false;
 
+  // Close transport and release waiters before clearing their visible surfaces.
+  // A buffered key can no longer authorize a choice in the discarded geometry.
   cancel_active();
   deadline_timer_.cancel();
   presentation_.publish_plugin_dock(std::nullopt);
@@ -771,6 +836,8 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
   if (cancel_unfittable_surfaces())
     return TuiPluginUiInputResult::Redraw;
 
+  // After geometry validation, navigation only changes the projected selection.
+  // An answer remains pending until a separate activation key or pointer click.
   auto const& view = *snapshot.plugin_ui_modal;
   auto const option_count = view.kind == TuiPluginUiKind::Confirm ? std::size_t{2} : view.options.size();
   if (event.key == Key::ArrowUp || event.key == Key::ArrowDown || event.key == Key::PageUp || event.key == Key::PageDown || event.key == Key::Home ||
@@ -825,6 +892,8 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
   if (!resolve)
     return TuiPluginUiInputResult::Handled;
 
+  // Copy any selected option identity into the reply before removing the view.
+  // Transport detaches its modal ownership before waking the waiting worker.
   state_->resolve_visible(std::move(reply));
   presentation_.publish_plugin_modal(std::nullopt);
   return TuiPluginUiInputResult::Redraw;

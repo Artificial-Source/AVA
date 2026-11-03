@@ -1,3 +1,5 @@
+// Coordinates selector policy around the single published selector view.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SelectorInputController.h"
@@ -63,6 +65,8 @@ void SelectorHost::replace(SelectListView view)
 
 void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t selected_index, std::string query)
 {
+  // Resolve identity while the old view is still alive; publishing replacement invalidates
+  // its row pointers. A missing identity falls back to the new view selection, then clamps.
   view.query = std::move(query);
   if (auto const* item = selected_item(selected_index); item && !item->value.empty())
   {
@@ -109,12 +113,16 @@ void SelectorHost::replace_rows(std::size_t first_changed, std::vector<SelectLis
 SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const& input, SelectorInputController& classifier, SettingsDialog& settings,
                                               SessionSelector& sessions)
 {
+  // Retire a displaced Settings preview before this input can open another surface.
+  // Archive confirmation also belongs only to the currently hosted session list.
   settings.synchronize_selector();
   if (kind() != ActiveSelectList::Session)
     sessions.cancel_confirmation();
   auto classified = classifier.classify(input);
   using Action = SelectListInputAction;
   using Request = SelectorDispatchRequest;
+  // Selection movement disarms two-press archive intent. Settings additionally previews
+  // the highlight; generic lists only publish selection/query into the existing rows.
   if (classified.action == Action::Redraw && view())
   {
     sessions.cancel_confirmation();
@@ -144,6 +152,8 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
         return {.request = Request::Hotkeys};
     }
   }
+  // Summary preparation needs an owned restoration checkpoint because progress replaces
+  // the current view; ordinary selection updates need no such copy.
   else if (classified.action == Action::SummarizeParent && kind() == ActiveSelectList::Session && view())
   {
     sessions.cancel_confirmation();
@@ -199,6 +209,8 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
   {
     if (classified.action == Action::Resolve || classified.action == Action::Cancel)
       sessions.cancel_confirmation();
+    // Catalog policy returns owned typed outcomes. Translate them after any view closure,
+    // leaving draft installation and committed-session reconciliation to Session.
     auto result = classifier.handle(classified);
     if (auto const* request = std::get_if<SelectorInputRequest>(&result))
     {

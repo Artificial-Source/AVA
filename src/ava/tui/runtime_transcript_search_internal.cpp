@@ -1,3 +1,4 @@
+// Maintains incremental search matches and restores viewport authority across modal search updates.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "ava/tui/composer.h"
@@ -25,6 +26,7 @@ namespace ava::tui {
 namespace detail {
 namespace {
 
+// Pure helper on borrowed rendered text: remove styling/control sequences before indexing searchable bytes.
 std::string strip_terminal_sequences(std::string_view text)
 {
   std::string stripped;
@@ -40,11 +42,13 @@ std::string strip_terminal_sequences(std::string_view text)
   return sanitize_terminal_text(stripped);
 }
 
+// Pure helper: recognize padding-only plain rows when selecting a useful default excerpt.
 bool blank(std::string_view text)
 {
   return std::ranges::all_of(text, [](char ch) { return ch == ' '; });
 }
 
+// Pure helper on owned row text: remove rendering padding without retaining input views.
 std::string trim_horizontal_space(std::string text)
 {
   auto const first = text.find_first_not_of(' ');
@@ -54,6 +58,7 @@ std::string trim_horizontal_space(std::string text)
   return text.substr(first, last - first + 1);
 }
 
+// Pure helper: cap owned selector excerpt at a UTF-8 boundary and reserve space for ellipsis.
 std::string bound_utf8_detail(std::string text)
 {
   if (text.size() <= kMaxTranscriptSearchDetailBytes)
@@ -67,6 +72,7 @@ std::string bound_utf8_detail(std::string text)
   return text;
 }
 
+// Pure helper: derive a bounded sanitized result label from item kind without exposing body text as identity.
 std::string match_identity(TranscriptItem const& item)
 {
   std::string identity;
@@ -92,6 +98,8 @@ std::string match_identity(TranscriptItem const& item)
   {
     identity = item.label;
   }
+  // Bound/sanitize the derived label independently of searchable message text so modal identity stays compact
+  // and display-safe.
   identity = sanitize_terminal_text(identity);
   if (identity.size() > 80)
   {
@@ -104,6 +112,7 @@ std::string match_identity(TranscriptItem const& item)
   return identity;
 }
 
+// Pure byte fold for literal matching; non-ASCII bytes remain unchanged and no locale state is used.
 char fold_ascii(char ch) noexcept
 {
   auto const byte = static_cast<unsigned char>(ch);
@@ -112,6 +121,8 @@ char fold_ascii(char ch) noexcept
   return ch;
 }
 
+// Pure source classification matching grouped context-tool rendering; neighboring items can affect a run's
+// heading owner.
 bool context_gathering_item(TranscriptItem const& item)
 {
   if (!item.tool)
@@ -121,9 +132,14 @@ bool context_gathering_item(TranscriptItem const& item)
   return name == "read_file" || name == "glob" || name == "grep" || name == "list_directory" || name == "lsp_diagnostics";
 }
 
+// Function-local literal matcher reused across a synchronous cache scan. It borrows query bytes that must
+// outlive the matcher and remain unchanged; its fixed prefix table avoids per-candidate allocation. Independent
+// instances may run on any thread with stable inputs.
 class FoldedLiteralMatcher final
 {
  public:
+  // Borrow query only for this scan and prepare bounded KMP fallback lengths; oversized queries cannot index
+  // the fixed table.
   explicit FoldedLiteralMatcher(std::string_view query) noexcept : query_(query)
   {
     if (query_.size() > kMaxTranscriptSearchQueryBytes)
@@ -138,6 +154,8 @@ class FoldedLiteralMatcher final
     }
   }
 
+  // Pure scan with borrowed stable candidate/query: return first ASCII-folded literal byte offset, or absence
+  // without allocation.
   [[nodiscard]] std::optional<std::size_t> match_offset(std::string_view candidate) const noexcept
   {
     if (query_.empty())
@@ -159,10 +177,15 @@ class FoldedLiteralMatcher final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Non-owning query valid for this helper's short stack lifetime; cache/argument owner keeps bytes unchanged
+  // until matching finishes.
   std::string_view query_;
+  // Owned fixed-size KMP fallback table built once from bounded query and read by every candidate scan.
   std::array<std::size_t, kMaxTranscriptSearchQueryBytes> prefix_lengths_{};
 };
 
+// Pure helper: search spaced and unspaced row joins with one matcher, mapping unspaced hits into spaced excerpt
+// offsets.
 std::optional<std::size_t> projection_match_offset(TranscriptSearchProjection const& projection, FoldedLiteralMatcher const& matcher) noexcept
 {
   // Search both legal presentations of rendered row boundaries with one KMP
@@ -177,6 +200,8 @@ std::optional<std::size_t> projection_match_offset(TranscriptSearchProjection co
   return *unspaced_offset + static_cast<std::size_t>(boundaries_before_match - projection.row_boundary_offsets.begin());
 }
 
+// TUI-thread pure projection builder with stable snapshot/rows: copy only nonprivate rendered rows into owned
+// search text and bounded detail.
 TranscriptSearchProjection build_projection_from_lines(ComposerSnapshot const& snapshot, std::size_t item_index, std::vector<std::string> const& lines,
                                                        std::vector<bool> const& presentation_private_rows, std::size_t start = 0,
                                                        std::size_t end = std::numeric_limits<std::size_t>::max())
@@ -191,6 +216,8 @@ TranscriptSearchProjection build_projection_from_lines(ComposerSnapshot const& s
   start = std::min(start, lines.size());
   end = std::min(end, lines.size());
   bool first_row = true;
+  // Skip presentation-private rows before building both row-join variants; neither match paths nor excerpts may
+  // expose hidden helper-only content.
   for (auto line_index = start; line_index < end; ++line_index)
   {
     if (line_index < presentation_private_rows.size() && presentation_private_rows[line_index])
@@ -214,6 +241,8 @@ TranscriptSearchProjection build_projection_from_lines(ComposerSnapshot const& s
   return projection;
 }
 
+// TUI-thread pure stable-layout helper: isolate one item's owned row span, excluding the following item's
+// spacer, before indexing.
 TranscriptSearchProjection build_projection(ComposerSnapshot const& snapshot, TranscriptLayout const& layout, std::size_t position)
 {
   auto const item_index = layout.message_item_indices[position];
@@ -233,6 +262,8 @@ TranscriptSearchProjection build_projection(ComposerSnapshot const& snapshot, Tr
   return build_projection_from_lines(snapshot, item_index, layout.lines, layout.presentation_private_rows, start, end);
 }
 
+// Pure helper: center a bounded excerpt near the match while preserving UTF-8 boundaries; empty query uses
+// default detail.
 std::string relevant_detail(TranscriptSearchProjection const& projection, std::string_view query, std::size_t match_offset)
 {
   if (query.empty())
@@ -415,6 +446,8 @@ TranscriptSearchUpdate TranscriptSearchProjectionCache::replace_affected_matches
           TranscriptSearchMatch{.item_index = item_index, .identity = projection.identity, .detail = relevant_detail(projection, query_, *offset)});
     }
 
+    // Splice only evaluated intervals; keep unchanged result prefix and report the earliest row the selector
+    // must rebuild.
     auto const old_count = static_cast<std::size_t>(old_past_last - old_first);
     if (old_count != 0 || !replacements.empty())
       first_changed_match_row = std::min(first_changed_match_row, splice_row);
@@ -457,6 +490,8 @@ TranscriptSearchUpdate TranscriptSearchProjectionCache::refresh_after_transcript
                     TranscriptSearchItemInterval{.first = merged_first, .past_last = merged_past_last});
   };
 
+  // Determine which old projection slots survive before moving anything; retained context-run metadata
+  // identifies headings affected by truncation.
   auto const shift_magnitude = item_index_shift < 0 ? static_cast<std::size_t>(-(item_index_shift + 1)) + 1 : static_cast<std::size_t>(item_index_shift);
   auto const old_retained_first = item_index_shift < 0 ? std::min(shift_magnitude, old_projection_size) : std::size_t{0};
   auto old_retained_past_last = old_projection_size;
@@ -481,6 +516,8 @@ TranscriptSearchUpdate TranscriptSearchProjectionCache::refresh_after_transcript
       shortened_context_owner = shift_transcript_search_item_index(old_owner, item_index_shift);
   }
 
+  // Realign retained result identities and drop evicted matches before rebuilding text, preserving
+  // chronological ordering for selection restoration.
   auto first_changed_match_row = matches_.size();
   if (item_index_shift != 0)
   {
@@ -512,6 +549,8 @@ TranscriptSearchUpdate TranscriptSearchProjectionCache::refresh_after_transcript
     }
   }
 
+  // Move owned projection slots with transcript insertion/eviction, then recompute context-run offsets against
+  // new neighboring items.
   if (item_index_shift < 0)
   {
     projections_.erase(projections_.begin(), projections_.begin() + static_cast<std::ptrdiff_t>(old_retained_first));
@@ -537,6 +576,8 @@ TranscriptSearchUpdate TranscriptSearchProjectionCache::refresh_after_transcript
     }
   }
 
+  // Expand affected work to shared context-heading owners and join boundaries; unchanged interior projections
+  // can keep their rendered search text.
   changed_from_item_index = std::min(changed_from_item_index, new_projection_size);
   add_affected(changed_from_item_index, item_index_shift == 0 ? std::max(old_projection_size, new_projection_size) : new_projection_size);
   if (changed_from_item_index > 0 && changed_from_item_index < projections_.size() && projections_[changed_from_item_index - 1].context_gathering &&
@@ -652,9 +693,14 @@ void update_transcript_search_select_list_rows(SelectListView& view, std::vector
 
 namespace {
 
+// Stack-only TUI-thread guard temporarily withdrawing selector projection while underlying layout is prepared.
+// Presentation outlives the scope; destructor restores the moved view before callers can render. It neither
+// closes SelectorHost nor changes modal ownership.
 class ScopedTranscriptSearchModalProjection final
 {
  public:
+  // TUI thread before authoritative layout preparation: move the selector out only when requested and present;
+  // retain no second row-vector copy.
   ScopedTranscriptSearchModalProjection(RuntimePresentationState& presentation, bool project) : presentation_(presentation)
   {
     if (!project || !presentation_.screen().select_list)
@@ -662,9 +708,13 @@ class ScopedTranscriptSearchModalProjection final
     select_list_ = presentation_.withdraw_selector_projection();
   }
 
+  // Only one scope may own restoration of the withdrawn selector value.
   ScopedTranscriptSearchModalProjection(ScopedTranscriptSearchModalProjection const&) = delete;
+  // Prevent transferring restoration responsibility across lifetime-bound presentation references.
   ScopedTranscriptSearchModalProjection& operator=(ScopedTranscriptSearchModalProjection const&) = delete;
 
+  // TUI thread on every scope exit: restore the moved selector before the borrowed presentation can be painted
+  // or destroyed.
   ~ScopedTranscriptSearchModalProjection()
   {
     if (select_list_)
@@ -674,7 +724,9 @@ class ScopedTranscriptSearchModalProjection final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Borrowed TUI-thread projection owner, guaranteed alive for this stack guard and its restoration destructor.
   RuntimePresentationState& presentation_;
+  // Owned withdrawn selector, including rows/query; empty means no restoration is required.
   std::optional<SelectListView> select_list_ = std::nullopt;
 };
 
@@ -723,6 +775,8 @@ bool TranscriptSearchController::open(std::string query)
     return false;
   }
 
+  // Capture viewport and underlying render settings before opening the search modal, whose layout must not
+  // become restoration authority.
   refresh_authoritative_layout();
   capture_authoritative_layout_settings();
   auto const max_scroll = renderer_.prepare_transcript_layout();
@@ -775,6 +829,8 @@ void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_ite
                                       .disabled_reason = {}});
     ++modal_row_build_count_;
   }
+  // Preserve the selected transcript identity across changed result rows; otherwise clamp the caller's fallback
+  // or choose the newest initial match.
   std::size_t selection = 0;
   if (!matches.empty())
   {
@@ -815,6 +871,8 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
   auto const [terminal_width, terminal_height] = terminal_size();
   presentation_state_.publish_dimensions(terminal_width, terminal_height);
   auto const compact_spacing = detail::composer_layout_policy(snapshot, terminal_height).compact_transcript_spacing;
+  // Incremental direct rendering is valid only with captured underlying settings. Resize/style changes require
+  // temporarily removing modal geometry and rebuilding authority.
   auto const settings_compatible = authoritative_settings_valid_ && terminal_width == authoritative_terminal_width_ &&
                                    terminal_height == authoritative_terminal_height_ && snapshot.tool_presentation == authoritative_tool_presentation_ &&
                                    snapshot.thinking_visible == authoritative_thinking_visible_ && compact_spacing == authoritative_compact_spacing_;
@@ -900,6 +958,8 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
     input_result = handle_select_list_input(*selectors_.view(), event);
   }
 
+  // Resolve modal policy before query editing: cancel restores the saved viewport, while confirmation retires
+  // search before explicit navigation.
   if (input_result.action == SelectListInputAction::Cancel)
   {
     restore_saved_viewport("transcript search canceled");
@@ -918,6 +978,8 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
     }
     return renderer_.request_render();
   }
+  // Retain selected item across query changes and reconstruct only the changed suffix; arrow movement reuses
+  // existing row storage.
   if (input_result.action == SelectListInputAction::Redraw)
   {
     std::optional<std::size_t> selected_item_index;

@@ -1,3 +1,5 @@
+// Transfers and retires timer registration ownership on the TUI thread, leaving
+// deadline policy and callback dispatch to the loop-owned registration.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "TuiTimer.h"
@@ -23,6 +25,8 @@ TuiTimer& TuiTimer::operator=(TuiTimer&& other) noexcept
 {
   if (this != &other)
   {
+    // Remove this handle's old callback before transferring ownership, so move
+    // assignment cannot strand a registration that still borrows a feature target.
     release();
     loop_ = std::exchange(other.loop_, nullptr);
     id_ = std::exchange(other.id_, 0);

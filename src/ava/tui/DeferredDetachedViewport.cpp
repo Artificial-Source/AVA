@@ -1,3 +1,4 @@
+// Accumulates eviction shifts against the first detached viewport anchor until the renderer can restore it.
 // Implements the detached anchor retained until transcript layout catches up.
 #include "sys.h"
 #include "DeferredDetachedViewport.h"

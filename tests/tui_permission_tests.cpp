@@ -27,6 +27,7 @@
 
 namespace {
 
+// Join only after test gates and claims retire; fail the process on a broken wait instead of hanging future destruction.
 template <typename Result>
 Result joined_prompt_result(std::future<Result>& future, std::string_view phase)
 {
@@ -40,11 +41,13 @@ Result joined_prompt_result(std::future<Result>& future, std::string_view phase)
   return future.get();
 }
 
+// Recognize the public question interruption result without inspecting pending-request internals.
 bool interrupted_question(ava::core::Result<ava::agent::QuestionAnswer> const& result)
 {
   return !result && result.error().category() == ava::core::ErrorCategory::Tool && result.error().message() == "question prompt interrupted";
 }
 
+// Protect pre-claim cancellation and first-result ownership for both pending-request aliases.
 template <typename Request, typename Prompt, typename Answer, typename IsCanceled, typename IsFirst>
 void test_unclaimed_interruption_and_first_result(Prompt prompt, Answer first, Answer second, IsCanceled is_canceled, IsFirst is_first, std::string_view label)
 {
@@ -72,6 +75,7 @@ void test_unclaimed_interruption_and_first_result(Prompt prompt, Answer first, A
          std::string(label) + " first completion wins over duplicate completion and later interruption");
 }
 
+// Protect the worker borrow until the UI retires its claimed permission callbacks.
 void test_claimed_permission_interruption_waits_for_retirement()
 {
   auto request = std::make_shared<ava::tui::PendingPermissionRequest>(ava::permissions::PermissionPrompt{});
@@ -95,6 +99,7 @@ void test_claimed_permission_interruption_waits_for_retirement()
          "claimed permission interruption retains the waiter until resolution retires and denial wins over its late allow");
 }
 
+// Protect question data used by a UI callback until that callback scope has retired.
 void test_claimed_question_retains_borrowed_callback_scope()
 {
   std::promise<std::shared_ptr<ava::tui::PendingQuestionRequest>> published_request;
@@ -170,6 +175,7 @@ void test_claimed_question_retains_borrowed_callback_scope()
 
 }  // namespace
 
+// Run shared pending-request lifetime checks for both permission and question results.
 void run_tui_pending_request_tests()
 {
   test_claimed_permission_interruption_waits_for_retirement();
@@ -1083,7 +1089,7 @@ void test_tui_session_grant_registry()
           std::ranges::none_of(session_only_permission_modal, [](std::string const& line) { return strip_sgr(line).find("R remember") != std::string::npos; }),
       "TUI permission key help does not advertise R when only an in-memory session grant is available");
 }
-}  // namespace
+} // namespace
 
 void run_tui_session_grant_tests()
 {

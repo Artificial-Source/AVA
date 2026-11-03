@@ -1,3 +1,4 @@
+// Publishes accepted Mermaid results on the TUI thread while application workers retain process ownership.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "TuiWakeup.h"
@@ -15,10 +16,15 @@
 namespace ava::tui {
 namespace {
 
+// Temporary TUI-thread value used to compare accepted geometry before/after reconciliation; owns only indices
+// and stable IDs, with no bridge/layout borrows.
 struct AcceptedIdentity
 {
+  // Current TUI-thread transcript item index used to choose earliest affected search item.
   std::size_t item_index = 0;
+  // Fence order within the item; changes can alter which source region is replaced.
   std::size_t block_index = 0;
+  // Stable accepted source identity; equality detects retained results without comparing diagram output text.
   std::uint64_t block_identity = 0;
 
   // Anonymous-namespace types cannot have generated out-of-line member printers.
@@ -26,6 +32,7 @@ struct AcceptedIdentity
 };
 
 template <typename Records>
+// TUI-thread pure projection of retained accepted records; returned values survive subsequent record mutation.
 std::vector<AcceptedIdentity> accepted_identities(Records const& records)
 {
   std::vector<AcceptedIdentity> accepted;
@@ -39,6 +46,8 @@ std::vector<AcceptedIdentity> accepted_identities(Records const& records)
   return accepted;
 }
 
+// TUI-thread pure comparison of accepted identities/order; geometry changes invalidate the corresponding
+// presentation.
 bool same_accepted(std::vector<AcceptedIdentity> const& left, std::vector<AcceptedIdentity> const& right)
 {
   return left.size() == right.size() && std::ranges::equal(left, right, [](AcceptedIdentity const& lhs, AcceptedIdentity const& rhs) {
@@ -46,6 +55,8 @@ bool same_accepted(std::vector<AcceptedIdentity> const& left, std::vector<Accept
          });
 }
 
+// TUI-thread conservative lower bound across before/after accepted entries; search may rebuild earlier items to
+// avoid missing moved output.
 std::size_t earliest_difference(std::vector<AcceptedIdentity> const& before, std::vector<AcceptedIdentity> const& after)
 {
   auto earliest = std::numeric_limits<std::size_t>::max();
@@ -57,6 +68,8 @@ std::size_t earliest_difference(std::vector<AcceptedIdentity> const& before, std
 }
 
 template <typename Record>
+// TUI-thread source/offset equality allowing records to survive transcript index movement without resubmitting
+// helper work.
 bool same_block(Record const& record, detail::MermaidFenceBlock const& block)
 {
   return record.block.block_index == block.block_index && record.block.fence_start == block.fence_start && record.block.fence_end == block.fence_end &&
@@ -163,13 +176,20 @@ void RuntimeMermaidPresentationController::cancel_all() noexcept
 
 void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& snapshot)
 {
+  // Temporary TUI-thread owned scanned fence awaiting reconciliation. Source/offsets are moved into retained
+  // records before candidates are destroyed.
   struct Candidate
   {
+    // Current TUI-thread transcript item index used to choose earliest affected search item.
     std::size_t item_index = 0;
+    // Owned completed fence/source from scan; reconciliation transfers it into a new record when no matching
+    // record survives.
     detail::MermaidFenceBlock block;
 
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
+  // Discover only completed fences and bound retained candidates before allocating reconciliation state;
+  // incomplete streaming source remains ordinary text.
   std::vector<Candidate> candidates;
   for (std::size_t item_index = 0; item_index < snapshot.transcript.size(); ++item_index)
   {
@@ -182,6 +202,8 @@ void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& sna
     candidates.erase(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(candidates.size() - detail::kMaxMermaidPresentationEntries));
   }
 
+  // Match stable source/offset identity before allocating requests so item movement does not resubmit work or
+  // lose accepted output.
   std::vector<Record> next;
   next.reserve(candidates.size());
   std::vector<bool> retained(records_.size(), false);
@@ -219,6 +241,8 @@ void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& sna
                           .item_index = candidate.item_index,
                           .block = std::move(candidate.block)});
   }
+  // Cancel removed records after matching all survivors; outstanding identity bookkeeping remains until their
+  // results drain.
   for (std::size_t index = 0; index < records_.size(); ++index)
   {
     if (!retained[index])
@@ -293,6 +317,8 @@ void RuntimeMermaidPresentationController::drain_completions() noexcept
   {
     return;
   }
+  // Release bridge-slot bookkeeping even for stale/removed records. Only current-epoch pending records may
+  // acquire bounded output.
   for (auto& completion : completions)
   {
     std::erase(outstanding_requests_, std::pair{completion.config_epoch, completion.identity});
@@ -372,6 +398,8 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     return std::nullopt;
   auto const before = accepted_identities(records_);
 
+  // Retire prior session/configuration records before discovering new fences; same-epoch canceled completions
+  // still require draining.
   auto const session_changed = session_id_ != snapshot.session_id;
   auto const configuration_changed = config_epoch_ != snapshot.mermaid_config_epoch || enabled_ != snapshot.mermaid_enabled;
   if (session_changed || configuration_changed)
@@ -414,6 +442,8 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     }
   }
 
+  // Compare accepted identity sets only after admission/drain and byte-budget enforcement, then publish
+  // geometry before notifying search of affected items.
   auto const after = accepted_identities(records_);
   auto const visual_changed = !same_accepted(before, after) || (snapshot.mermaid_projection && after.empty());
   if (visual_changed)
@@ -434,6 +464,8 @@ void RuntimeMermaidPresentationController::shutdown() noexcept
   if (shutdown_)
     return;
   shutdown_ = true;
+  // Retire TUI retry callbacks first. Unregistration prevents future stored callbacks, but independently copied
+  // shared/weak notifications may safely finish later.
   retry_timer_.cancel();
   retry_at_.reset();
   if (bridge_.set_completion_notifier)
@@ -454,6 +486,8 @@ void RuntimeMermaidPresentationController::shutdown() noexcept
       }
     }
   }
+  // Cancellation can still create application completions; controller teardown releases local records and
+  // callback ownership after notification is retired.
   cancel_all();
   outstanding_requests_.clear();
   bridge_ = {};

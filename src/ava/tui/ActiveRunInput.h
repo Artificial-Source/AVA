@@ -31,6 +31,8 @@ enum class ActiveRunCancelDisposition
 // Session owns this TUI-thread dispatcher after all borrowed feature owners.
 // It edits drafts and routes views; ActiveRun alone owns worker/queue lifetime.
 // Ordered stages stop at the first handled key, preserving binding collisions.
+// All methods and members are TUI-thread only. Borrowed owners outlive destruction;
+// dispatcher callbacks are destroyed with this stable owner and never reach workers.
 class ActiveRunInput final
 {
  public:

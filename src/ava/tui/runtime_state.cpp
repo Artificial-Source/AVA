@@ -1,3 +1,4 @@
+// Hydrates and publishes TUI display facts while keeping backend authority and feature state in their owners.
 #include "sys.h"
 #include "ActiveRunEvents.h"
 #include "Composer.h"
@@ -27,6 +28,8 @@ void refresh_local_palette_hints(ComposerSnapshot& snapshot, TuiKeyBindings cons
   compose_tui_slash_command_items(snapshot.slash_commands, snapshot.custom_themes, key_binding_help_items(bindings));
 }
 
+// TUI thread: recompose only current local theme/key hints in popup-owned overview facts; retained backend
+// facts remain untouched.
 void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiFrontEnd const& frontend)
 {
   if (!snapshot.startup_overview)
@@ -52,6 +55,8 @@ void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiFrontEnd const&
   static_cast<void>(strip_exact_suffix(overview.compact_line, old_open_hint));
   static_cast<void>(strip_exact_suffix(overview.compact_line, overview.theme_name));
 
+  // After removing prior retained suffixes, compose current UI hints within the same bounded line; popup
+  // backend facts are not reread.
   auto const theme = active_tui_theme();
   overview.theme_name = theme.name;
   overview.theme_badge = theme.badge;
@@ -69,6 +74,8 @@ void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiFrontEnd const&
   append_bounded(open_hint);
 }
 
+// TUI thread after concrete frontend construction: copy startup options/display facts and seed tool/completion
+// projections before the session publishes committed identity.
 ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, std::string const& initial_keybind_status)
 {
   TuiRuntimeOptions const& options = frontend->options();
@@ -85,6 +92,8 @@ ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, std::string const& init
                             .show_images = initial_display_settings.show_images,
                             .image_width_cells = initial_display_settings.image_width_cells,
                             .cursor = initial_display_settings.cursor};
+  // Seed derived indexes and local hints only after owned startup fields exist; committed session identity is
+  // hydrated by the constructor afterward.
   seed_tui_tool_index(snapshot);
   snapshot.mermaid_config_epoch = initial_display_settings.mermaid_config_epoch;
   snapshot.mermaid_enabled = initial_display_settings.mermaid_enabled;
@@ -185,6 +194,8 @@ void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& fronten
     applied_workspace_catalog_generation_ = delivery.workspace_catalog_generation;
     completion_sources_changed = true;
   }
+  // Invalidate completion authority once after all applicable catalogs are applied, keeping both catalogs and
+  // local hints coherent.
   if (completion_sources_changed)
   {
     refresh_local_palette_hints(snapshot_, frontend.key_bindings());
@@ -291,6 +302,8 @@ void RuntimePresentationState::reset_session_projection(bool close_overview)
   snapshot_.sidebar.reset();
   snapshot_.sidebar_drawer_visible = false;
   snapshot_.sidebar_drawer_scroll_offset = 0;
+  // Clear editor projection before feature owners publish replacement state; session coordinator separately
+  // retires each feature's private authority.
   snapshot_.input.clear();
   snapshot_.input_cursor = 0;
   snapshot_.input_selection_start = std::string::npos;

@@ -1,3 +1,5 @@
+// Coordinates local TUI actions and explicit frontend authority handoffs.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "PendingAttachments.h"
 #include "SelectorHost.h"
@@ -33,17 +35,24 @@
 namespace ava::tui {
 namespace {
 
+// TUI discovery cadence; the timer only marks work so reload callbacks run in Session order.
 constexpr auto kDisplayReloadPollInterval = std::chrono::milliseconds(500);
 
+// TUI thread: describe an imported reference and active preview protocol without loading
+// image bytes; callers own the returned badge text.
 std::string attachment_detail(ava::session::ImageAttachmentRef const& attachment, TerminalImageCapabilities const& capabilities)
 {
   return "(" + attachment.mime_type + ", " + std::to_string(attachment.byte_size) + " bytes) preview " + terminal_image_settings_description(capabilities);
 }
 
+// TUI thread: derive a stable nonzero Kitty image identifier from at most eight leading
+// hex digits. Missing hex declines an identifier; zero is reserved by the terminal protocol.
 std::optional<std::size_t> kitty_image_id_from_sha(std::string_view sha)
 {
   std::size_t value = 0;
   std::size_t digits = 0;
+  // Bound the identifier to a protocol-sized prefix and stop on invalid text; the
+  // reference remains backend-owned and this helper claims no hash validation authority.
   for (char const ch : sha)
   {
     auto const byte = static_cast<unsigned char>(ch);
@@ -74,6 +83,8 @@ std::optional<std::size_t> kitty_image_id_from_sha(std::string_view sha)
   return value == 0 ? std::size_t{1} : value;
 }
 
+// TUI thread: load image bytes only through frontend authority when previews are enabled.
+// Return an owned immutable payload shared by badge/projection copies; no worker uses it here.
 std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd const& frontend, ava::session::ImageAttachmentRef const& attachment,
                                                                  TerminalImageCapabilities const& capabilities, bool show_images)
 {
@@ -83,6 +94,8 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
   auto loaded = frontend.on_load_image_attachment(attachment);
   if (!loaded)
     return std::nullopt;
+  // Sharing the immutable encoded bytes avoids duplicating image payloads when badge
+  // projections are copied; the last preview owner releases them without frontend access.
   auto dimensions = image_dimensions_from_bytes(loaded->bytes, attachment.mime_type).value_or(ImageDimensions{.width_px = 800, .height_px = 600});
   return PendingAttachmentItem::Preview{.protocol = capabilities.images,
                                         .base64_data = std::make_shared<std::string const>(runtime_transcript::base64_encode(loaded->bytes)),
@@ -141,6 +154,8 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     // Failure path keeps last-good presentation and still paints the status when possible.
     return renderer_.render() ? DisplaySettingsReloadPollOutcome::Unchanged : DisplaySettingsReloadPollOutcome::TerminalFailure;
   }
+  // A successful check ends error deduplication. Only an explicit applied result changes
+  // authoritative presentation; Session rebases any Settings overlay before final paint.
   last_display_reload_error_.reset();
   if (!*reloaded)
     return DisplaySettingsReloadPollOutcome::Unchanged;
@@ -177,6 +192,8 @@ bool RuntimeActionController::open_external_editor()
   // Balance AVA-owned protocols after leaving curses/alt-screen so the shell
   // and $VISUAL/$EDITOR inherit a clean Kitty stack, paste, and mouse state.
   terminal_context.leave_terminal_for_handoff();
+  // Frontend owns the blocking editor/process action. Restore terminal state before
+  // interpreting cancellation or errors so feedback always uses the resumed TUI.
   auto edited = frontend_.on_external_editor(draft_state_.draft().text);
   refresh_geometry_from_kernel();
   terminal_context.restore_terminal_after_handoff();
@@ -206,6 +223,8 @@ bool RuntimeActionController::suspend_to_background()
   terminal_reset_mouse_tracking();
 
   {
+    // Keep termination signals from running ordinary control handling during the terminal
+    // handoff. The guard restores the prior mask only after terminal protocols are restored.
     utils::Signal::BlockGuard block_signals({SIGINT, SIGTERM});
     // Disable AVA-owned protocols after leaving curses so the stopped process's
     // shell inherits balanced keyboard/paste/mouse state. Negotiation preferences
@@ -251,6 +270,8 @@ bool RuntimeActionController::paste_clipboard_image()
   if (!renderer_.paint_for_handoff())
     return false;
 
+  // The pending frame precedes potentially blocking clipboard authority. Stage nothing
+  // until import succeeds with a reference; errors and an empty clipboard retain the draft.
   auto imported = frontend_.on_paste_clipboard_image();
   if (!imported)
   {
@@ -319,6 +340,8 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
     }
     return true;
   }
+  // After availability is known, clear stale input intents before exposing the new rows.
+  // Unavailable chained requests preserve the just-completed model-switch feedback.
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Reasoning, std::move(*view));

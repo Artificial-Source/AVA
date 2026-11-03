@@ -72,12 +72,15 @@ namespace {
 class EventLoopFixture final
 {
  public:
+  // Test thread: open descriptors before the loop begins borrowing the read end.
   EventLoopFixture() : descriptors_(open_pipe()), loop_(descriptors_.first.get()) { }
+  // Test thread: use the real scheduler while this fixture owns its OS input.
   [[nodiscard]] ava::tui::TuiEventLoop& loop() { return loop_; }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Create owned readiness descriptors, failing before a partially usable fixture escapes.
   static std::pair<ava::core::UniqueFd, ava::core::UniqueFd> open_pipe()
   {
     std::array<int, 2> descriptors{-1, -1};
@@ -86,7 +89,9 @@ class EventLoopFixture final
     return {ava::core::UniqueFd(descriptors[0]), ava::core::UniqueFd(descriptors[1])};
   }
 
+  // Test-thread OS resources; declaration order keeps them alive through loop destruction.
   std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors_;
+  // Test-thread scheduler borrowed by feature owners; they retire before this fixture.
   ava::tui::TuiEventLoop loop_;
 };
 
@@ -180,6 +185,7 @@ bool test_composer_draw_preserves_context_color_pair_allocations()
   return passed;
 }
 
+// Protect incremental search refresh so an appended tail does not rebuild unchanged transcript layout.
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -262,6 +268,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   return direct_refresh_passed && scheduled_render_passed && full_sync_passed;
 }
 
+// Protect removal of old-session presentation when committed session identity changes.
 bool test_changed_session_snapshot_resets_presentation()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -461,6 +468,7 @@ bool test_changed_session_snapshot_resets_presentation()
          jump_and_scroll_reset && sidebar_count_reset && tool_history_seeded && selection_reset;
 }
 
+// Protect committed-session transitions from late events and retained keys belonging to the previous run.
 bool test_active_run_session_transition_discards_prior_session_events()
 {
   EventLoopFixture event_loop;
@@ -882,6 +890,7 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
   return passed;
 }
 
+// Protect prompt priority when a key has already been decoded while transcript search is open.
 bool test_atomic_search_input_prompt_precedence()
 {
   EventLoopFixture event_loop;
@@ -1046,6 +1055,7 @@ bool test_atomic_search_input_prompt_precedence()
   return escape_ordered;
 }
 
+// Protect user-message jumps and the reset back to the live transcript tail.
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -1188,6 +1198,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   return passed;
 }
 
+// Protect the frozen detached window while completion publishes a newer transcript underneath it.
 bool test_detached_completion_publish_preserves_numbered_window()
 {
   EventLoopFixture event_loop;
@@ -1314,6 +1325,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   return passed && attached_contract && scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer;
 }
 
+// Protect boundary navigation when there is no scrollable transcript range.
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -1593,6 +1605,7 @@ bool test_settings_close_restores_preview_and_selector_storage()
   return previewed && one_view && presentation.screen().show_images && !settings.is_open() && !selectors.view();
 }
 
+// Protect explicit reload outcomes and rebasing of an open settings preview.
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
   EventLoopFixture event_loop;
@@ -1708,6 +1721,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
          unchanged_signal;
 }
 
+// Protect an open overview from displaying stale settings after a reload.
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -1786,6 +1800,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   return no_read_during_snapshot_apply && rebuilt && rendered && fresh_reopen;
 }
 
+// Protect local overview hint refresh from repeated growth or needless publication.
 bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
 {
   ScopedEnvVar theme_override("AVA_TUI_THEME", "");
@@ -1845,6 +1860,7 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
   return initial_ok && theme_switch_ok && binding_refresh_ok && stale_theme_removed && bounded_omission_ok;
 }
 
+// Protect backend reload routing while retaining the local display-settings command path.
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 {
   EventLoopFixture event_loop;
@@ -2114,6 +2130,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
 }
 
+// Run the first rendering group, including session and modal ordering regressions.
 void run_tui_composer_rendering_tests_part_1()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -3381,6 +3398,7 @@ void run_tui_composer_rendering_tests_part_3()
   expect(std::ranges::all_of(wide_frame, [](std::string const& line) { return visible_columns(line) <= 24; }),
          "tui treats CJK and emoji as wide cells when fitting rendered lines");
 }
+// Run the rendering group that covers reload, workspace and detached-view behavior.
 void run_tui_composer_rendering_tests_part_4()
 {
   tui_test_support::TuiFrontEndFixture identity_frontend;

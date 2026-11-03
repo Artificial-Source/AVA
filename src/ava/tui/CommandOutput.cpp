@@ -11,6 +11,8 @@ CommandOutput::CommandOutput(RuntimePresentationState& presentation) : presentat
 
 CommandOutputDisposition CommandOutput::handle_input(InputEvent const& event)
 {
+  // Host permission/question prompts keep priority over output capture. Borrow the
+  // const projection only for this call; named publications perform every modal change.
   auto const& screen = presentation_.screen();
   if (!screen.command_output || screen.permission_prompt || screen.question_prompt)
     return CommandOutputDisposition::Pass;

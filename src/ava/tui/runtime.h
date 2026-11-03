@@ -46,48 +46,80 @@ struct TuiRememberedPermissionRule
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// Owned process-neutral payload passed from TUI reconciliation to the application bridge. It crosses worker
+// boundaries only through bridge-owned synchronization; opaque identity/epoch reject stale results.
 struct TuiMermaidRenderRequest
 {
+  // Caller-assigned opaque request identity retained through completion/cancellation; paired with configuration
+  // epoch across threads.
   std::uint64_t identity = 0;
+  // Owned application configuration identity; TUI submits and accepts only the current epoch, rejecting stale
+  // worker results.
   std::uint64_t config_epoch = 0;
+  // Owned diagram source moved into application admission; no TUI transcript reference reaches the worker.
   ava::core::NoLogString source;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
+// TUI-thread admission outcome; only Busy schedules the controller's bounded retry, while accepted/full queues
+// rely on completion wakes.
 enum class TuiMermaidEnqueueResult : std::uint8_t
 {
   // The bridge lock was contended; retry with a bounded backoff.
   Busy,
+  // Application owns the request; a completion may already exist for cached/fallback work.
   Accepted,
+  // No capacity admitted this request; drain a later completion before retrying admission.
   QueueFull,
+  // Current source remains fallback presentation; unchanged record is not repeatedly submitted.
   Rejected,
 };
 
+// Owned application result transferred by drain to the TUI thread. Publication precedes notification; TUI
+// checks epoch/identity before attaching text to a retained fence.
 struct TuiMermaidRenderCompletion
 {
+  // Caller-assigned opaque request identity retained through completion/cancellation; paired with configuration
+  // epoch across threads.
   std::uint64_t identity = 0;
+  // Owned application configuration identity; TUI submits and accepts only the current epoch, rejecting stale
+  // worker results.
   std::uint64_t config_epoch = 0;
+  // Application validation succeeded; false tells presentation to retain the original diagram source.
   bool accepted = false;
+  // Owned accepted helper text; rejected completions carry no display text and no terminal authority.
   ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Process-neutral nonblocking application bridge. The TUI owns only opaque
-// identities and bounded payload DTOs; helper execution remains entirely
-// application-owned.
+// Process-neutral application bridge owned by the TUI controller as a callback bundle.
+// Callbacks retain application bridge lifetime; enqueue/cancel/drain avoid helper I/O
+// and expose admission contention. Setup/teardown registration can wait for serialization.
+// Producers publish owned completions before notifying; TUI owners are never captured.
 struct TuiMermaidRenderBridge
 {
+  // Owned application configuration identity; TUI submits and accepts only the current epoch, rejecting stale
+  // worker results.
   std::uint64_t config_epoch = 0;
+  // Initial TUI-thread presentation admission flag copied from application settings; later screen settings
+  // drive reconciliation.
   bool enabled = false;
+  // TUI thread: transfer owned source to admission without helper I/O; Busy retains the record for a 100 ms
+  // then 250 ms retry.
   std::function<TuiMermaidEnqueueResult(TuiMermaidRenderRequest)> enqueue;
+  // TUI thread: best-effort cancel matching identity/epoch; false can mean contention or already retired work,
+  // so completion may still arrive.
   std::function<bool(std::uint64_t identity, std::uint64_t config_epoch)> cancel;
   // TUI thread: nullopt means lock contention; an empty vector means no results.
   std::function<std::optional<std::vector<TuiMermaidRenderCompletion>>()> drain;
   // Register before submitting work; an empty callback unregisters. The callback
   // runs after publication under the producer lock and must only signal bounded
   // thread-safe state. It must not reenter the bridge or borrow a TUI owner.
+  // TUI setup/teardown: an already copied notifier may run after empty registration returns. It must capture
+  // only independent shared readiness and a weak waiter, publish readiness before wake, and never access a
+  // retired UI owner.
   std::function<void(std::function<void()>)> set_completion_notifier{};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -130,7 +162,10 @@ struct TuiLocalDisplaySettings
   bool show_images = true;
   std::size_t image_width_cells = 60;
   terminal::CursorSettings cursor{terminal::CursorStyle::Default};
+  // TUI-thread display projection of application helper configuration; changing it invalidates accepted Mermaid
+  // geometry.
   std::uint64_t mermaid_config_epoch = 0;
+  // TUI-thread local display admission flag; process ownership and validation stay in the application bridge.
   bool mermaid_enabled = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

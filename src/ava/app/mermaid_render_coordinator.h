@@ -1,3 +1,4 @@
+// Owns application Mermaid worker execution and publishes bounded completion payloads before consumer notification.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
@@ -101,38 +102,69 @@ struct MermaidRenderCoordinatorStats
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Application-owned single-worker renderer. enqueue(), cancel(), and
-// take_completions() do no helper I/O and are suitable for a frontend poll loop.
+// Application-owned single-worker renderer; frontend consumption uses completion
+// notifications, and queue methods remain separate from helper execution.
+// Application-owned worker and synchronized request/result queues. Public queue operations may run from caller
+// threads but perform no helper I/O; mutex acquisition may wait. Only the worker owns helper execution. The
+// application serializes shutdown/destruction, stops external calls, and joins the worker before Impl storage
+// is destroyed.
 class MermaidRenderCoordinator final
 {
  public:
+  // Caller thread: validate configuration and construct wake resources before starting the owned worker;
+  // failure returns an error without a live coordinator.
   [[nodiscard]] static ava::core::Result<std::unique_ptr<MermaidRenderCoordinator>> create(MermaidRenderConfiguration configuration = {});
+  // Owning application thread after external callers retire: shutdown and join before queue, callback, or wake
+  // resources are destroyed.
   ~MermaidRenderCoordinator();
 
+  // A single owner controls worker lifetime and queue/configuration authority.
   MermaidRenderCoordinator(MermaidRenderCoordinator const&) = delete;
+  // Prevent replacement of a running worker's callback target and synchronization state.
   MermaidRenderCoordinator& operator=(MermaidRenderCoordinator const&) = delete;
 
+  // Caller thread: under queue lock, replace a changed epoch and retire old queue/results/cache; wake active
+  // work to observe cancellation.
   [[nodiscard]] ava::core::VoidResult reconfigure(MermaidRenderConfiguration configuration);
+  // Caller thread: admit identity under queue mutex, deduplicate source/cache work, and publish immediate
+  // fallback/cache completions before notifying.
   [[nodiscard]] MermaidEnqueueResult enqueue(MermaidRenderRequest request);
+  // Caller thread: remove one current-epoch waiter and publish cancellation; helper stops only when no
+  // identities still need it.
   [[nodiscard]] bool cancel(std::uint64_t identity, std::uint64_t config_epoch);
+  // Consumer thread: atomically take owned completions under queue lock, releasing their admission capacity
+  // before further enqueue.
   [[nodiscard]] std::vector<MermaidRenderCompletion> take_completions();
   // Any thread, before admission or during teardown. Replacement is serialized
   // with publication; an existing completion triggers the new notifier too.
   // Called under the queue mutex: only bounded, nonthrowing notification work is
   // allowed, with no reentry into this coordinator. Empty unregisters it.
   void set_completion_notifier(std::function<void()> notifier);
+  // Any caller thread while owner lives: copy bounded counters under the queue mutex without exposing
+  // source/output.
   [[nodiscard]] MermaidRenderCoordinatorStats stats() const;
 
+  // Non-worker caller: bounded wait for active helper work or shutdown; false also covers timeout and no active
+  // work.
   [[nodiscard]] bool wait_for_in_flight(std::chrono::milliseconds timeout) const;
+  // Non-worker caller: wait until active and queued work are empty; undrained completions may still retain
+  // admission capacity.
   [[nodiscard]] bool wait_until_idle(std::chrono::milliseconds timeout) const;
+  // Owning non-worker thread, serialized with other shutdown calls: stop admission, cancel active work, release
+  // the queue lock, then join. External callers must retire before destruction.
   void shutdown() noexcept;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Private heap-stable worker target owning mutex, queues, callback, cache, and wake resources; destroyed only
+  // after join.
   struct Impl;
+  // Construction thread: take sole ownership of a fully formed but not-yet-started implementation.
   explicit MermaidRenderCoordinator(std::unique_ptr<Impl> impl);
 
+  // Exclusive stable worker state; public destructor joins before this member releases synchronization and
+  // payload storage.
   std::unique_ptr<Impl> impl_;
 };
 

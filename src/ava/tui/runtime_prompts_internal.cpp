@@ -1,3 +1,4 @@
+// Keeps prompt callbacks claimed until the TUI can safely release their worker.
 #include "sys.h"
 #include "PendingPermissionRequest.h"
 #include "PendingQuestionRequest.h"
@@ -31,6 +32,8 @@ using runtime_views::permission_prompt_view;
 using runtime_views::question_answer_from_view;
 using runtime_views::question_prompt_view;
 
+// Pure TUI timing policy: suppress only wheel events during the prompt quiet period;
+// other keys remain eligible and can end that period.
 bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
                                            std::chrono::steady_clock::time_point now)
 {
@@ -98,6 +101,8 @@ void RuntimePromptCoordinator::emit_prompt_audit(std::string status, std::string
     std::lock_guard<std::mutex> lock(prompt_audit_mutex);
     sink = prompt_audit_sink;
   }
+  // The copied callback may publish through another synchronized owner. Release
+  // the audit lock before invoking it, so callback reentry cannot deadlock replacement.
   if (!sink)
     return;
   // Preserve the legacy empty timestamp/session metadata; do not invent IDs.
@@ -138,6 +143,9 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
     {
       presentation_.publish_status("permission allowed for this session");
     }
+    // This automatic reuse has no visible prompt claim. Preserve the existing
+    // decision even if status painting fails; session control observes renderer
+    // failure separately. The active-modal I/O-error path below does not apply.
     static_cast<void>(renderer_.render());
     ava::permissions::PermissionResolutionDecision decision{ava::permissions::PermissionResolution::AllowSessionGrant};
     decision.resolution_source = "tui_session_grant";
@@ -174,6 +182,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
       selected == PermissionPromptChoice::Allow || selected == PermissionPromptChoice::AllowSession || selected == PermissionPromptChoice::AllowRemember;
   auto const remember = selected == PermissionPromptChoice::AllowRemember || selected == PermissionPromptChoice::DenyRemember;
   std::string remembered_rule_id;
+  // Persistence is decided before constructing an Allow response. Unavailable or
+  // failed storage resolves to Deny instead of granting the one-shot action silently.
   if (remember)
   {
     if (allow ? !allow_remember_available_ : !deny_remember_available_)
@@ -212,6 +222,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
     remembered_rule_id = remembered->rule_id;
   }
 
+  // Session grants are checked again at insertion, since the registry may reject
+  // eligibility or capacity even when the initial view offered the choice.
   if (selected == PermissionPromptChoice::AllowSession)
   {
     auto const grant_result = command_session_grants.add(snapshot.session_id, prompt);
@@ -247,6 +259,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
     return decision;
   }
 
+  // Only validated choices reach normal resolution. Audit and remove the prompt
+  // before returning the result; the caller still owns claim retirement and wakeup.
   if (allow)
   {
     emit_prompt_audit("tui:permission_allow", "permission allowed: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason,
@@ -309,6 +323,8 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
     return QuestionResult{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"))};
   }
 
+  // Arm discovery only after presentation succeeds. The claim keeps the worker
+  // stack alive until service invokes this optional borrowed callback and retires it.
   if (prompt.auto_resolve)
   {
     auto_resolution_due_ = true;
@@ -335,6 +351,8 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
   auto const* request = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&active_request_);
   if (!request)
     return std::nullopt;
+  // The active request still owns the claim while the callback executes. A ready
+  // automatic answer takes precedence over a subsequently observed stop or input key.
   auto const& prompt = (*request)->prompt();
   if (!prompt.auto_resolve || !prompt.auto_resolve())
     return std::nullopt;
@@ -356,6 +374,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
   using Key = terminal::Key;
   auto const& snapshot = presentation_.screen();
   bool const wheel_input = input.event.key == Key::MouseWheelUp || input.event.key == Key::MouseWheelDown;
+  // Interpret the retained key against the current view, including pointer targets.
+  // Apply changed selection/text before deriving a submitted answer from that view.
   auto input_result = [&]() {
     if (!snapshot.question_prompt)
       return QuestionPromptInputResult{};
@@ -391,6 +411,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
     return PromptServiceOutcome::Active;
   }
 
+  // Capture an owned answer before removing the view. Clipboard/audit work happens
+  // while the claim still prevents callbacks from outliving the waiting worker.
   if (input_result.action == QuestionPromptInputAction::Resolve)
   {
     auto answer =
@@ -452,6 +474,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeIn
     // before worker release without reentering the modal's current input frame.
     return PromptServiceOutcome::RequestRunStop;
   }
+  // All non-Escape resolution passes through the permission choice path, which
+  // validates grants and persistence before a worker can receive Allow.
   auto input_result = snapshot.permission_prompt ? handle_permission_prompt_input(*snapshot.permission_prompt, input.event) : PermissionPromptInputResult{};
   switch (input_result.action)
   {
@@ -572,6 +596,8 @@ void RuntimePromptCoordinator::abandon_active_request()
 PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedPromptRequest request, std::function<bool()> stop_requested,
                                                                      std::function<void()> before_prompt)
 {
+  // Install the claim before any UI hook can fail or invoke a borrowed callback.
+  // Unwinding below abandons it only after clearing this owner's callbacks and timers.
   active_request_ = std::move(request);
   stop_requested_ = std::move(stop_requested);
   try
@@ -626,6 +652,8 @@ PromptServiceOutcome RuntimePromptCoordinator::service()
       std::lock_guard lock(prompt_request_mutex_);
       cancellation_pending = cancellation_pending_;
     }
+    // Read cancellation under its mutex, then invoke predicates after unlock. Check
+    // a ready question answer first so cancellation does not overwrite a real result.
     bool const stopped = cancellation_pending || (stop_requested_ && stop_requested_());
     bool const interrupted = Signals::received(terminal_signals);
     if (auto_resolution_due_ || stopped || interrupted)
@@ -670,6 +698,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
       }
       return PromptServiceOutcome::Active;
     }
+    // Resize has its own repaint/reset path. Filter wheel bursts before the prompt
+    // handler so one accepted movement cannot be amplified by queued wheel events.
     auto const key = input.event.key;
     if (detail::prompt_wheel_input_suppressed(key, wheel_suppression_deadline_))
       return PromptServiceOutcome::Active;
@@ -693,11 +723,15 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
 
 PromptServiceOutcome RuntimePromptCoordinator::cancel_active_after_auto(PromptCancelReason reason)
 {
+  // Teardown must not allocate audit text or run automatic resolution. Its prepared
+  // cancellation value releases the waiter before best-effort projection cleanup.
   if (reason == PromptCancelReason::Shutdown)
   {
     abandon_active_request();
     return PromptServiceOutcome::Completed;
   }
+  // Interactive cancellation retains visible/audit feedback while the claim is held.
+  // Only completion below releases the worker after all borrowed callbacks retire.
   if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&active_request_))
   {
     if (reason == PromptCancelReason::RunStop)
@@ -728,6 +762,8 @@ PromptServiceOutcome RuntimePromptCoordinator::cancel_active(PromptCancelReason 
     return PromptServiceOutcome::None;
   try
   {
+    // Normal control cancellation preserves an already available automatic answer.
+    // Shutdown skips the callback because its job is retiring the worker dependency.
     if (reason != PromptCancelReason::Shutdown)
     {
       if (auto answer = auto_resolve_question())

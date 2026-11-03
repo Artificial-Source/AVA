@@ -1,4 +1,5 @@
-// Owns command-output input policy within the TUI described in tui-architecture.md.
+// Owns command-output input policy within the TUI.
+// See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
@@ -16,8 +17,10 @@ enum class CommandOutputDisposition
   Redraw, // Dismissal or scrolling changed the published modal.
 };
 
-// Session owns this TUI-thread policy owner. Presentation outlives it and retains
-// the single output view; callers cannot mutate that view through this interface.
+// Session owns this TUI-thread policy owner and calls it before editor dispatch.
+// Presentation outlives it and retains the single output view. Modal publications
+// finish before typing is forwarded; no mutable view escapes. There is no worker
+// or lock, and destruction releases only the borrowed association.
 class CommandOutput final
 {
  public:

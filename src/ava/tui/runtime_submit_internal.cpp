@@ -1,3 +1,4 @@
+// Handles idle completion and local commands before handing submissions to ActiveRun.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
@@ -71,6 +72,9 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
   draft_state_.cancel_escape();
+  // Resolve slash completion before consuming the draft. Explicit local selector
+  // commands and forced commands can run immediately; ordinary selected rows first
+  // replace the draft so a later Submit confirms the resulting command text.
   std::optional<std::string> immediate_slash_submission;
   if (forced_submission)
   {
@@ -120,6 +124,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       presentation_state_.publish_completion(draft_state_);
     }
   }
+  // Visible reference/path completion still owns Submit, including when a forced
+  // command was supplied. Disabled candidates retain the draft for correction.
   if (navigation_.file_reference_palette_active())
   {
     draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
@@ -158,6 +164,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
   }
+  // Capture expanded owned text before resetting editor state. Every accepted local
+  // command records history at this boundary; ActiveRun never owns editor history.
   auto submitted = immediate_slash_submission ? *immediate_slash_submission : expanded_composer_draft_text(draft);
   renderer_.clear_transcript_selection();
   draft_state_.reset_after_submit();
@@ -179,9 +187,12 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         ava::core::Application::instance().terminal_context().beep();
         success = renderer_.request_render();
       }
-      //FIXME: how is `success` related to terminal_write_failed ?!
+      // Stash operations return the renderer request result even for rejected stash
+      // actions; false therefore reports terminal failure, not a missing stash entry.
       return {.disposition = success ? RuntimeSubmitDisposition::ContinueLoop : RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = !success};
     }
+    // Session-local selectors and search consume the command without a worker. Their
+    // owners retain dialog state; this router only interprets success for the loop.
     if (exact_command(submitted, "/jobs"))
     {
       draft_state_.record_submission(submitted);
@@ -339,6 +350,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
+    // Import through the frontend capability before staging attachment references.
+    // Errors stay local to the command and never attach an unvalidated path to a run.
     if (auto attach_target = attach_command_argument(submitted))
     {
       draft_state_.record_submission(submitted);
@@ -370,6 +383,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
+    // Tool/diff/copy commands read the session's indexed presentation. They produce
+    // local output or clipboard requests without replaying backend tool execution.
     if (auto tool_query = tool_command_argument(submitted))
     {
       draft_state_.record_submission(submitted);
@@ -501,6 +516,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
+    // Display toggles finish locally. Only text unclaimed by every local command path
+    // falls through to worker launch, where ActiveRun owns cancellation and completion.
     if (submitted == "/details" || submitted == "/details compact" || submitted == "/details rich" || submitted == "/details expanded")
     {
       draft_state_.record_submission(submitted);
