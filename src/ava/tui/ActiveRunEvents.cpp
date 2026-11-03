@@ -82,9 +82,11 @@ void merge_tool(std::vector<ToolTimelineItem>& tools, ToolTimelineItem const& to
   tools.push_back(tool);
 }
 
+} // namespace
+
 // TUI settlement: merge settled cards from both storage locations, preserving
 // transcript-before-pending order and replacing matching identities.
-void append_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState const& state)
+void detail::merge_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState const& state)
 {
   for (auto const& item : state.transcript)
   {
@@ -97,8 +99,6 @@ void append_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState co
       merge_tool(tools, pending.item);
   }
 }
-
-} // namespace
 
 ActiveRunEvents::ActiveRunEvents(bool command, std::string submitted, std::string initial_request_id, std::vector<TranscriptItem> baseline,
                                  std::vector<ava::agent::TodoItem> todos)
@@ -253,12 +253,12 @@ bool ActiveRunEvents::authorized_events_received() const
 std::vector<ToolTimelineItem> ActiveRunEvents::merge_unauthorized_tools(std::vector<ToolTimelineItem> tools) const
 {
   if (!detail::command_event_request_has_conversation_authority(std::optional<std::string>{initial_request_id_}, ordinary_turn_request_ids_))
-    append_settled_tools(tools, initial_command_);
-  append_settled_tools(tools, unattributed_);
+    detail::merge_settled_tools(tools, initial_command_);
+  detail::merge_settled_tools(tools, unattributed_);
   for (auto const& [request_id, state] : request_states_)
   {
     if (!detail::command_event_request_has_conversation_authority(std::optional<std::string>{request_id}, ordinary_turn_request_ids_))
-      append_settled_tools(tools, state);
+      detail::merge_settled_tools(tools, state);
   }
   return tools;
 }

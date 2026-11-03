@@ -305,7 +305,11 @@ set(AVA_TESTS_SOURCES
   "tui_completion_tests.cpp"
   "tui_composer_rendering_tests.cpp"
   "tui_event_loop_tests.cpp"
+  "tui_feature_owner_tests.cpp"
   "tui_runtime_owner_tests.cpp"
+  "tui_session_tests.cpp"
+  "tui_wait_state_tests.cpp"
+  "tui_transcript_view_tests.cpp"
   "tui_keybinding_tests.cpp"
   "tui_markdown_tests.cpp"
   "tui_mermaid_tests.cpp"
@@ -336,6 +340,20 @@ if(OptionEnableLibcwd)
 endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
+# Observe the real Session turn in isolated tests without adding production hooks.
+# Each wrapper forwards normally unless that test's TUI thread installs its probe.
+target_link_options(ava_tests PRIVATE
+  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop11service_dueENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE"
+  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop4waitENS0_11TuiWaitModeE"
+  "LINKER:--wrap=_ZNK3ava3tui12TuiEventLoop19notification_failedEv"
+  "LINKER:--wrap=_ZN3ava3tui9ActiveRun7consumeEm"
+  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox5drainEm"
+  "LINKER:--wrap=_ZN3ava3tui13runtime_input17poll_curses_inputEv"
+  "LINKER:--wrap=_ZN3ava3tui15RuntimeRenderer17paint_ready_frameEv"
+  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13start_pendingESt8functionIFbvEES2_IFvvEE"
+  "LINKER:--wrap=write"
+  "LINKER:--wrap=fflush"
+)
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
 target_link_libraries(ava_tests PRIVATE ava_process_gate_test_support)
 if (OptionEnableLibcwd)
@@ -474,6 +492,9 @@ set(AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES baseline no_color screen tmux kitty wez
 set(AVA_TUI_COMPOSER_RENDERING_CASES
   search_tail changed_session session_transition atomic_search message_navigation detached_completion
   message_navigation_empty display_reload_poll display_reload_overview)
+set(AVA_TUI_SESSION_CASES
+  turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
+  notification_failure prompt_paint_permission prompt_paint_question)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -494,7 +515,12 @@ foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_COMPOSER_RENDERING_CASES)
   add_test(NAME ava_tests.tui_composer_rendering.${AVA_TERMINAL_CASE}
     COMMAND ava_tests tui_composer_rendering ${AVA_TERMINAL_CASE})
 endforeach()
-foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering)
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_SESSION_CASES)
+  add_test(NAME ava_tests.tui_session.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests tui_session ${AVA_TERMINAL_CASE})
+  set_tests_properties(ava_tests.tui_session.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 20 LABELS "tui;offline")
+endforeach()
+foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering tui_session)
   if (AVA_TERMINAL_SUITE STREQUAL "terminal_keyboard_input_mode")
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_KEYBOARD_CASES})
   elseif(AVA_TERMINAL_SUITE STREQUAL "terminal_mouse_input_mode")
@@ -503,8 +529,10 @@ foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_COLOR_CASES})
   elseif(AVA_TERMINAL_SUITE STREQUAL "tui_terminal_virtual_smoke")
     set(AVA_TERMINAL_CASES ${AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES})
-  else()
+  elseif(AVA_TERMINAL_SUITE STREQUAL "tui_composer_rendering")
     set(AVA_TERMINAL_CASES ${AVA_TUI_COMPOSER_RENDERING_CASES})
+  else()
+    set(AVA_TERMINAL_CASES ${AVA_TUI_SESSION_CASES})
   endif()
   foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_CASES)
     set_tests_properties(ava_tests.${AVA_TERMINAL_SUITE}.${AVA_TERMINAL_CASE} PROPERTIES

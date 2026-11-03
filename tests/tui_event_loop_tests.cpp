@@ -403,11 +403,14 @@ void test_local_stop_and_retired_wakeup()
 // Public owner contracts also cover inbox changes used by the event loop.
 // Run the direct inbox and dispatcher contracts from their separate test file.
 void run_tui_runtime_owner_tests();
+// Direct OS waiter contracts own and retire their descriptors within each case.
+void run_tui_wait_state_tests();
 
 // Run scheduler, readiness and owner regressions without decoding terminal input.
 void run_tui_event_loop_tests()
 {
   run_tui_runtime_owner_tests();
+  run_tui_wait_state_tests();
   test_timer_deadline_replacement_and_late_repeat();
   test_timer_mutation_during_dispatch();
   test_timer_move_and_destruction();

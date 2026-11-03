@@ -2,6 +2,11 @@
 #include "tests/support/test_harness.h"
 #include "tests/tui_composer_test_suites.h"
 
+// Direct selector/summary contracts use the same initialized test-thread terminal.
+void run_tui_feature_owner_tests();
+// Direct viewport contracts retire all borrowed owners before returning here.
+void run_tui_transcript_view_tests();
+
 // Run editor and feature regressions under the shared initialized terminal fixture.
 void run_tui_composer_tests()
 {
@@ -29,6 +34,8 @@ void run_tui_composer_tests()
   run_tui_permission_tests_part_3();
   run_tui_modal_tests_part_3();
   run_tui_selector_tests();
+  run_tui_feature_owner_tests();
+  run_tui_transcript_view_tests();
   run_tui_transcript_tests_part_1();
   run_tui_transcript_selection_tests();
   run_tui_transcript_search_tests();

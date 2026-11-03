@@ -95,6 +95,18 @@ class EventLoopFixture final
   ava::tui::TuiEventLoop loop_;
 };
 
+// Stack-owned callback target for a bounded publication wait on the test thread.
+// Declare its timer afterward so the registration retires before this target.
+struct PromptPublicationDeadline
+{
+  // The loop callback ends the wait without consuming or claiming a prompt.
+  void expire(ava::tui::TuiEventLoop::Clock::time_point) { expired = true; }
+  // Test-thread timeout latch; only expire sets it, and the waiting test reads it.
+  bool expired = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 // Normal submissions retire in the same complete() call that consumes their published result.
 std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, ava::tui::TuiEventLoop& loop)
 {
@@ -630,8 +642,21 @@ bool test_active_run_session_transition_discards_prior_session_events()
     return false;
   draft_state.replace_draft("retained draft", 14);
   auto const claim_deadline = ava::tests::now_plus_seconds(2);
-  while (!prompt_coordinator.has_pending_requests() && std::chrono::steady_clock::now() < claim_deadline)
-    std::this_thread::yield();
+  PromptPublicationDeadline deadline;
+  auto publication_timeout = event_loop.loop().member_timer(deadline, &PromptPublicationDeadline::expire);
+  publication_timeout.arm_at(claim_deadline);
+  // Publication unlocks the prompt queue before notifying this real loop. Recheck
+  // the predicate after each wake because spinner/timer notifications can coalesce.
+  // Do not consume the run here: the retained-key path must claim the prompt itself.
+  while (!prompt_coordinator.has_pending_requests() && !deadline.expired)
+  {
+    event_loop.loop().service_due();
+    if (prompt_coordinator.has_pending_requests() || deadline.expired || event_loop.loop().terminal_hangup() || event_loop.loop().terminal_error() ||
+        event_loop.loop().notification_failed())
+      break;
+    event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
+  }
+  publication_timeout.cancel();
   bool const prompt_published = prompt_coordinator.has_pending_requests();
   if (!prompt_published)
   {

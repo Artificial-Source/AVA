@@ -30,21 +30,49 @@ struct ApplicationCatalogCache;
 
 namespace tui_test_support {
 
+// The fixture owns these optional application-boundary replacements until its
+// frontend and all test workers retire. Tests install them before launching work.
+// Except on_submit, calls are synchronous on the test's TUI thread; captures must
+// outlive every invocation. Empty hooks delegate to the real offline application.
 struct TuiFrontEndTestHooks
 {
+  // TUI thread: supply catalog generations before the projection consumes them.
   std::function<ava::tui::TuiCatalogDelivery()> read_catalog_delivery;
+  // TUI thread: supply a trust projection without changing backend permission policy.
   std::function<ava::tui::ProjectTrustSnapshot()> read_project_trust;
+  // TUI thread before launch: install request-bound queue callbacks; captured state must survive worker retirement.
   std::function<ava::tui::TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
+  // Submission worker: replace provider execution with controlled publication; captures live until the session joins it.
   std::function<ava::tui::TuiSubmitResult(std::string const&, ava::tui::TuiSubmitContext)> on_submit;
+  // TUI thread: return validated bindings or a controlled reload failure before publication.
   std::function<ava::core::Result<ava::tui::TuiKeyBindings>()> on_reload_key_bindings;
+  // TUI thread: control explicit settings reload results while retaining real preview/application ordering.
   std::function<ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>()> on_reload_display_settings;
+  // TUI thread: supply effective settings used to capture or rebase a preview.
   std::function<ava::tui::TuiLocalDisplaySettings()> display_settings_snapshot;
+  // TUI thread: distinguish applied, unchanged and failed discovery without changing owner cadence.
   std::function<ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>>()> on_maybe_reload_display_settings;
+  // Prepare a test-owned summary generation without starting a provider worker.
+  std::function<ava::core::Result<ava::tui::TuiBranchSummarySnapshot>(std::string_view)> on_branch_summary_prepare;
+  // Publish controlled progress values when the real summary discovery timer fires.
+  std::function<ava::tui::TuiBranchSummarySnapshot()> branch_summary_snapshot;
+  // Observe confirmation for the exact generation before publishing its next phase.
+  std::function<ava::core::Result<bool>(std::uint64_t)> on_branch_summary_confirm;
+  // Observe cooperative cancellation independently of eventual terminal settlement.
+  std::function<ava::core::Result<bool>(std::uint64_t)> on_branch_summary_cancel;
+  // Supply replacement catalog rows after a summary reports a committed change.
+  std::function<ava::core::Result<ava::tui::SelectListView>()> on_branch_summary_refresh_catalog;
+  // TUI thread: control a local settings action before the real owner publishes its outcome.
   std::function<ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>(std::string_view)> on_local_display_settings_action;
+  // TUI thread: supply path-free catalog rows for the workspace discovery owner.
   std::function<ava::core::Result<ava::tui::SelectListView>()> list_subagents;
+  // TUI thread: provide a generation-aware inspector result without sharing backend message storage.
   std::function<ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>>(std::string_view, std::optional<std::uint64_t>)> inspect_subagent;
+  // TUI thread: observe the selected job cancellation request and return its narrow presentation outcome.
   std::function<ava::tui::SubagentWorkspaceCancelOutcome(std::string_view)> cancel_subagent;
+  // TUI thread: observe promotion intent without changing backend session authority.
   std::function<ava::tui::SubagentWorkspacePromoteOutcome(std::string_view)> promote_subagent;
+  // TUI thread after active cleanup: observe final shutdown while the terminal and fixture still exist.
   std::function<void()> on_before_tui_shutdown;
 };
 

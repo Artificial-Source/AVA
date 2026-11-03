@@ -68,70 +68,114 @@ void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestM
 
 } // namespace
 
+// Fixture-owned application adapter. Optional hooks control observations while
+// unspecified actions keep the real offline implementation. TUI calls are
+// serialized; on_submit alone runs on the joined submission worker. The hooks
+// object and registered session outlive this frontend and every invocation.
 class TestTuiFrontEnd final : public ava::app::TuiFrontEnd
 {
  public:
+  // Bind stable fixture owners before any session or worker borrows this frontend.
   TestTuiFrontEnd(ava::app::runtime::session_ts& session, ava::app::ApplicationCatalogCache&& cache, ava::tui::TuiRuntimeOptions&& options,
                   TuiFrontEndTestHooks& hooks)
       : ava::app::TuiFrontEnd(session, std::move(cache), 0, std::move(options)), hooks_(hooks)
   {
   }
 
+  // TUI thread: supply a trust projection without changing backend permission policy.
   ava::tui::ProjectTrustSnapshot read_project_trust() const override
   {
     return hooks_.read_project_trust ? hooks_.read_project_trust() : ava::app::TuiFrontEnd::read_project_trust();
   }
+  // TUI thread: supply catalog generations before the projection consumes them.
   ava::tui::TuiCatalogDelivery read_catalog_delivery() override
   {
     return hooks_.read_catalog_delivery ? hooks_.read_catalog_delivery() : ava::app::TuiFrontEnd::read_catalog_delivery();
   }
+  // TUI thread before launch: install request-bound queue callbacks; captured state must survive worker retirement.
   ava::tui::TuiActiveRunQueues create_active_run_queues(ava::event::EventEnvelopeSink sink) const override
   {
     return hooks_.create_active_run_queues ? hooks_.create_active_run_queues(std::move(sink))
                                            : ava::app::TuiFrontEnd::create_active_run_queues(std::move(sink));
   }
+  // Submission worker: replace provider execution with controlled publication; captures live until the session joins it.
   ava::tui::TuiSubmitResult on_submit(std::string const& submitted, ava::tui::TuiSubmitContext context) override
   {
     return hooks_.on_submit ? hooks_.on_submit(submitted, std::move(context)) : ava::app::TuiFrontEnd::on_submit(submitted, std::move(context));
   }
+  // TUI thread: return validated bindings or a controlled reload failure before publication.
   ava::core::Result<ava::tui::TuiKeyBindings> on_reload_key_bindings() const override
   {
     return hooks_.on_reload_key_bindings ? hooks_.on_reload_key_bindings() : ava::app::TuiFrontEnd::on_reload_key_bindings();
   }
+  // TUI thread: control explicit settings reload results while retaining real preview/application ordering.
   ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult> on_reload_display_settings() override
   {
     return hooks_.on_reload_display_settings ? hooks_.on_reload_display_settings() : ava::app::TuiFrontEnd::on_reload_display_settings();
   }
+  // TUI thread: supply effective settings used to capture or rebase a preview.
   ava::tui::TuiLocalDisplaySettings display_settings_snapshot() const override
   {
     return hooks_.display_settings_snapshot ? hooks_.display_settings_snapshot() : ava::app::TuiFrontEnd::display_settings_snapshot();
   }
+  // TUI thread: distinguish applied, unchanged and failed discovery without changing owner cadence.
   ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> on_maybe_reload_display_settings() override
   {
     return hooks_.on_maybe_reload_display_settings ? hooks_.on_maybe_reload_display_settings() : ava::app::TuiFrontEnd::on_maybe_reload_display_settings();
   }
+  // TUI thread: let the fixture select the generation before the summary owner captures its checkpoint.
+  ava::core::Result<ava::tui::TuiBranchSummarySnapshot> on_branch_summary_prepare(std::string_view source) const override
+  {
+    return hooks_.on_branch_summary_prepare ? hooks_.on_branch_summary_prepare(source) : ava::app::TuiFrontEnd::on_branch_summary_prepare(source);
+  }
+  // TUI thread: exercise the real discovery callback with a controlled application snapshot.
+  ava::tui::TuiBranchSummarySnapshot branch_summary_snapshot() const override
+  {
+    return hooks_.branch_summary_snapshot ? hooks_.branch_summary_snapshot() : ava::app::TuiFrontEnd::branch_summary_snapshot();
+  }
+  // TUI thread: preserve generation validation at the test boundary without invoking a provider.
+  ava::core::Result<bool> on_branch_summary_confirm(std::uint64_t generation) const override
+  {
+    return hooks_.on_branch_summary_confirm ? hooks_.on_branch_summary_confirm(generation) : ava::app::TuiFrontEnd::on_branch_summary_confirm(generation);
+  }
+  // TUI thread: record a stop request separately from the snapshot that eventually settles it.
+  ava::core::Result<bool> on_branch_summary_cancel(std::uint64_t generation) const override
+  {
+    return hooks_.on_branch_summary_cancel ? hooks_.on_branch_summary_cancel(generation) : ava::app::TuiFrontEnd::on_branch_summary_cancel(generation);
+  }
+  // TUI thread: allow refresh success/failure after commitment while the real owner restores selection.
+  ava::core::Result<ava::tui::SelectListView> on_branch_summary_refresh_catalog() override
+  {
+    return hooks_.on_branch_summary_refresh_catalog ? hooks_.on_branch_summary_refresh_catalog() : ava::app::TuiFrontEnd::on_branch_summary_refresh_catalog();
+  }
+  // TUI thread: control a local settings action before the real owner publishes its outcome.
   ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult> on_local_display_settings_action(std::string_view action) override
   {
     return hooks_.on_local_display_settings_action ? hooks_.on_local_display_settings_action(action)
                                                    : ava::app::TuiFrontEnd::on_local_display_settings_action(action);
   }
+  // TUI thread: supply path-free catalog rows for the workspace discovery owner.
   ava::core::Result<ava::tui::SelectListView> list_subagents() const override
   {
     return hooks_.list_subagents ? hooks_.list_subagents() : ava::app::TuiFrontEnd::list_subagents();
   }
+  // TUI thread: provide a generation-aware inspector result without sharing backend message storage.
   ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>> inspect_subagent(std::string_view job_id,
                                                                                                 std::optional<std::uint64_t> generation) const override
   {
     return hooks_.inspect_subagent ? hooks_.inspect_subagent(job_id, generation) : ava::app::TuiFrontEnd::inspect_subagent(job_id, generation);
   }
+  // TUI thread: observe the selected job cancellation request and return its narrow presentation outcome.
   ava::tui::SubagentWorkspaceCancelOutcome cancel_subagent(std::string_view job_id) const override
   {
     return hooks_.cancel_subagent ? hooks_.cancel_subagent(job_id) : ava::app::TuiFrontEnd::cancel_subagent(job_id);
   }
+  // TUI thread: observe promotion intent without changing backend session authority.
   ava::tui::SubagentWorkspacePromoteOutcome promote_subagent(std::string_view job_id) const override
   {
     return hooks_.promote_subagent ? hooks_.promote_subagent(job_id) : ava::app::TuiFrontEnd::promote_subagent(job_id);
   }
+  // TUI thread after active cleanup: observe final shutdown while the terminal and fixture still exist.
   void on_before_tui_shutdown() override
   {
     if (hooks_.on_before_tui_shutdown)
@@ -143,6 +187,7 @@ class TestTuiFrontEnd final : public ava::app::TuiFrontEnd
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Fixture-owned callbacks; setup precedes launch and captures survive every joined call.
   TuiFrontEndTestHooks& hooks_;
 };
 

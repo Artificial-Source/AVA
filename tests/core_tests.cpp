@@ -105,6 +105,8 @@ void run_terminal_color_test_case(std::string_view);
 void prepare_tui_terminal_virtual_smoke_test_case(std::string_view, FILE*, FILE*);
 void run_tui_terminal_virtual_smoke_test_case(std::string_view);
 void run_tui_composer_rendering_terminal_test_case(std::string_view);
+// Run one real Session case in its own initialized terminal process.
+void run_tui_session_test_case(std::string_view);
 void run_run_observer_tests();
 void run_runtime_diagnostics_tests();
 void run_containment_tests();
@@ -218,6 +220,10 @@ constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_
 constexpr std::array<std::string_view, 9> kComposerRenderingCases{
     "search_tail",         "changed_session",          "session_transition",  "atomic_search",          "message_navigation",
     "detached_completion", "message_navigation_empty", "display_reload_poll", "display_reload_overview"};
+// Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
+constexpr std::array<std::string_view, 9> kSessionCases{"turn_order",           "frame_deadline",          "hangup",
+                                                        "descriptor_error",     "control_timer",           "signal_after_decode",
+                                                        "notification_failure", "prompt_paint_permission", "prompt_paint_question"};
 
 // Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
 void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)
@@ -239,6 +245,7 @@ constexpr std::array kIsolatedTerminalSuites{
                           run_tui_terminal_virtual_smoke_test_case, nullptr},
     IsolatedTerminalSuite{"tui_composer_rendering", kComposerRenderingCases, prepare_tui_composer_rendering_terminal_test_case,
                           run_tui_composer_rendering_terminal_test_case, nullptr},
+    IsolatedTerminalSuite{"tui_session", kSessionCases, prepare_tui_composer_rendering_terminal_test_case, run_tui_session_test_case, nullptr},
 };
 
 // Own the test executable's Application lifecycle and install its per-suite
