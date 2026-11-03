@@ -45,7 +45,6 @@ class TuiSession final
 
  private:
   bool stop_for_branch_summary(BranchSummaryOutcome outcome);
-  bool service_mermaid_presentation();
   bool maybe_reload_display_settings();
   bool toggle_startup_overview();
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);

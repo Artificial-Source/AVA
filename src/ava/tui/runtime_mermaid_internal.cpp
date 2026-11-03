@@ -1,5 +1,7 @@
 #include "sys.h"
 #include "ava/tui/runtime_mermaid_internal.h"
+#include "ava/tui/runtime_render_internal.h"
+#include "ava/tui/runtime_transcript_search_internal.h"
 
 #include <algorithm>
 #include <limits>
@@ -15,6 +17,8 @@ struct AcceptedIdentity
   std::size_t item_index = 0;
   std::size_t block_index = 0;
   std::uint64_t block_identity = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 template <typename Records>
@@ -41,8 +45,10 @@ bool same_accepted(std::vector<AcceptedIdentity> const& left, std::vector<Accept
 std::size_t earliest_difference(std::vector<AcceptedIdentity> const& before, std::vector<AcceptedIdentity> const& after)
 {
   auto earliest = std::numeric_limits<std::size_t>::max();
-  for (auto const& entry : before) earliest = std::min(earliest, entry.item_index);
-  for (auto const& entry : after) earliest = std::min(earliest, entry.item_index);
+  for (auto const& entry : before)
+    earliest = std::min(earliest, entry.item_index);
+  for (auto const& entry : after)
+    earliest = std::min(earliest, entry.item_index);
   return earliest == std::numeric_limits<std::size_t>::max() ? std::size_t{0} : earliest;
 }
 
@@ -55,8 +61,14 @@ bool same_block(Record const& record, detail::MermaidFenceBlock const& block)
 
 }  // namespace
 
-RuntimeMermaidPresentationController::RuntimeMermaidPresentationController(TuiMermaidRenderBridge bridge)
-    : bridge_(std::move(bridge)), config_epoch_(bridge_.config_epoch), enabled_(bridge_.enabled)
+RuntimeMermaidPresentationController::RuntimeMermaidPresentationController(ComposerSnapshot& snapshot, RuntimeRenderer& renderer,
+                                                                           TranscriptSearchController& transcript_search, TuiMermaidRenderBridge bridge)
+    : snapshot_(snapshot),
+      renderer_(renderer),
+      transcript_search_(transcript_search),
+      bridge_(std::move(bridge)),
+      config_epoch_(bridge_.config_epoch),
+      enabled_(bridge_.enabled)
 {
 }
 
@@ -92,7 +104,8 @@ void RuntimeMermaidPresentationController::cancel_record(Record const& record) n
 
 void RuntimeMermaidPresentationController::cancel_all() noexcept
 {
-  for (auto const& record : records_) cancel_record(record);
+  for (auto const& record : records_)
+    cancel_record(record);
   records_.clear();
 }
 
@@ -102,12 +115,15 @@ void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& sna
   {
     std::size_t item_index = 0;
     detail::MermaidFenceBlock block;
+
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
   std::vector<Candidate> candidates;
   for (std::size_t item_index = 0; item_index < snapshot.transcript.size(); ++item_index)
   {
     auto blocks = detail::scan_completed_assistant_mermaid_fences(snapshot.transcript[item_index]);
-    for (auto& block : blocks) candidates.push_back(Candidate{.item_index = item_index, .block = std::move(block)});
+    for (auto& block : blocks)
+      candidates.push_back(Candidate{.item_index = item_index, .block = std::move(block)});
   }
   if (candidates.size() > detail::kMaxMermaidPresentationEntries)
   {
@@ -260,10 +276,29 @@ std::vector<detail::MermaidAcceptedPresentation> RuntimeMermaidPresentationContr
   return accepted;
 }
 
-MermaidPresentationServiceResult RuntimeMermaidPresentationController::service(ComposerSnapshot& snapshot)
+MermaidServiceOutcome RuntimeMermaidPresentationController::service()
 {
+  auto old_anchor = detail::TranscriptViewportAnchor{};
+  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
+  if (preserve_viewport && !renderer_.transcript().has_deferred_update())
+    old_anchor = renderer_.capture_transcript_viewport();
+  auto const changed_item = service_projection();
+  if (!changed_item)
+    return MermaidServiceOutcome::Unchanged;
+  transcript_search_.refresh_after_transcript_mutation(0, *changed_item);
+  if (preserve_viewport)
+  {
+    renderer_.transcript().defer_update(old_anchor, 0);
+    renderer_.synchronize_detached_transcript_layout();
+  }
+  return renderer_.request_render(FrameRenderKind::Full) ? MermaidServiceOutcome::Changed : MermaidServiceOutcome::RenderFailed;
+}
+
+std::optional<std::size_t> RuntimeMermaidPresentationController::service_projection()
+{
+  auto& snapshot = snapshot_;
   if (shutdown_)
-    return {};
+    return std::nullopt;
   auto const before = accepted_identities(records_);
 
   auto const session_changed = session_id_ != snapshot.session_id;
@@ -298,12 +333,14 @@ MermaidPresentationServiceResult RuntimeMermaidPresentationController::service(C
   if (visual_changed)
   {
     auto accepted = accepted_presentations();
+    // Immutable snapshot copies share these bounded accepted results; helper
+    // process ownership remains with the external bridge.
     snapshot.mermaid_projection = accepted.empty() ? std::shared_ptr<detail::MermaidTranscriptProjection const>{}
                                                    : std::make_shared<detail::MermaidTranscriptProjection const>(config_epoch_, std::move(accepted));
     ++snapshot.transcript_generation;
   }
   observed_transcript_generation_ = snapshot.transcript_generation;
-  return MermaidPresentationServiceResult{.visual_changed = visual_changed, .earliest_changed_item = earliest_difference(before, after)};
+  return visual_changed ? std::optional{earliest_difference(before, after)} : std::nullopt;
 }
 
 void RuntimeMermaidPresentationController::shutdown() noexcept

@@ -36,6 +36,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
     : frontend_(frontend),
       terminal_context_(terminal_context),
       presentation_state_(&frontend, initial_status_line),
+      plugin_ui_(presentation_state_.snapshot),
       renderer_(&frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, &terminal_context),
       navigation_(frontend, presentation_state_.snapshot, draft_state_, renderer_),
       selectors_(presentation_state_.snapshot),
@@ -46,13 +47,12 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings()),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
       prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, &selectors_),
-      mermaid_presentation_(frontend.mermaid_bridge()),
+      mermaid_presentation_(presentation_state_.snapshot, renderer_, transcript_search_, frontend.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_),
       subagent_workspace_(frontend, presentation_state_.snapshot, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_),
       active_run_controller_(frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
-                             action_controller_, transcript_search_, subagent_workspace_, session_transitions_,
-                             std::bind_front(&TuiSession::service_mermaid_presentation, this)),
+                             action_controller_, transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
                          transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_),
       input_dispatcher_({std::bind_front(&TuiSession::handle_signal_input, this), std::bind_front(&TuiSession::handle_resize_input, this),
@@ -73,7 +73,8 @@ TuiSession::~TuiSession()
 {
   // Each collaborator is still alive here; shutdown also covers early run returns.
   mermaid_presentation_.shutdown();
-  plugin_ui_.shutdown(presentation_state_.snapshot);
+  plugin_ui_.shutdown();
+  prompt_coordinator_.shutdown();
 }
 
 bool TuiSession::stop_for_branch_summary(BranchSummaryOutcome outcome)
@@ -81,26 +82,6 @@ bool TuiSession::stop_for_branch_summary(BranchSummaryOutcome outcome)
   if (outcome == BranchSummaryOutcome::RenderFailed)
     terminal_write_failed_ = true;
   return outcome == BranchSummaryOutcome::RenderFailed || outcome == BranchSummaryOutcome::ExitReady;
-}
-
-bool TuiSession::service_mermaid_presentation()
-{
-  auto old_anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport && !renderer_.transcript().has_deferred_update())
-  {
-    old_anchor = renderer_.capture_transcript_viewport();
-  }
-  auto const update = mermaid_presentation_.service(presentation_state_.snapshot);
-  if (!update.visual_changed)
-    return true;
-  transcript_search_.refresh_after_transcript_mutation(0, update.earliest_changed_item);
-  if (preserve_viewport)
-  {
-    renderer_.transcript().defer_update(old_anchor, 0);
-    renderer_.synchronize_detached_transcript_layout();
-  }
-  return renderer_.request_render(FrameRenderKind::Full);
 }
 
 bool TuiSession::maybe_reload_display_settings()
@@ -1122,12 +1103,12 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
   using Signals = core::Signals;
   if (Signals::received(terminal_signals))
     return 130;
-  if (!service_mermaid_presentation() || !renderer_.render())
+  if (mermaid_presentation_.service() == MermaidServiceOutcome::RenderFailed || !renderer_.render())
     return 1;
 
   while (true)
   {
-    if (!service_mermaid_presentation())
+    if (mermaid_presentation_.service() == MermaidServiceOutcome::RenderFailed)
     {
       terminal_write_failed_ = true;
       break;
@@ -1179,7 +1160,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
   }
 
   mermaid_presentation_.shutdown();
-  plugin_ui_.shutdown(presentation_state_.snapshot);
+  plugin_ui_.shutdown();
+  prompt_coordinator_.shutdown();
   if (!before_shutdown())
     terminal_write_failed_ = true;
   return terminal_signal_received_ ? 130 : (terminal_write_failed_ ? 1 : 0);

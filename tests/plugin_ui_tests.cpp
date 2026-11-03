@@ -1080,8 +1080,8 @@ void test_external_disable_revokes_active_ui_command()
   expect(enabled.has_value(), "external-disable fixture is initially enabled");
   auto session = plugin_ui_test_session(paths, workspace);
 
-  ava::tui::RuntimePluginUiCoordinator coordinator;
   ava::tui::ComposerSnapshot snapshot;
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
   snapshot.width = 80;
   snapshot.height = 12;
   auto const artificial_start = std::chrono::steady_clock::now() - ava::tui::kTuiPluginUiInvocationDeadline + std::chrono::seconds(3);
@@ -1150,7 +1150,7 @@ void test_external_disable_revokes_active_ui_command()
   auto const open_deadline = ava::tests::now_plus_seconds(10);
   while (!modal_opened && result.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < open_deadline)
   {
-    static_cast<void>(coordinator.poll(snapshot, false));
+    static_cast<void>(coordinator.poll(false));
     modal_opened = snapshot.plugin_ui_modal.has_value();
     if (!modal_opened)
       std::this_thread::yield();
@@ -1168,7 +1168,7 @@ void test_external_disable_revokes_active_ui_command()
   if (!finished)
     coordinator.cancel_active();
   auto command_result = result.get();
-  static_cast<void>(coordinator.poll(snapshot, false));
+  static_cast<void>(coordinator.poll(false));
 
   std::string output;
   if (command_result)
@@ -1231,7 +1231,7 @@ ava::tui::TuiPluginUiRequest tui_request(ava::tui::TuiPluginUiBinding binding, s
 }
 
 ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::TuiPluginUiEndpoint const& endpoint,
-                                                   ava::tui::ComposerSnapshot& snapshot, ava::tui::TuiPluginUiRequest request)
+                                                   ava::tui::TuiPluginUiRequest request)
 {
   auto reply = std::async(std::launch::async, [endpoint, request = std::move(request), &coordinator]() {
     return endpoint.present(request, endpoint.deadline, [&coordinator] { return coordinator.deadline_reached(std::chrono::steady_clock::time_point::min()); });
@@ -1239,31 +1239,31 @@ ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoor
   auto const wait_deadline = ava::tests::now_plus_seconds(10);
   while (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < wait_deadline)
   {
-    static_cast<void>(coordinator.poll(snapshot, false));
+    static_cast<void>(coordinator.poll(false));
     std::this_thread::yield();
   }
   if (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
   {
     coordinator.cancel_active();
-    static_cast<void>(coordinator.poll(snapshot, false));
+    static_cast<void>(coordinator.poll(false));
   }
   return reply.get();
 }
 
-bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::ComposerSnapshot& snapshot, std::future<ava::tui::TuiPluginUiReply>& reply,
-                       bool conflict = false)
+bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::ComposerSnapshot const& snapshot,
+                       std::future<ava::tui::TuiPluginUiReply>& reply, bool conflict = false)
 {
   auto const wait_deadline = ava::tests::now_plus_seconds(10);
   while (!snapshot.plugin_ui_modal && reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready &&
          std::chrono::steady_clock::now() < wait_deadline)
   {
-    static_cast<void>(coordinator.poll(snapshot, conflict));
+    static_cast<void>(coordinator.poll(conflict));
     std::this_thread::yield();
   }
   if (!snapshot.plugin_ui_modal && reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
   {
     coordinator.cancel_active();
-    static_cast<void>(coordinator.poll(snapshot, false));
+    static_cast<void>(coordinator.poll(false));
   }
   return snapshot.plugin_ui_modal.has_value();
 }
@@ -1279,8 +1279,8 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
                           {"trailing space rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {} ")},
                           {"noncanonical id rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run COM.EXAMPLE.ui run {}")}});
 
-  ava::tui::RuntimePluginUiCoordinator coordinator;
   ava::tui::ComposerSnapshot snapshot;
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
   snapshot.width = 80;
   snapshot.height = 24;
   snapshot.input = "draft remains";
@@ -1304,19 +1304,19 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
 
   auto status = tui_request(binding, "status", ava::tui::TuiPluginUiKind::Status);
   status.text = "working safely";
-  auto const status_reply = present_update_and_poll(coordinator, *endpoint, snapshot, std::move(status));
+  auto const status_reply = present_update_and_poll(coordinator, *endpoint, std::move(status));
   bool updates_ok = status_reply.action == ava::tui::TuiPluginUiReplyKind::Ack;
   for (std::size_t index = 0; index < 4; ++index)
   {
     auto widget = tui_request(binding, "widget-" + std::to_string(index), ava::tui::TuiPluginUiKind::Widget);
     widget.title = "widget " + std::to_string(index);
     widget.lines = std::vector<std::string>(8, "line");
-    updates_ok = updates_ok && present_update_and_poll(coordinator, *endpoint, snapshot, std::move(widget)).action == ava::tui::TuiPluginUiReplyKind::Ack;
+    updates_ok = updates_ok && present_update_and_poll(coordinator, *endpoint, std::move(widget)).action == ava::tui::TuiPluginUiReplyKind::Ack;
   }
   auto overflow = tui_request(binding, "widget-overflow", ava::tui::TuiPluginUiKind::Widget);
   overflow.title = "overflow";
   overflow.lines = {"line"};
-  auto const overflow_reply = present_update_and_poll(coordinator, *endpoint, snapshot, std::move(overflow));
+  auto const overflow_reply = present_update_and_poll(coordinator, *endpoint, std::move(overflow));
   ava::tests::expect_all(
       "coordinator acknowledges ordered updates, enforces resource limits, and preserves composer state",
       {{"updates acknowledged", updates_ok},
@@ -1332,22 +1332,22 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
        {"queue cap", ava::tui::kTuiPluginUiMaxQueuedRecords == 64}});
 
   auto old_endpoint = *endpoint;
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   auto replacement = coordinator.begin_submission("/plugin run com.example.ui run {}", "invocation-2");
   auto stale = tui_request(binding, "stale", ava::tui::TuiPluginUiKind::Status);
   stale.text = "stale";
   auto const stale_reply = old_endpoint.present(stale, old_endpoint.deadline, [] { return false; });
   expect(replacement && stale_reply.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_dock && !snapshot.plugin_ui_modal,
          "session/run cleanup rejects stale presenter bindings and clears ephemeral plugin presentation");
-  coordinator.shutdown(snapshot);
+  coordinator.shutdown();
   expect(replacement && replacement->runtime_token.expired() && !snapshot.plugin_ui_dock && !snapshot.plugin_ui_modal,
          "TUI shutdown invalidates the runtime token and clears all plugin-owned presentation");
 }
 
 void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
 {
-  ava::tui::RuntimePluginUiCoordinator coordinator;
   ava::tui::ComposerSnapshot snapshot;
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
   snapshot.width = 80;
   snapshot.height = 10;
   snapshot.input = "untouched draft";
@@ -1369,15 +1369,15 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   bool const opened = open_plugin_modal(coordinator, snapshot, selected_reply);
   auto down = ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
   auto enter = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
-  auto const down_result = coordinator.handle_input(snapshot, down);
-  auto const enter_result = coordinator.handle_input(snapshot, enter);
+  auto const down_result = coordinator.handle_input(down);
+  auto const enter_result = coordinator.handle_input(enter);
   auto const selected = selected_reply.get();
   expect(opened && down_result == ava::tui::TuiPluginUiInputResult::Redraw && enter_result == ava::tui::TuiPluginUiInputResult::Redraw &&
              selected.action == ava::tui::TuiPluginUiReplyKind::Select && selected.option_id == "SECRET_OPTION_BETA" && snapshot.input == "untouched draft" &&
              snapshot.transcript.size() == 1,
          "host-owned arrows and Enter resolve a selection by hidden option ID without changing composer or transcript state");
 
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-escape");
   auto const escape_binding = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-escape"};
   auto escape_confirm = tui_request(escape_binding, "escape", ava::tui::TuiPluginUiKind::Confirm);
@@ -1387,13 +1387,13 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
       std::launch::async, [endpoint = *endpoint, escape_confirm]() { return endpoint.present(escape_confirm, endpoint.deadline, [] { return false; }); });
   bool const escape_opened = open_plugin_modal(coordinator, snapshot, escape_reply);
   auto escape = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
-  auto const escape_input = coordinator.handle_input(snapshot, escape);
+  auto const escape_input = coordinator.handle_input(escape);
   auto const escaped = escape_reply.get();
   expect(escape_opened && escape_input == ava::tui::TuiPluginUiInputResult::Redraw && escaped.action == ava::tui::TuiPluginUiReplyKind::Cancel &&
              !snapshot.plugin_ui_modal,
          "host-owned Esc resolves a short-identity modal as cancel without stopping the invocation");
 
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-conflict");
   auto const conflict_binding = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-conflict"};
   auto confirm = tui_request(conflict_binding, "confirm", ava::tui::TuiPluginUiKind::Confirm);
@@ -1406,7 +1406,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   expect(conflicted.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_modal,
          "existing host prompt/modal authority wins and cancels conflicting plugin presentation");
 
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-stop");
   auto const stop_binding = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-stop"};
   auto stop_confirm = tui_request(stop_binding, "stop", ava::tui::TuiPluginUiKind::Confirm);
@@ -1418,11 +1418,11 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   coordinator.cancel_active();
   auto const stop_ready = stop_reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
   auto const stopped = stop_reply.get();
-  static_cast<void>(coordinator.poll(snapshot, false));
+  static_cast<void>(coordinator.poll(false));
   expect(stop_opened && stop_ready && stopped.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_modal && !snapshot.plugin_ui_dock,
          "the Ctrl+C stop path cancels a short-identity modal and clears all ephemeral presentation");
 
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   auto const started = std::chrono::steady_clock::now();
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-3", started);
   auto const binding3 = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-3"};
@@ -1432,13 +1432,13 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   auto deadline_reply = std::async(
       std::launch::async, [endpoint = *endpoint, deadline_request]() { return endpoint.present(deadline_request, endpoint.deadline, [] { return false; }); });
   bool const deadline_opened = open_plugin_modal(coordinator, snapshot, deadline_reply);
-  auto const deadline_poll = coordinator.poll(snapshot, false, endpoint->deadline);
+  auto const deadline_poll = coordinator.poll(false, endpoint->deadline);
   auto const expired = deadline_reply.get();
   expect(deadline_opened && deadline_poll.deadline_expired && expired.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_modal &&
              !snapshot.plugin_ui_dock && endpoint->deadline == started + ava::tui::kTuiPluginUiInvocationDeadline,
          "one absolute 120-second direct UI deadline cancels and unblocks a visible modal");
 
-  coordinator.finish_submission(snapshot);
+  coordinator.finish_submission();
   endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-4");
   auto const binding4 = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "choose", .invocation_id = "modal-4"};
   auto canceled_request = tui_request(binding4, "child-exit", ava::tui::TuiPluginUiKind::Confirm);
@@ -1454,7 +1454,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   if (!child_ready)
     coordinator.cancel_active();
   auto const child_result = child_reply.get();
-  static_cast<void>(coordinator.poll(snapshot, false));
+  static_cast<void>(coordinator.poll(false));
   expect(child_opened && child_ready && child_result.action == ava::tui::TuiPluginUiReplyKind::Cancel,
          "child exit/cancel polling finitely unblocks a modal without waiting under coordinator locks");
 }
@@ -1473,8 +1473,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
   auto narrow_case = [&](std::string const& plugin_id, std::string_view invocation_prefix) {
     for (std::size_t height = 8; height <= 12; ++height)
     {
-      ava::tui::RuntimePluginUiCoordinator coordinator;
       ava::tui::ComposerSnapshot snapshot;
+      ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
       snapshot.width = 80;
       snapshot.height = height;
       auto const invocation_id = std::string(invocation_prefix) + std::to_string(height);
@@ -1492,7 +1492,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
       auto const deadline = ava::tests::now_plus_seconds(10);
       while (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < deadline)
       {
-        static_cast<void>(coordinator.poll(snapshot, false));
+        static_cast<void>(coordinator.poll(false));
         ever_visible = ever_visible || snapshot.plugin_ui_modal.has_value() || snapshot.plugin_ui_dock.has_value();
         if (ever_visible)
           coordinator.cancel_active();
@@ -1501,7 +1501,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
       if (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
         coordinator.cancel_active();
       auto const result = reply.get();
-      static_cast<void>(coordinator.poll(snapshot, false));
+      static_cast<void>(coordinator.poll(false));
       if (ever_visible || result.action != ava::tui::TuiPluginUiReplyKind::Cancel || snapshot.plugin_ui_modal || snapshot.plugin_ui_dock)
         return false;
     }
@@ -1521,8 +1521,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
     for (std::size_t height = 8; height <= 12; ++height)
     {
       auto exercise = [&](ava::tui::TuiPluginUiKind kind, std::string_view suffix, Trigger trigger) {
-        ava::tui::RuntimePluginUiCoordinator coordinator;
         ava::tui::ComposerSnapshot snapshot;
+        ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
         snapshot.width = 160;
         snapshot.height = height;
         auto const invocation_id = "wide_narrow_" + std::to_string(height) + std::string(suffix);
@@ -1550,21 +1550,21 @@ void test_tui_plugin_ui_attribution_fit_policy()
         bool dispatch_ok = false;
         if (trigger == Trigger::ArrowThenEnter)
         {
-          auto const arrow_result = coordinator.handle_input(snapshot, arrow);
-          auto const enter_result = coordinator.handle_input(snapshot, enter);
+          auto const arrow_result = coordinator.handle_input(arrow);
+          auto const enter_result = coordinator.handle_input(enter);
           dispatch_ok = arrow_result == ava::tui::TuiPluginUiInputResult::Redraw && enter_result == ava::tui::TuiPluginUiInputResult::Unhandled;
         }
         else if (trigger == Trigger::EnterThenArrow)
         {
-          auto const enter_result = coordinator.handle_input(snapshot, enter);
-          auto const arrow_result = coordinator.handle_input(snapshot, arrow);
+          auto const enter_result = coordinator.handle_input(enter);
+          auto const arrow_result = coordinator.handle_input(arrow);
           dispatch_ok = enter_result == ava::tui::TuiPluginUiInputResult::Redraw && arrow_result == ava::tui::TuiPluginUiInputResult::Unhandled;
         }
         else
         {
-          auto const polled = coordinator.poll(snapshot, false);
-          auto const arrow_result = coordinator.handle_input(snapshot, arrow);
-          auto const enter_result = coordinator.handle_input(snapshot, enter);
+          auto const polled = coordinator.poll(false);
+          auto const arrow_result = coordinator.handle_input(arrow);
+          auto const enter_result = coordinator.handle_input(enter);
           dispatch_ok =
               polled.changed && arrow_result == ava::tui::TuiPluginUiInputResult::Unhandled && enter_result == ava::tui::TuiPluginUiInputResult::Unhandled;
         }
@@ -1629,8 +1629,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
              dock_visible.find("Ctrl+C stop · 120s max") != std::string::npos && dock_visible.find("…") == std::string::npos,
          "sufficient-width dock chrome also renders complete maximum attribution and fixed controls");
 
-  ava::tui::RuntimePluginUiCoordinator queued_coordinator;
   ava::tui::ComposerSnapshot queued_snapshot;
+  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_snapshot);
   queued_snapshot.width = 160;
   queued_snapshot.height = 12;
   auto queued_endpoint = queued_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "queued_resize");
@@ -1660,15 +1660,15 @@ void test_tui_plugin_ui_attribution_fit_policy()
   queued_snapshot.width = 80;
   while (queued_reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < queued_deadline)
   {
-    static_cast<void>(queued_coordinator.poll(queued_snapshot, false));
+    static_cast<void>(queued_coordinator.poll(false));
     std::this_thread::yield();
   }
   if (queued_reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
     queued_coordinator.cancel_active();
   auto const queued_result = queued_reply.get();
 
-  ava::tui::RuntimePluginUiCoordinator visible_coordinator;
   ava::tui::ComposerSnapshot visible_snapshot;
+  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_snapshot);
   visible_snapshot.width = 160;
   visible_snapshot.height = 12;
   auto visible_endpoint = visible_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "visible_resize");
@@ -1681,9 +1681,9 @@ void test_tui_plugin_ui_attribution_fit_policy()
       tui_request({.plugin_id = first_id, .command = max_command, .invocation_id = "visible_resize"}, "visible-widget", ava::tui::TuiPluginUiKind::Widget);
   visible_widget.title = "Wide dock";
   visible_widget.lines = {"visible before resize"};
-  auto const visible_result = present_update_and_poll(visible_coordinator, *visible_endpoint, visible_snapshot, std::move(visible_widget));
+  auto const visible_result = present_update_and_poll(visible_coordinator, *visible_endpoint, std::move(visible_widget));
   visible_snapshot.width = 80;
-  auto const invalidated = visible_coordinator.cancel_unfittable_surfaces(visible_snapshot);
+  auto const invalidated = visible_coordinator.cancel_unfittable_surfaces();
   auto after_invalidation =
       tui_request({.plugin_id = first_id, .command = max_command, .invocation_id = "visible_resize"}, "after-invalidation", ava::tui::TuiPluginUiKind::Status);
   after_invalidation.text = "must remain canceled";
@@ -1705,8 +1705,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
 
 void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
 {
-  ava::tui::RuntimePluginUiCoordinator coordinator;
   ava::tui::ComposerSnapshot snapshot;
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
   snapshot.width = 80;
   snapshot.height = 24;
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "close_race");
@@ -1737,7 +1737,7 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
       if (swapped_nonempty)
         cv.wait(lock, [&] { return release_poll; });
     });
-    polling = std::async(std::launch::async, [&] { return coordinator.poll(snapshot, false); });
+    polling = std::async(std::launch::async, [&] { return coordinator.poll(false); });
     {
       std::unique_lock lock(mutex);
       static_cast<void>(cv.wait_until(lock, deadline, [&] { return hook_ran; }));
@@ -1765,7 +1765,7 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
     coordinator.cancel_active();
   auto const reply_ready = reply.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready;
   auto const action = reply.get();
-  static_cast<void>(coordinator.poll(snapshot, false));
+  static_cast<void>(coordinator.poll(false));
   ava::tests::expect_all("close after dequeue but before apply cancels the record without publishing or acknowledging a surface",
                          {{"record dequeued", swapped_nonempty},
                           {"close returned", close_returned},

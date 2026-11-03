@@ -426,6 +426,7 @@ set(AVA_TEST_SUITES
   mermaid_render
   permission_rules
   tui_composer
+  tui_pending_requests
   terminal_horizontal_layout
   terminal_paragraph
   terminal_window

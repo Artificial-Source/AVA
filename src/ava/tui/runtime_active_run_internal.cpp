@@ -11,6 +11,7 @@
 #include "ava/tui/runtime_commands_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
+#include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
 #include "ava/tui/runtime_prompts_internal.h"
@@ -312,7 +313,7 @@ RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, Ru
                                                        RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                                                        RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                        TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                       SessionTransitionCoordinator& transitions, std::function<bool()> service_mermaid_presentation)
+                                                       SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -325,7 +326,7 @@ RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, Ru
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
       transitions_(transitions),
-      service_mermaid_presentation_(service_mermaid_presentation ? std::move(service_mermaid_presentation) : std::function<bool()>{[] { return true; }})
+      mermaid_(mermaid)
 {
 }
 
@@ -488,7 +489,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     auto const [width, height] = terminal_size();
     snapshot.width = width;
     snapshot.height = height;
-    return plugin_ui_.cancel_unfittable_surfaces(snapshot);
+    return plugin_ui_.cancel_unfittable_surfaces();
   };
   auto render = [&]() -> bool {
     static_cast<void>(refresh_plugin_surface_fit());
@@ -587,13 +588,14 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   snapshot.processing = true;
   if (!render())
   {
-    plugin_ui_.finish_submission(snapshot);
+    plugin_ui_.finish_submission();
     active_run_outcome.terminal_write_failed = true;
     return active_run_outcome;
   }
   auto result = TuiSubmitResult{};
   bool session_changed = false;
   {
+    prompt_coordinator_.open_admission();
     permission_resolver = prompt_coordinator_.permission_resolver();
     question_resolver = prompt_coordinator_.question_resolver();
     auto const request_key_bindings = frontend_.key_bindings();
@@ -644,7 +646,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     };
     auto poll_plugin_ui = [&]() {
       auto const geometry_changed = refresh_plugin_surface_fit();
-      auto const polled = plugin_ui_.poll(snapshot, plugin_host_modal_conflict());
+      auto const polled = plugin_ui_.poll(plugin_host_modal_conflict());
       if (polled.deadline_expired && !request_stop())
         return false;
       return (!geometry_changed && !polled.changed) || renderer_.request_render();
@@ -660,7 +662,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
           return renderer_.render();
         if (geometry_changed)
           return renderer_.request_render();
-        auto const plugin_result = plugin_ui_.handle_input(snapshot, input.event);
+        auto const plugin_result = plugin_ui_.handle_input(input.event);
         if (plugin_result == TuiPluginUiInputResult::RequestStop)
           return request_stop();
         if (plugin_result == TuiPluginUiInputResult::Redraw)
@@ -793,7 +795,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       }
 
       auto const drain_result = drain_events(state);
-      if (drain_result == RuntimeEventDrainResult::RenderFailed || !service_mermaid_presentation_())
+      if (drain_result == RuntimeEventDrainResult::RenderFailed || mermaid_.service() == MermaidServiceOutcome::RenderFailed)
       {
         fail_active_run();
         break;
@@ -830,7 +832,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     }
     // Clear and unblock the TUI-local presentation before joining the submit
     // worker or applying an application/session transition.
-    plugin_ui_.finish_submission(snapshot);
+    plugin_ui_.finish_submission();
     result = submit_future.get();
     state.ordinary_turn_request_ids = result.ordinary_turn_request_ids;
     state.command_events_released = !is_command_submission || !state.ordinary_turn_request_ids.empty();
@@ -893,7 +895,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     if (render_failed)
       return active_run_outcome;
   }
-  plugin_ui_.finish_submission(snapshot);
+  plugin_ui_.finish_submission();
   prompt_coordinator_.set_audit_sink(nullptr);
   if (active_run_outcome.terminal_signal_received)
     return active_run_outcome;
@@ -1002,7 +1004,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   }
   snapshot.processing = false;
   presentation_state_.refresh_prompt_metadata();
-  if (!service_mermaid_presentation_() || !render())
+  if (mermaid_.service() == MermaidServiceOutcome::RenderFailed || !render())
   {
     active_run_outcome.terminal_write_failed = true;
     return active_run_outcome;

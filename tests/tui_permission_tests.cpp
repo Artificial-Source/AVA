@@ -1,19 +1,189 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/app/commands.h"
 #include "ava/agent/mode.h"
+#include "ava/tui/PendingPermissionRequest.h"
+#include "ava/tui/PendingQuestionRequest.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/session_grants.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/thread.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdlib>
+#include <future>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
+
+namespace {
+
+template <typename Result>
+Result joined_prompt_result(std::future<Result>& future, std::string_view phase)
+{
+  if (future.wait_until(ava::tests::now_plus_seconds(2)) != std::future_status::ready)
+  {
+    // Callers release every test gate and retire the request before joining. A
+    // broken await must fail this process rather than hang in future destruction.
+    expect(false, "pending request worker did not settle after cleanup: " + std::string(phase));
+    std::abort();
+  }
+  return future.get();
+}
+
+bool interrupted_question(ava::core::Result<ava::agent::QuestionAnswer> const& result)
+{
+  return !result && result.error().category() == ava::core::ErrorCategory::Tool && result.error().message() == "question prompt interrupted";
+}
+
+template <typename Request, typename Prompt, typename Answer, typename IsCanceled, typename IsFirst>
+void test_unclaimed_interruption_and_first_result(Prompt prompt, Answer first, Answer second, IsCanceled is_canceled, IsFirst is_first, std::string_view label)
+{
+  auto canceled = std::make_shared<Request>(prompt);
+  canceled->interrupt();
+  bool const canceled_claim_rejected = !canceled->begin_resolution();
+  auto canceled_waiter = ava::core::make_async("pending_canceled", [canceled] { return canceled->await(); });
+  bool const queued_settled = canceled_waiter.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  // Cleanup also supplies a result if interruption regressed; the first result
+  // must remain cancellation, including when await has already consumed it.
+  canceled->complete(first);
+  auto canceled_result = joined_prompt_result(canceled_waiter, label);
+  expect(queued_settled && canceled_claim_rejected && !canceled->begin_resolution() && is_canceled(canceled_result),
+         std::string(label) + " queued interruption releases await without a claim and rejects later resolution");
+
+  auto completed = std::make_shared<Request>(std::move(prompt));
+  bool const claimed = completed->begin_resolution();
+  completed->complete(first);
+  bool const completed_claim_rejected = !completed->begin_resolution();
+  completed->complete(second);
+  completed->interrupt();
+  auto completed_waiter = ava::core::make_async("pending_completed", [completed] { return completed->await(); });
+  auto completed_result = joined_prompt_result(completed_waiter, label);
+  expect(claimed && completed_claim_rejected && !completed->begin_resolution() && is_first(completed_result),
+         std::string(label) + " first completion wins over duplicate completion and later interruption");
+}
+
+void test_claimed_permission_interruption_waits_for_retirement()
+{
+  auto request = std::make_shared<ava::tui::PendingPermissionRequest>(ava::permissions::PermissionPrompt{});
+  bool const claimed = request->begin_resolution();
+  bool const duplicate_claim_rejected = !request->begin_resolution();
+  std::promise<void> await_started;
+  auto started = await_started.get_future();
+  auto waiter = ava::core::make_async("permission_waiter", [request, &await_started] {
+    await_started.set_value();
+    return request->await();
+  });
+  bool const worker_started = started.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  request->interrupt();
+  bool const held_while_claimed = waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+  bool const interrupted_claim_rejected = !request->begin_resolution();
+  // Always retire before any assertion, even if the waiter returned too early.
+  request->complete(ava::permissions::PermissionResolution::Allow);
+  auto result = joined_prompt_result(waiter, "claimed permission");
+  expect(claimed && duplicate_claim_rejected && worker_started && held_while_claimed && interrupted_claim_rejected && !request->begin_resolution() && result &&
+             result->resolution == ava::permissions::PermissionResolution::Deny,
+         "claimed permission interruption retains the waiter until resolution retires and denial wins over its late allow");
+}
+
+void test_claimed_question_retains_borrowed_callback_scope()
+{
+  std::promise<std::shared_ptr<ava::tui::PendingQuestionRequest>> published_request;
+  auto published = published_request.get_future();
+  std::promise<void> await_started;
+  auto started = await_started.get_future();
+  std::promise<void> callback_entered;
+  auto entered = callback_entered.get_future();
+  std::promise<void> callback_returned;
+  auto returned = callback_returned.get_future();
+  std::promise<void> release_callback;
+  auto callback_gate = release_callback.get_future().share();
+  std::promise<void> release_resolution;
+  auto retirement_gate = release_resolution.get_future().share();
+  std::weak_ptr<int> borrowed_scope;
+  std::atomic<std::size_t> callback_calls = 0;
+  std::atomic<bool> worker_scope_retired = false;
+  auto waiter = ava::core::make_async("question_waiter", [&] {
+    // The callback observes this worker-owned lifetime without extending it or
+    // risking a dangling reference if await incorrectly returns too early.
+    auto worker_scope = std::make_shared<int>(1);
+    borrowed_scope = worker_scope;
+    ava::agent::QuestionPrompt prompt{.header = {},
+                                      .question = "Borrowed callback lifetime",
+                                      .options = {},
+                                      .auto_resolve = [scope = std::weak_ptr<int>(worker_scope), callback_gate, &callback_calls, &callback_entered] {
+                                        ++callback_calls;
+                                        bool const alive_on_entry = !scope.expired();
+                                        callback_entered.set_value();
+                                        bool const released = callback_gate.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+                                        return alive_on_entry && released && !scope.expired();
+                                      }};
+    auto request = std::make_shared<ava::tui::PendingQuestionRequest>(std::move(prompt));
+    published_request.set_value(request);
+    await_started.set_value();
+    auto result = request->await();
+    worker_scope.reset();
+    worker_scope_retired = true;
+    return result;
+  });
+  auto request = joined_prompt_result(published, "question publication");
+  bool const worker_started = started.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  bool const claimed = request->begin_resolution();
+  bool const duplicate_claim_rejected = !request->begin_resolution();
+  auto resolver = ava::core::make_async("question_resolver", [request, claimed, retirement_gate, &callback_returned] {
+    bool const callback_succeeded = claimed && request->prompt().auto_resolve();
+    callback_returned.set_value();
+    bool const released = retirement_gate.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+    request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "late answer"});
+    return callback_succeeded && released;
+  });
+  bool const callback_started = entered.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  request->interrupt();
+  bool const blocked_during_callback =
+      waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout && !worker_scope_retired && !borrowed_scope.expired();
+  release_callback.set_value();
+  bool const callback_finished = returned.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  bool const blocked_before_retirement =
+      waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout && !worker_scope_retired && !borrowed_scope.expired();
+  // Release both phases and retire before inspecting any assertion outcome.
+  release_resolution.set_value();
+  bool const callback_succeeded = joined_prompt_result(resolver, "question resolver retirement");
+  request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "cleanup answer"});
+  auto result = joined_prompt_result(waiter, "claimed question");
+  request->interrupt();
+  request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "after retirement"});
+  expect(worker_started && claimed && duplicate_claim_rejected && callback_started && blocked_during_callback && callback_finished &&
+             blocked_before_retirement && callback_succeeded && interrupted_question(result),
+         "claimed question interruption keeps the awaiting worker and borrowed auto-resolve scope alive through callback completion and resolution retirement");
+  expect(worker_scope_retired && borrowed_scope.expired() && callback_calls == 1 && !request->begin_resolution(),
+         "retired question releases the worker scope, rejects another claim, and never invokes its borrowed callback again");
+}
+
+}  // namespace
+
+void run_tui_pending_request_tests()
+{
+  test_claimed_permission_interruption_waits_for_retirement();
+  test_claimed_question_retains_borrowed_callback_scope();
+  test_unclaimed_interruption_and_first_result<ava::tui::PendingPermissionRequest>(
+      ava::permissions::PermissionPrompt{}, ava::permissions::PermissionResolutionDecision(ava::permissions::PermissionResolution::Allow),
+      ava::permissions::PermissionResolutionDecision(ava::permissions::PermissionResolution::Deny),
+      [](auto const& result) { return result && result->resolution == ava::permissions::PermissionResolution::Deny; },
+      [](auto const& result) { return result && result->resolution == ava::permissions::PermissionResolution::Allow; }, "permission request");
+  test_unclaimed_interruption_and_first_result<ava::tui::PendingQuestionRequest>(
+      ava::agent::QuestionPrompt{}, ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "first answer"},
+      ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "second answer"}, interrupted_question,
+      [](auto const& result) { return result && result->custom_text == "first answer"; }, "question request");
+}
 
 void run_tui_permission_tests_part_1()
 {

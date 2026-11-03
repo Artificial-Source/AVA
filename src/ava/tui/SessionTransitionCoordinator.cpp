@@ -24,7 +24,7 @@ bool SessionTransitionCoordinator::apply(std::string committed_session_id)
     return false;
 
   search_.reset_for_session_transition();
-  workspace_.reset_for_session_transition();
+  workspace_.close();
   draft_.reset_for_session_transition();
   renderer_.reset_for_session_transition();
   presentation_.reset_session_projection(selectors_.kind() == ActiveSelectList::Overview);

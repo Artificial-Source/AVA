@@ -54,6 +54,11 @@ RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontE
 {
 }
 
+RuntimeSubagentWorkspaceController::~RuntimeSubagentWorkspaceController()
+{
+  close();
+}
+
 bool RuntimeSubagentWorkspaceController::active() const noexcept
 {
   return mode_ != Mode::Closed;
@@ -128,7 +133,7 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   return true;
 }
 
-void RuntimeSubagentWorkspaceController::close_to_parent()
+void RuntimeSubagentWorkspaceController::close()
 {
   mode_ = Mode::Closed;
   selector_ = {};
@@ -139,11 +144,6 @@ void RuntimeSubagentWorkspaceController::close_to_parent()
   last_list_refresh_succeeded_ = true;
   next_poll_ = Clock::time_point::max();
   publish();
-}
-
-void RuntimeSubagentWorkspaceController::reset_for_session_transition()
-{
-  close_to_parent();
 }
 
 void RuntimeSubagentWorkspaceController::close_to_selector()
@@ -382,7 +382,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
     }
     if (input.action == SelectListInputAction::Cancel)
     {
-      close_to_parent();
+      close();
       result.changed = true;
       return result;
     }

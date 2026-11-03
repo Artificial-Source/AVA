@@ -335,20 +335,14 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator()
-    : state_(std::make_shared<RuntimePluginUiCoordinatorState>()), runtime_token_(std::make_shared<int const>(1))
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(ComposerSnapshot& snapshot)
+    : snapshot_(snapshot), state_(std::make_shared<RuntimePluginUiCoordinatorState>()), runtime_token_(std::make_shared<int const>(1))
 {
 }
 
 RuntimePluginUiCoordinator::~RuntimePluginUiCoordinator()
 {
-  if (state_)
-  {
-    std::lock_guard lock(state_->mutex);
-    state_->shutdown = true;
-    cancel_locked(*state_);
-  }
-  runtime_token_.reset();
+  shutdown();
 }
 
 std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(std::string_view submitted, std::string invocation_id,
@@ -380,16 +374,29 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
   std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state = state_;
   return TuiPluginUiEndpoint{.runtime_token = runtime_token_,
                              .deadline = deadline,
-                             .present =
-                                 [weak_state, generation](TuiPluginUiRequest const& request, std::chrono::steady_clock::time_point request_deadline,
-                                                          TuiPluginUiCancelCallback cancel_requested) {
-                                   return present_request(weak_state, generation, request, request_deadline, std::move(cancel_requested));
-                                 },
-                             .close = [weak_state, generation](TuiPluginUiBinding const& binding) { close_binding(weak_state, generation, binding); }};
+                             .present = std::bind_front(present_request, weak_state, generation),
+                             .close = std::bind_front(close_binding, weak_state, generation)};
 }
 
-bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces(ComposerSnapshot& snapshot)
+bool RuntimePluginUiCoordinator::clear_surface(std::optional<TuiPluginUiBinding> const& binding)
 {
+  bool changed = false;
+  if (!binding || (snapshot_.plugin_ui_dock && snapshot_.plugin_ui_dock->binding == *binding))
+  {
+    changed = changed || snapshot_.plugin_ui_dock.has_value();
+    snapshot_.plugin_ui_dock.reset();
+  }
+  if (!binding || (snapshot_.plugin_ui_modal && snapshot_.plugin_ui_modal->binding == *binding))
+  {
+    changed = changed || snapshot_.plugin_ui_modal.has_value();
+    snapshot_.plugin_ui_modal.reset();
+  }
+  return changed;
+}
+
+bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
+{
+  auto& snapshot = snapshot_;
   bool fits = true;
   if (snapshot.plugin_ui_dock)
   {
@@ -414,10 +421,11 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces(ComposerSnapshot& sn
   return true;
 }
 
-TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapshot, bool host_modal_conflict, std::chrono::steady_clock::time_point now)
+TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now)
 {
+  auto& snapshot = snapshot_;
   TuiPluginUiPollResult result;
-  result.changed = cancel_unfittable_surfaces(snapshot);
+  result.changed = cancel_unfittable_surfaces();
   std::deque<PluginUiQueueRecord> records;
   std::function<void(std::size_t)> after_queue_swap;
   {
@@ -432,21 +440,6 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapsho
   }
   if (after_queue_swap)
     after_queue_swap(records.size());
-
-  auto clear_surface = [&](std::optional<TuiPluginUiBinding> const& binding = std::nullopt) {
-    bool changed = false;
-    if (!binding || (snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->binding == *binding))
-    {
-      changed = changed || snapshot.plugin_ui_dock.has_value();
-      snapshot.plugin_ui_dock.reset();
-    }
-    if (!binding || (snapshot.plugin_ui_modal && snapshot.plugin_ui_modal->binding == *binding))
-    {
-      changed = changed || snapshot.plugin_ui_modal.has_value();
-      snapshot.plugin_ui_modal.reset();
-    }
-    result.changed = result.changed || changed;
-  };
 
   if (host_modal_conflict && snapshot.plugin_ui_modal)
   {
@@ -474,9 +467,9 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapsho
       if (!current_generation)
         continue;
       if (record.request.binding.plugin_id.empty())
-        clear_surface();
+        result.changed = clear_surface() || result.changed;
       else
-        clear_surface(record.request.binding);
+        result.changed = clear_surface(record.request.binding) || result.changed;
       continue;
     }
 
@@ -513,7 +506,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapsho
       if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
       {
         cancel_locked(*state_);
-        clear_surface(request.binding);
+        result.changed = clear_surface(request.binding) || result.changed;
         complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
         continue;
       }
@@ -549,7 +542,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapsho
     if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
     {
       cancel_locked(*state_);
-      clear_surface(request.binding);
+      result.changed = clear_surface(request.binding) || result.changed;
       complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
       continue;
     }
@@ -561,8 +554,9 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(ComposerSnapshot& snapsho
   return result;
 }
 
-TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(ComposerSnapshot& snapshot, InputEvent const& event)
+TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const& event)
 {
+  auto& snapshot = snapshot_;
   if (!snapshot.plugin_ui_modal)
     return TuiPluginUiInputResult::Unhandled;
 
@@ -577,7 +571,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(ComposerSnapshot
 
   // Snapshot geometry is not input authority: resize/poll can lag behind a
   // buffered key. Recheck the exact renderer fit before navigation or resolve.
-  if (cancel_unfittable_surfaces(snapshot))
+  if (cancel_unfittable_surfaces())
     return TuiPluginUiInputResult::Redraw;
 
   auto& view = *snapshot.plugin_ui_modal;
@@ -658,7 +652,7 @@ void RuntimePluginUiCoordinator::cancel_active()
   cancel_locked(*state_);
 }
 
-void RuntimePluginUiCoordinator::finish_submission(ComposerSnapshot& snapshot)
+void RuntimePluginUiCoordinator::finish_submission()
 {
   {
     std::lock_guard lock(state_->mutex);
@@ -668,11 +662,10 @@ void RuntimePluginUiCoordinator::finish_submission(ComposerSnapshot& snapshot)
     state_->outstanding_modal.reset();
     state_->visible_modal.reset();
   }
-  snapshot.plugin_ui_dock.reset();
-  snapshot.plugin_ui_modal.reset();
+  static_cast<void>(clear_surface());
 }
 
-void RuntimePluginUiCoordinator::shutdown(ComposerSnapshot& snapshot)
+void RuntimePluginUiCoordinator::shutdown()
 {
   {
     std::lock_guard lock(state_->mutex);
@@ -682,8 +675,7 @@ void RuntimePluginUiCoordinator::shutdown(ComposerSnapshot& snapshot)
     state_->owner.reset();
   }
   runtime_token_.reset();
-  snapshot.plugin_ui_dock.reset();
-  snapshot.plugin_ui_modal.reset();
+  static_cast<void>(clear_surface());
 }
 
 void RuntimePluginUiCoordinator::set_after_enqueue_for_test(std::function<void()> hook)

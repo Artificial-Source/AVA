@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "PendingPermissionRequest.h"
+#include "PendingQuestionRequest.h"
 #include "SelectorHost.h"
 #include "ava/event/events.h"
 #include "ava/tui/TuiFrontEnd.h"
@@ -38,38 +40,41 @@ bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std:
   return (key == Key::MouseWheelUp || key == Key::MouseWheelDown) && deadline && now < *deadline;
 }
 
-PendingPermissionRequest::PendingPermissionRequest(ava::permissions::PermissionPrompt prompt_in) : prompt(std::move(prompt_in))
-{
-}
-
-PendingQuestionRequest::PendingQuestionRequest(ava::agent::QuestionPrompt prompt_in) : prompt(std::move(prompt_in))
-{
-}
-
 RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants,
                                                    RuntimeRenderer& renderer, SelectorHost* selectors)
     : frontend_(frontend), snapshot_(snapshot), session_grants_(session_grants), renderer_(renderer), selectors_(selectors)
 {
 }
 
-namespace {
-
-void close_competing_select_list_for_prompt(SelectorHost* selectors)
+void RuntimePromptCoordinator::close_competing_selector()
 {
-  if (!selectors)
+  if (!selectors_)
     return;
   // Process-local overview and prompt-stash selectors may be open during an
   // active run. Prompt authority closes either without mutating its owned state.
-  if (selectors->kind() != ActiveSelectList::Overview && selectors->kind() != ActiveSelectList::PromptStash)
+  if (selectors_->kind() != ActiveSelectList::Overview && selectors_->kind() != ActiveSelectList::PromptStash)
     return;
-  selectors->close();
+  selectors_->close();
 }
 
-}  // namespace
-
-bool RuntimePromptCoordinator::render()
+RuntimePromptCoordinator::~RuntimePromptCoordinator()
 {
-  return renderer_.render();
+  shutdown();
+}
+
+void RuntimePromptCoordinator::open_admission()
+{
+  std::lock_guard lock(prompt_request_mutex_);
+  accept_prompt_requests_ = true;
+}
+
+void RuntimePromptCoordinator::shutdown()
+{
+  fail_pending_requests();
+  set_audit_sink({});
+  auto lock = renderer_.lock_ui();
+  snapshot_.permission_prompt.reset();
+  snapshot_.question_prompt.reset();
 }
 
 void RuntimePromptCoordinator::set_audit_sink(ava::event::RuntimeEventSink sink)
@@ -131,7 +136,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
       auto lock = renderer_.lock_ui();
       snapshot.status = "permission allowed for this session";
     }
-    static_cast<void>(render());
+    static_cast<void>(renderer_.render());
     ava::permissions::PermissionResolutionDecision decision{ava::permissions::PermissionResolution::AllowSessionGrant};
     decision.resolution_source = "tui_session_grant";
     return decision;
@@ -139,7 +144,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
   {
     auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
-    close_competing_select_list_for_prompt(selectors_);
+    close_competing_selector();
     snapshot.permission_prompt = permission_prompt_view(prompt);
     snapshot.permission_prompt->selected_choice = PermissionPromptChoice::Deny;
     snapshot.permission_prompt->allow_session_available = allow_session_available;
@@ -150,7 +155,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
                           : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject";
   }
   ava::core::Application::instance().terminal_context().beep();
-  if (!render())
+  if (!renderer_.render())
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
   }
@@ -172,7 +177,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
           snapshot.permission_prompt.reset();
           snapshot.status = "permission rule unavailable; denied";
         }
-        if (!render())
+        if (!renderer_.render())
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
         }
@@ -192,7 +197,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
           snapshot.permission_prompt.reset();
           snapshot.status = "permission rule failed; denied";
         }
-        if (!render())
+        if (!renderer_.render())
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
         }
@@ -216,7 +221,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
           snapshot.permission_prompt.reset();
           snapshot.status = cap_reached ? "permission session grant cap reached; denied" : "permission session grant no longer eligible; denied";
         }
-        if (!render())
+        if (!renderer_.render())
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
         }
@@ -231,7 +236,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         snapshot.permission_prompt.reset();
         snapshot.status = "permission allowed for this session";
       }
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
       }
@@ -249,7 +254,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         snapshot.permission_prompt.reset();
         snapshot.status = remember ? "permission allow rule saved" : "permission allowed once";
       }
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
       }
@@ -269,7 +274,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
       snapshot.permission_prompt.reset();
       snapshot.status = remember ? "permission deny rule saved" : "permission denied";
     }
-    if (!render())
+    if (!renderer_.render())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
     }
@@ -314,7 +319,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         snapshot.permission_prompt.reset();
         snapshot.status = "interrupted";
       }
-      static_cast<void>(render());
+      static_cast<void>(renderer_.render());
       return ava::permissions::PermissionResolution::Deny;
     }
     if (!choice_input)
@@ -327,7 +332,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     {
       wheel_governor.reset();
       wheel_suppression_deadline.reset();
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
       }
@@ -381,7 +386,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
           snapshot.permission_prompt->guidance_text = std::move(input_result.guidance_text);
         }
       }
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
       }
@@ -404,7 +409,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
                                                     snapshot.permission_prompt->deny_remember_available)
                          : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject";
     }
-    if (!render())
+    if (!renderer_.render())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
     }
@@ -421,13 +426,13 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
   {
     auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
-    close_competing_select_list_for_prompt(selectors_);
+    close_competing_selector();
     snapshot.question_prompt = question_prompt_view(prompt);
     snapshot.status =
         prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels" : "question required: Enter sends, numbers choose, Esc cancels";
   }
   ava::core::Application::instance().terminal_context().beep();
-  if (!render())
+  if (!renderer_.render())
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));
   }
@@ -439,7 +444,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       snapshot.question_prompt.reset();
       snapshot.status = "question canceled";
     }
-    static_cast<void>(render());
+    static_cast<void>(renderer_.render());
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt canceled"));
   };
 
@@ -452,7 +457,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       snapshot.question_prompt.reset();
       snapshot.status = "question answered";
     }
-    if (!render())
+    if (!renderer_.render())
     {
       return ava::core::Result<ava::agent::QuestionAnswer>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear question prompt"))};
     }
@@ -494,7 +499,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
         snapshot.question_prompt.reset();
         snapshot.status = "interrupted";
       }
-      static_cast<void>(render());
+      static_cast<void>(renderer_.render());
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
     }
     if (!question_input)
@@ -507,7 +512,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
     {
       wheel_governor.reset();
       wheel_suppression_deadline.reset();
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));
       }
@@ -553,7 +558,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
         snapshot.status = copy_text_to_terminal_clipboard(input_result.copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
       }
       emit_prompt_audit("tui:question_copy", "question copy");
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));
       }
@@ -571,7 +576,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
         snapshot.question_prompt.reset();
         snapshot.status = answer ? "question answered" : "question canceled";
       }
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear question prompt"));
       }
@@ -583,7 +588,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
             auto lock = renderer_.lock_ui();
             snapshot.status = copy_text_to_terminal_clipboard(*copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
           }
-          static_cast<void>(render());
+          static_cast<void>(renderer_.render());
         }
         emit_prompt_audit("tui:question_answer", question_answer_audit_detail(*answer));
       }
@@ -596,7 +601,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
 
     if (input_result.action == QuestionPromptInputAction::Redraw)
     {
-      if (!render())
+      if (!renderer_.render())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));
       }
@@ -605,86 +610,94 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       continue;
     }
 
-    if (!render())
+    if (!renderer_.render())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));
     }
   }
 }
 
-void RuntimePromptCoordinator::complete_permission_request(std::shared_ptr<PendingPermissionRequest> const& request,
-                                                           ava::core::Result<ava::permissions::PermissionResolutionDecision> result)
+void RuntimePromptCoordinator::interrupt_claimed_request(ClaimedPromptRequest const& request)
 {
-  {
-    std::lock_guard<std::mutex> lock(request->mutex);
-    request->result = std::move(result);
-  }
-  request->ready.notify_one();
+  if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))
+    (*permission)->interrupt();
+  else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
+    (*question)->interrupt();
 }
 
-void RuntimePromptCoordinator::complete_question_request(std::shared_ptr<PendingQuestionRequest> const& request,
-                                                         ava::core::Result<ava::agent::QuestionAnswer> result)
+void RuntimePromptCoordinator::retire_claimed_request(ClaimedPromptRequest const& request)
 {
-  {
-    std::lock_guard<std::mutex> lock(request->mutex);
-    request->result = std::move(result);
-  }
-  request->ready.notify_one();
+  std::lock_guard lock(prompt_request_mutex_);
+  if (claimed_request_ == request)
+    claimed_request_ = std::monostate{};
 }
 
 void RuntimePromptCoordinator::fail_pending_requests()
 {
-  auto& accept_prompt_requests = accept_prompt_requests_;
-  auto& prompt_request_mutex = prompt_request_mutex_;
-  auto& pending_permission_requests = pending_permission_requests_;
-  auto& pending_question_requests = pending_question_requests_;
-  accept_prompt_requests.store(false);
+  // Queue and claim shares keep requests alive after removal until each waiter
+  // receives cancellation; claimed UI resolution keeps its own share as well.
   std::deque<std::shared_ptr<PendingPermissionRequest>> permission_requests;
   std::deque<std::shared_ptr<PendingQuestionRequest>> question_requests;
+  ClaimedPromptRequest claimed_request;
   {
-    std::lock_guard<std::mutex> lock(prompt_request_mutex);
-    permission_requests = std::move(pending_permission_requests);
-    question_requests = std::move(pending_question_requests);
-    pending_permission_requests.clear();
-    pending_question_requests.clear();
+    std::lock_guard lock(prompt_request_mutex_);
+    accept_prompt_requests_ = false;
+    permission_requests.swap(pending_permission_requests_);
+    question_requests.swap(pending_question_requests_);
+    claimed_request = claimed_request_;
   }
-  for (auto const& permission_request : permission_requests)
-  {
-    complete_permission_request(permission_request, ava::permissions::PermissionResolution::Deny);
-  }
-  for (auto const& question_request : question_requests)
-  {
-    complete_question_request(question_request, std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted")));
-  }
+  for (auto const& request : permission_requests)
+    request->interrupt();
+  for (auto const& request : question_requests)
+    request->interrupt();
+  interrupt_claimed_request(claimed_request);
 }
 
 RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::claim_pending_request_locked()
 {
-  ClaimedPromptRequest request;
+  if (!std::holds_alternative<std::monostate>(claimed_request_))
+    return {};
   if (!pending_permission_requests_.empty())
   {
-    request.permission = std::move(pending_permission_requests_.front());
+    auto request = std::move(pending_permission_requests_.front());
     pending_permission_requests_.pop_front();
+    if (request->begin_resolution())
+      claimed_request_ = std::move(request);
   }
   else if (!pending_question_requests_.empty())
   {
-    request.question = std::move(pending_question_requests_.front());
+    auto request = std::move(pending_question_requests_.front());
     pending_question_requests_.pop_front();
+    if (request->begin_resolution())
+      claimed_request_ = std::move(request);
   }
-  return request;
+  return claimed_request_;
 }
 
 void RuntimePromptCoordinator::service_claimed_request(ClaimedPromptRequest request, std::function<bool()> const& stop_requested,
                                                        std::function<bool()> const& request_stop, std::function<void()> const& before_prompt)
 {
-  if (before_prompt)
-    before_prompt();
-  if (request.permission)
+  try
   {
-    complete_permission_request(request.permission, resolve_permission_prompt(request.permission->prompt, stop_requested, request_stop));
-    return;
+    if (before_prompt)
+      before_prompt();
+    if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))
+      (*permission)->complete(resolve_permission_prompt((*permission)->prompt(), stop_requested, request_stop));
+    else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
+      (*question)->complete(resolve_question_prompt((*question)->prompt(), stop_requested, request_stop));
   }
-  complete_question_request(request.question, resolve_question_prompt(request.question->prompt, stop_requested, request_stop));
+  catch (...)
+  {
+    // A failed UI callback must retire its claim before the worker may return;
+    // it will never invoke the prompt's borrowed callbacks after this point.
+    if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))
+      (*permission)->complete(ava::permissions::PermissionResolution::Deny);
+    else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
+      (*question)->complete(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted")));
+    retire_claimed_request(request);
+    throw;
+  }
+  retire_claimed_request(request);
 }
 
 bool RuntimePromptCoordinator::service_pending_request(std::function<bool()> const& stop_requested, std::function<bool()> const& request_stop,
@@ -695,7 +708,7 @@ bool RuntimePromptCoordinator::service_pending_request(std::function<bool()> con
     std::lock_guard<std::mutex> lock(prompt_request_mutex_);
     request = claim_pending_request_locked();
   }
-  if (!request)
+  if (std::holds_alternative<std::monostate>(request))
     return false;
   service_claimed_request(std::move(request), stop_requested, request_stop, before_prompt);
   return true;
@@ -714,67 +727,53 @@ SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_
     // The caller restricts this callback to the bounded search-modal handler.
     // It cannot run local commands, and prompt rendering/resolution starts only
     // after this lock is released, preserving the prompt-before-UI lock order.
-    if (!request)
+    if (std::holds_alternative<std::monostate>(request))
       input_handled = dispatch_search_input();
   }
-  if (!request)
+  if (std::holds_alternative<std::monostate>(request))
     return input_handled ? SearchInputPromptDispatchResult::InputHandled : SearchInputPromptDispatchResult::InputFailed;
   service_claimed_request(std::move(request), stop_requested, request_stop, before_prompt);
   return SearchInputPromptDispatchResult::PromptServiced;
 }
 
+ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptCoordinator::request_permission(ava::permissions::PermissionPrompt const& prompt)
+{
+  // This worker share survives queue removal and keeps the response available
+  // until the sole waiting resolver consumes it.
+  std::shared_ptr<PendingPermissionRequest> request;
+  {
+    std::lock_guard lock(prompt_request_mutex_);
+    if (!accept_prompt_requests_)
+      return ava::permissions::PermissionResolution::Deny;
+    request = std::make_shared<PendingPermissionRequest>(prompt);
+    pending_permission_requests_.push_back(request);
+  }
+  return request->await();
+}
+
+ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::request_question(ava::agent::QuestionPrompt const& prompt)
+{
+  // UI resolution can outlive queue membership; worker and UI each retain their
+  // own share until no prompt callback can refer back to the blocked worker.
+  std::shared_ptr<PendingQuestionRequest> request;
+  {
+    std::lock_guard lock(prompt_request_mutex_);
+    if (!accept_prompt_requests_)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
+    request = std::make_shared<PendingQuestionRequest>(prompt);
+    pending_question_requests_.push_back(request);
+  }
+  return request->await();
+}
+
 ava::permissions::PermissionResolver RuntimePromptCoordinator::permission_resolver()
 {
-  accept_prompt_requests_.store(true);
-  return [this](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-    auto& accept_prompt_requests = accept_prompt_requests_;
-    auto& prompt_request_mutex = prompt_request_mutex_;
-    auto& pending_permission_requests = pending_permission_requests_;
-    if (!accept_prompt_requests.load())
-      return ava::permissions::PermissionResolution::Deny;
-    auto request = std::make_shared<PendingPermissionRequest>(prompt);
-    {
-      std::lock_guard<std::mutex> lock(prompt_request_mutex);
-      if (!accept_prompt_requests.load())
-        return ava::permissions::PermissionResolution::Deny;
-      pending_permission_requests.push_back(request);
-    }
-    std::unique_lock<std::mutex> lock(request->mutex);
-    request->ready.wait(lock, [&]() { return request->result.has_value() || !accept_prompt_requests.load(); });
-    if (!request->result)
-      return ava::permissions::PermissionResolution::Deny;
-    return std::move(*request->result);
-  };
+  return std::bind_front(&RuntimePromptCoordinator::request_permission, this);
 }
 
 ava::agent::QuestionResolver RuntimePromptCoordinator::question_resolver()
 {
-  accept_prompt_requests_.store(true);
-  return [this](ava::agent::QuestionPrompt const& prompt) -> ava::core::Result<ava::agent::QuestionAnswer> {
-    auto& accept_prompt_requests = accept_prompt_requests_;
-    auto& prompt_request_mutex = prompt_request_mutex_;
-    auto& pending_question_requests = pending_question_requests_;
-    if (!accept_prompt_requests.load())
-    {
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
-    }
-    auto request = std::make_shared<PendingQuestionRequest>(prompt);
-    {
-      std::lock_guard<std::mutex> lock(prompt_request_mutex);
-      if (!accept_prompt_requests.load())
-      {
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
-      }
-      pending_question_requests.push_back(request);
-    }
-    std::unique_lock<std::mutex> lock(request->mutex);
-    request->ready.wait(lock, [&]() { return request->result.has_value() || !accept_prompt_requests.load(); });
-    if (!request->result)
-    {
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
-    }
-    return std::move(*request->result);
-  };
+  return std::bind_front(&RuntimePromptCoordinator::request_question, this);
 }
 
 }  // namespace ava::tui

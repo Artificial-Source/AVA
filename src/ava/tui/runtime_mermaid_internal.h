@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime.h"
 
@@ -11,12 +12,14 @@
 
 namespace ava::tui {
 
-struct MermaidPresentationServiceResult
-{
-  bool visual_changed = false;
-  std::size_t earliest_changed_item = 0;
+class RuntimeRenderer;
+class TranscriptSearchController;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+enum class MermaidServiceOutcome
+{
+  Unchanged,
+  Changed,
+  RenderFailed
 };
 
 // TUI-owned reconciliation state. This class performs no process work itself;
@@ -24,14 +27,20 @@ struct MermaidPresentationServiceResult
 class RuntimeMermaidPresentationController final
 {
  public:
-  explicit RuntimeMermaidPresentationController(TuiMermaidRenderBridge bridge);
+  // Snapshot, renderer and transcript search outlive this TUI-thread owner.
+  // The bridge remains the external authority for asynchronous rendering work.
+  RuntimeMermaidPresentationController(ComposerSnapshot& snapshot, RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
+                                       TuiMermaidRenderBridge bridge);
   RuntimeMermaidPresentationController(RuntimeMermaidPresentationController const&) = delete;
   RuntimeMermaidPresentationController& operator=(RuntimeMermaidPresentationController const&) = delete;
   ~RuntimeMermaidPresentationController();
 
-  [[nodiscard]] MermaidPresentationServiceResult service(ComposerSnapshot& snapshot);
+  [[nodiscard]] MermaidServiceOutcome service();
   void shutdown() noexcept;
 
+  // Reconciliation records hold arbitrary diagram source/output, and borrowed
+  // presentation/layout owners contain messages. Generated printing must not
+  // expose these contents or the bridge's captured authority.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
@@ -50,6 +59,7 @@ class RuntimeMermaidPresentationController final
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
+  [[nodiscard]] std::optional<std::size_t> service_projection();
   [[nodiscard]] std::uint64_t next_identity() noexcept;
   void cancel_record(Record const& record) noexcept;
   void cancel_all() noexcept;
@@ -59,6 +69,9 @@ class RuntimeMermaidPresentationController final
   void enforce_result_byte_bound() noexcept;
   [[nodiscard]] std::vector<detail::MermaidAcceptedPresentation> accepted_presentations() const;
 
+  ComposerSnapshot& snapshot_;
+  RuntimeRenderer& renderer_;
+  TranscriptSearchController& transcript_search_;
   TuiMermaidRenderBridge bridge_;
   std::vector<Record> records_;
   std::uint64_t config_epoch_ = 0;

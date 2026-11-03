@@ -27,7 +27,10 @@ class RuntimeSubagentWorkspaceController final
   using Clock = std::chrono::steady_clock;
   static constexpr auto kPollInterval = std::chrono::milliseconds(150);
 
+  // Frontend, projection and selector host outlive this TUI-owned presentation.
+  // Destruction clears only workspace presentation; backend jobs keep their owner.
   RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SelectorHost& selectors);
+  ~RuntimeSubagentWorkspaceController();
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
@@ -35,7 +38,8 @@ class RuntimeSubagentWorkspaceController final
   [[nodiscard]] bool poll(Clock::time_point now = Clock::now());
   [[nodiscard]] std::optional<Clock::duration> time_until_poll(Clock::time_point now = Clock::now()) const;
   [[nodiscard]] RuntimeSubagentWorkspaceInputResult handle_input(InputEvent const& event, Clock::time_point now = Clock::now());
-  void reset_for_session_transition();
+  // Close presentation and polling admission while the borrowed host/snapshot live.
+  void close();
 
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] bool selector_active() const noexcept;
@@ -59,7 +63,6 @@ class RuntimeSubagentWorkspaceController final
   [[nodiscard]] bool cycle_workspace(bool forward);
   [[nodiscard]] bool scroll_workspace(std::ptrdiff_t delta);
   [[nodiscard]] bool set_workspace_scroll(std::size_t offset);
-  void close_to_parent();
   void close_to_selector();
   void publish();
 

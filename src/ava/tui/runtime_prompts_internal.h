@@ -1,21 +1,20 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/event/RuntimeEvent.h"
 #include "ava/agent/question.h"
 #include "ava/tui/terminal.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/result.h"
 
-#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include "debug.h"
+#include <variant>
 
 namespace ava::tui {
 
@@ -30,29 +29,8 @@ class SelectorHost;
 class RuntimeRenderer;
 class TuiSessionGrantRegistry;
 
-struct PendingPermissionRequest
-{
-  explicit PendingPermissionRequest(ava::permissions::PermissionPrompt prompt_in);
-
-  ava::permissions::PermissionPrompt prompt;
-  std::mutex mutex;
-  std::condition_variable ready;
-  std::optional<ava::core::Result<ava::permissions::PermissionResolutionDecision>> result;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
-
-struct PendingQuestionRequest
-{
-  explicit PendingQuestionRequest(ava::agent::QuestionPrompt prompt_in);
-
-  ava::agent::QuestionPrompt prompt;
-  std::mutex mutex;
-  std::condition_variable ready;
-  std::optional<ava::core::Result<ava::agent::QuestionAnswer>> result;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
+class PendingPermissionRequest;
+class PendingQuestionRequest;
 
 enum class SearchInputPromptDispatchResult
 {
@@ -69,6 +47,14 @@ class RuntimePromptCoordinator final
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;
 
+  ~RuntimePromptCoordinator();
+
+  // The session and borrowed UI collaborators outlive every resolver invocation;
+  // stop admission and join workers before destroying this coordinator.
+  // Open only after prior submission workers and claimed UI resolution retire.
+  void open_admission();
+  // TUI-thread teardown also clears this owner's prompt projections.
+  void shutdown();
   [[nodiscard]] ava::permissions::PermissionResolver permission_resolver();
   [[nodiscard]] ava::agent::QuestionResolver question_resolver();
   void fail_pending_requests();
@@ -80,19 +66,16 @@ class RuntimePromptCoordinator final
                                                                                              std::function<void()> const& before_prompt = {});
   void set_audit_sink(ava::event::RuntimeEventSink sink);
 
+  // Queued prompts, decisions and audit callbacks contain arbitrary user text.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  struct ClaimedPromptRequest
-  {
-    std::shared_ptr<PendingPermissionRequest> permission;
-    std::shared_ptr<PendingQuestionRequest> question;
+  // Shared ownership keeps a request alive independently for its waiting worker,
+  // queue and claimed UI resolution. Only the request owns result synchronization.
+  using ClaimedPromptRequest = std::variant<std::monostate, std::shared_ptr<PendingPermissionRequest>, std::shared_ptr<PendingQuestionRequest>>;
 
-    [[nodiscard]] explicit operator bool() const noexcept { return permission || question; }
-
-    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-  };
-
+  [[nodiscard]] ava::core::Result<ava::permissions::PermissionResolutionDecision> request_permission(ava::permissions::PermissionPrompt const& prompt);
+  [[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> request_question(ava::agent::QuestionPrompt const& prompt);
   [[nodiscard]] ClaimedPromptRequest claim_pending_request_locked();
   void service_claimed_request(ClaimedPromptRequest request, std::function<bool()> const& stop_requested, std::function<bool()> const& request_stop,
                                std::function<void()> const& before_prompt);
@@ -104,10 +87,9 @@ class RuntimePromptCoordinator final
   [[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> resolve_question_prompt(ava::agent::QuestionPrompt const& prompt,
                                                                                       std::function<bool()> const& stop_requested,
                                                                                       std::function<bool()> const& request_stop);
-  [[nodiscard]] bool render();
-  static void complete_permission_request(std::shared_ptr<PendingPermissionRequest> const& request,
-                                          ava::core::Result<ava::permissions::PermissionResolutionDecision> result);
-  static void complete_question_request(std::shared_ptr<PendingQuestionRequest> const& request, ava::core::Result<ava::agent::QuestionAnswer> result);
+  void close_competing_selector();
+  void interrupt_claimed_request(ClaimedPromptRequest const& request);
+  void retire_claimed_request(ClaimedPromptRequest const& request);
 
   TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
@@ -116,9 +98,11 @@ class RuntimePromptCoordinator final
   // Optional: when set, prompt acquisition closes an open startup overview select-list.
   SelectorHost* selectors_ = nullptr;
   std::mutex prompt_request_mutex_;
+  // Queue/claim shares pair with each resolver worker's owning local request.
   std::deque<std::shared_ptr<PendingPermissionRequest>> pending_permission_requests_;
   std::deque<std::shared_ptr<PendingQuestionRequest>> pending_question_requests_;
-  std::atomic_bool accept_prompt_requests_{true};
+  ClaimedPromptRequest claimed_request_;
+  bool accept_prompt_requests_ = false;
   std::mutex prompt_audit_mutex_;
   ava::event::RuntimeEventSink prompt_audit_sink_;
 };

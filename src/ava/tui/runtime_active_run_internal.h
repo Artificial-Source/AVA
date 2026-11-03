@@ -24,6 +24,7 @@ class RuntimePromptCoordinator;
 class RuntimePromptStashController;
 class RuntimePluginUiCoordinator;
 class RuntimeRenderer;
+class RuntimeMermaidPresentationController;
 class RuntimeSubagentWorkspaceController;
 class SessionTransitionCoordinator;
 class TranscriptSearchController;
@@ -123,7 +124,7 @@ class RuntimeActiveRunController final
                              RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                              RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
                              RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
-                             std::function<bool()> service_mermaid_presentation = {});
+                             RuntimeMermaidPresentationController& mermaid);
   RuntimeActiveRunController(RuntimeActiveRunController const&) = delete;
   RuntimeActiveRunController& operator=(RuntimeActiveRunController const&) = delete;
 
@@ -178,7 +179,7 @@ class RuntimeActiveRunController final
   TranscriptSearchController& transcript_search_;
   RuntimeSubagentWorkspaceController& subagent_workspace_;
   SessionTransitionCoordinator& transitions_;
-  std::function<bool()> service_mermaid_presentation_;
+  RuntimeMermaidPresentationController& mermaid_;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
