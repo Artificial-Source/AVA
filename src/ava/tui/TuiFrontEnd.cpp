@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "Composer.h"
 #include "TuiFrontEnd.h"
 #include "TuiSession.h"
 #include "command_output.h"
@@ -6,7 +7,6 @@
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_active_run_internal.h"
-#include "runtime_draft_internal.h"
 #include "runtime_input_internal.h"
 #include "runtime_internal.h"
 #include "runtime_mermaid_internal.h"

@@ -1,9 +1,9 @@
 #include "sys.h"
 #include "SelectorHost.h"
 #include "ava/app/terminal_text.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/prompt_stash_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/terminal.h"
@@ -165,29 +165,16 @@ SelectListView PromptStash::select_list_view() const
   return view;
 }
 
-RuntimePromptStashController::RuntimePromptStashController(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                                                           RuntimeRenderer& renderer, SelectorHost& selectors, TuiKeyBindings const& key_bindings)
+RuntimePromptStashController::RuntimePromptStashController(RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
+                                                           SelectorHost& selectors, TuiKeyBindings const& key_bindings)
     : presentation_state_(presentation_state), draft_state_(draft_state), renderer_(renderer), selectors_(selectors), key_bindings_(key_bindings)
 {
-}
-
-void RuntimePromptStashController::reset_draft_presentation()
-{
-  draft_state_.clear_selection();
-  draft_state_.jump_mode = ComposerJumpMode::None;
-  draft_state_.history_index.reset();
-  draft_state_.draft_input.clear();
-  draft_state_.selected_slash_command_index = 0;
-  draft_state_.slash_palette_suppressed = false;
-  draft_state_.path_completion_force_active = false;
-  draft_state_.draft_scroll_offset = 0;
-  draft_state_.pending_escape_clear = false;
 }
 
 bool RuntimePromptStashController::trigger()
 {
   auto& snapshot = presentation_state_.snapshot;
-  if (draft_state_.draft.text.empty())
+  if (draft_state_.draft().text.empty())
     return open_selector();
   if (!presentation_state_.pending_image_attachments.empty())
   {
@@ -196,11 +183,11 @@ bool RuntimePromptStashController::trigger()
     return renderer_.request_render();
   }
 
-  switch (stash_.push(draft_state_.draft))
+  switch (stash_.push(draft_state_.draft()))
   {
     case PromptStashPushResult::Stored:
-      reset_composer_draft(draft_state_.draft);
-      reset_draft_presentation();
+      draft_state_.reset_draft();
+      draft_state_.reset_interaction();
       snapshot.status = "prompt stashed";
       return renderer_.request_render();
     case PromptStashPushResult::EmptyDraft:
@@ -230,10 +217,10 @@ bool RuntimePromptStashController::open_selector()
 bool RuntimePromptStashController::restore(std::uint64_t id)
 {
   auto& snapshot = presentation_state_.snapshot;
-  switch (stash_.restore(id, draft_state_.draft))
+  switch (draft_state_.restore_stashed(stash_, id))
   {
     case PromptStashRestoreResult::Restored:
-      reset_draft_presentation();
+      draft_state_.reset_interaction();
       selectors_.close();
       snapshot.status = "stashed prompt restored";
       return renderer_.request_render();
@@ -251,7 +238,7 @@ bool RuntimePromptStashController::restore(std::uint64_t id)
 bool RuntimePromptStashController::pop_latest()
 {
   auto& snapshot = presentation_state_.snapshot;
-  if (!draft_state_.draft.text.empty())
+  if (!draft_state_.draft().text.empty())
   {
     snapshot.status = "cannot restore a stashed prompt over a nonempty draft";
     ava::core::Application::instance().terminal_context().beep();

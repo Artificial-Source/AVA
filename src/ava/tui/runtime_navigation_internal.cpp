@@ -16,24 +16,24 @@
 namespace ava::tui {
 
 RuntimeNavigationController::RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar,
-                                                         RuntimeDraftState& draft_state, RuntimeRenderer& renderer)
+                                                         Composer& draft_state, RuntimeRenderer& renderer)
     : frontend_(frontend), snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state), renderer_(renderer)
 {
 }
 
 detail::CompletionMatchModel const* RuntimeNavigationController::refresh_completion_cache()
 {
-  snapshot_.input = draft_state_.draft.text;
-  snapshot_.input_cursor = draft_state_.draft.cursor;
-  snapshot_.slash_palette_suppressed = draft_state_.slash_palette_suppressed;
-  snapshot_.path_completion_force_active = draft_state_.path_completion_force_active;
+  snapshot_.input = draft_state_.draft().text;
+  snapshot_.input_cursor = draft_state_.draft().cursor;
+  snapshot_.slash_palette_suppressed = draft_state_.palette_suppressed();
+  snapshot_.path_completion_force_active = draft_state_.path_completion_forced();
   detail::refresh_completion_match_cache(renderer_.completion_cache, snapshot_, snapshot_.file_references_generation);
   return renderer_.completion_cache.model ? &*renderer_.completion_cache.model : nullptr;
 }
 
 bool RuntimeNavigationController::slash_palette_active() const
 {
-  return !draft_state_.slash_palette_suppressed && slash_palette_visible(draft_state_.draft.text, draft_state_.draft.cursor, snapshot_.slash_commands);
+  return !draft_state_.palette_suppressed() && slash_palette_visible(draft_state_.draft().text, draft_state_.draft().cursor, snapshot_.slash_commands);
 }
 
 bool RuntimeNavigationController::file_reference_palette_active()
@@ -86,7 +86,7 @@ FileReferenceSelectionText RuntimeNavigationController::selected_completion_text
 
 void RuntimeNavigationController::scroll_up(std::size_t amount)
 {
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
   snapshot_.width = width;
   snapshot_.height = height;
@@ -103,7 +103,7 @@ void RuntimeNavigationController::scroll_up(std::size_t amount)
 
 void RuntimeNavigationController::scroll_down(std::size_t amount)
 {
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
   snapshot_.width = width;
   snapshot_.height = height;
@@ -124,7 +124,7 @@ void RuntimeNavigationController::scroll_down(std::size_t amount)
 std::size_t RuntimeNavigationController::transcript_page_size()
 {
   static_cast<void>(refresh_completion_cache());
-  snapshot_.draft_scroll_offset = draft_state_.draft_scroll_offset;
+  snapshot_.draft_scroll_offset = draft_state_.scroll_offset();
   auto const [width, height] = terminal_size();
   snapshot_.width = width;
   snapshot_.height = height;
@@ -254,7 +254,7 @@ void RuntimeNavigationController::close_sidebar_drawer()
 {
   snapshot_.sidebar_drawer_visible = false;
   snapshot_.sidebar_drawer_scroll_offset = 0;
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   snapshot_.status = "session overview closed";
 }
 
@@ -319,7 +319,7 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
 
 void RuntimeNavigationController::jump_to_bottom(std::string status)
 {
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   renderer_.transcript_scroll_offset = 0;
   renderer_.show_transcript_position_indicator();
   renderer_.discard_deferred_detached_transcript_update();
@@ -330,7 +330,7 @@ void RuntimeNavigationController::jump_to_bottom(std::string status)
 
 void RuntimeNavigationController::jump_to_transcript_item(std::size_t item_index, std::string status)
 {
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
   snapshot_.width = width;
   snapshot_.height = height;
@@ -365,7 +365,7 @@ void RuntimeNavigationController::jump_to_transcript_item(std::size_t item_index
 
 void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
 {
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
   snapshot_.width = width;
   snapshot_.height = height;

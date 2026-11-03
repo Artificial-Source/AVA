@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "SessionTransitionCoordinator.h"
 #include "ava/agent/question.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/event_state.h"
@@ -8,7 +9,6 @@
 #include "ava/tui/runtime_active_run_internal.h"
 #include "ava/tui/runtime_active_run_state_internal.h"
 #include "ava/tui/runtime_commands_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
@@ -176,7 +176,6 @@ using runtime_transcript::capture_tool_detail_visibility;
 using runtime_transcript::carry_thinking_expansion;
 using runtime_transcript::carry_tool_detail_visibility;
 using runtime_transcript::push_fallback_assistant_outputs;
-using runtime_transcript::push_history;
 using runtime_transcript::push_transcript;
 
 namespace {
@@ -308,7 +307,7 @@ void RuntimeActiveRunState::discard_for_session_transition()
   request_event_states.clear();
 }
 
-RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state,
                                                        RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator,
                                                        RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                                                        RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
@@ -510,9 +509,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto& snapshot = presentation_state_.snapshot;
   auto& sidebar = presentation_state_.sidebar;
   auto& pending_image_attachments = presentation_state_.pending_image_attachments;
-  auto& input_history = draft_state_.input_history;
-  auto& draft = draft_state_.draft;
-  auto& selected_slash_command_index = draft_state_.selected_slash_command_index;
+  auto const& draft = draft_state_.draft();
   auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
   auto& ui_mutex = renderer_.ui_mutex;
   auto refresh_plugin_surface_fit = [&]() {
@@ -614,7 +611,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto request_close_after_submit = [&]() { this->request_close_after_submit(state); };
   ava::permissions::PermissionResolver permission_resolver;
   ava::agent::QuestionResolver question_resolver;
-  push_history(input_history, submitted);
+  draft_state_.record_submission(submitted);
   snapshot.status = is_command_submission ? "running command..." : "thinking...";
   snapshot.processing = true;
   if (!render())
@@ -759,7 +756,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         {
           // Claimed SIGINT only and have nonempty draft; clear draft, render, and continue.
           static_cast<void>(clear_draft_for_interrupt());
-          snapshot.selected_slash_command_index = selected_slash_command_index;
+          snapshot.selected_slash_command_index = draft_state_.completion_index();
           if (!render())
           {
             fail_active_run();

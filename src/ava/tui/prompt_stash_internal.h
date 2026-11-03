@@ -14,7 +14,7 @@ namespace ava::tui {
 
 class SelectorHost;
 struct InputEvent;
-struct RuntimeDraftState;
+class Composer;
 class RuntimePresentationState;
 class RuntimeRenderer;
 struct SelectListView;
@@ -82,7 +82,7 @@ class PromptStash final
 class RuntimePromptStashController final
 {
  public:
-  RuntimePromptStashController(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer, SelectorHost& selectors,
+  RuntimePromptStashController(RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer, SelectorHost& selectors,
                                TuiKeyBindings const& key_bindings);
   RuntimePromptStashController(RuntimePromptStashController const&) = delete;
   RuntimePromptStashController& operator=(RuntimePromptStashController const&) = delete;
@@ -98,11 +98,10 @@ class RuntimePromptStashController final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  void reset_draft_presentation();
   [[nodiscard]] bool restore(std::uint64_t id);
 
   RuntimePresentationState& presentation_state_;
-  RuntimeDraftState& draft_state_;
+  Composer& draft_state_;
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
   TuiKeyBindings const& key_bindings_;

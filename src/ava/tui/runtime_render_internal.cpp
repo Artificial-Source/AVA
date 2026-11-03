@@ -144,7 +144,8 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* tui_frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context)
+RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* tui_frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, Composer& draft_state,
+                                 terminal::Context* terminal_context)
     : frontend(tui_frontend), snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state), terminal_context_(terminal_context)
 {
 }
@@ -227,9 +228,9 @@ TranscriptSelectionMouseResult RuntimeRenderer::handle_transcript_selection_mous
   std::lock_guard<std::recursive_mutex> lock(ui_mutex);
   if (event.key == Key::MousePointerCancel)
   {
-    auto const had_interaction = transcript_selection_.dragging() || draft_state_.mouse_selecting;
+    auto const had_interaction = transcript_selection_.dragging() || draft_state_.mouse_selecting();
     transcript_selection_.cancel_pointer_interaction();
-    draft_state_.mouse_selecting = false;
+    draft_state_.end_pointer_selection();
     transcript_selection_.publish(snapshot_);
     return had_interaction ? TranscriptSelectionMouseResult::HandledNeedsRender : TranscriptSelectionMouseResult::Ignored;
   }
@@ -306,7 +307,7 @@ void RuntimeRenderer::cancel_pointer_interaction()
 {
   std::lock_guard<std::recursive_mutex> lock(ui_mutex);
   transcript_selection_.cancel_pointer_interaction();
-  draft_state_.mouse_selecting = false;
+  draft_state_.end_pointer_selection();
   transcript_selection_.publish(snapshot_);
 }
 
@@ -325,7 +326,7 @@ bool RuntimeRenderer::has_transcript_selection() const noexcept
 
 bool RuntimeRenderer::has_pointer_interaction() const noexcept
 {
-  return transcript_selection_.dragging() || draft_state_.mouse_selecting;
+  return transcript_selection_.dragging() || draft_state_.mouse_selecting();
 }
 
 std::optional<TranscriptSelectionRange> RuntimeRenderer::transcript_selection_range() const noexcept
@@ -382,32 +383,10 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
 {
   auto& snapshot = snapshot_;
   auto& sidebar = sidebar_;
-  auto& draft_state = draft_state_;
-  auto& draft = draft_state.draft;
-  auto& selected_slash_command_index = draft_state.selected_slash_command_index;
-  auto& slash_palette_suppressed = draft_state.slash_palette_suppressed;
-  auto& path_completion_force_active = draft_state.path_completion_force_active;
-  auto& draft_scroll_offset = draft_state.draft_scroll_offset;
-
   bool wrote = false;
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-    draft.cursor = clamp_composer_draft_cursor(draft.text, draft.cursor);
-    snapshot.input = draft.text;
-    snapshot.input_cursor = draft.cursor;
-    if (auto const selection = draft_state.selection_bounds())
-    {
-      snapshot.input_selection_start = selection->first;
-      snapshot.input_selection_end = selection->second;
-    }
-    else
-    {
-      snapshot.input_selection_start = std::string::npos;
-      snapshot.input_selection_end = std::string::npos;
-    }
-    snapshot.selected_slash_command_index = selected_slash_command_index;
-    snapshot.slash_palette_suppressed = slash_palette_suppressed;
-    snapshot.path_completion_force_active = path_completion_force_active;
+    draft_state_.project(snapshot);
     if (transcript_scroll_offset == 0)
     {
       discard_deferred_detached_transcript_update();
@@ -449,8 +428,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
           std::min(snapshot.command_output->scroll_offset,
                    command_output_max_scroll_offset(*snapshot.command_output, geometry.width, geometry.height, snapshot.tool_presentation));
     }
-    draft_scroll_offset = std::min(draft_scroll_offset, draft_state.max_draft_scroll_offset(snapshot, height));
-    snapshot.draft_scroll_offset = draft_scroll_offset;
+    draft_state_.clamp_scroll(draft_state_.max_draft_scroll_offset(snapshot, height));
+    snapshot.draft_scroll_offset = draft_state_.scroll_offset();
     if (transcript_scroll_offset > 0 && !synchronized_detached_viewport && !freeze_detached_viewport)
     {
       transcript_scroll_offset = std::min(transcript_scroll_offset, detail::composer_max_transcript_scroll_offset_cached(

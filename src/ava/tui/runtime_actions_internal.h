@@ -16,7 +16,7 @@ struct ImageAttachmentRef;
 
 namespace ava::tui {
 
-struct RuntimeDraftState;
+class Composer;
 class TuiFrontEnd;
 class RuntimeRenderer;
 class SessionSelector;
@@ -24,7 +24,7 @@ class SessionSelector;
 class RuntimeActionController final
 {
  public:
-  RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+  RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
                           SelectorHost& selectors, SessionSelector& session_selector);
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
@@ -58,7 +58,7 @@ class RuntimeActionController final
  private:
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
-  RuntimeDraftState& draft_state_;
+  Composer& draft_state_;
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
   SessionSelector& session_selector_;

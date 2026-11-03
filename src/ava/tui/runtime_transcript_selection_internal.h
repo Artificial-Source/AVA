@@ -1,9 +1,9 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/core/NoLogString.h"
 
@@ -164,7 +164,7 @@ class RuntimeTranscriptSelectionState final
   // the frozen authority; only snapshot lookups and header toggles apply the shift.
   // Pass 0 when the layout authority is already live. Fail closed on overflow/eviction.
   [[nodiscard]] TranscriptSelectionMouseResult handle_mouse(InputEvent const& event, ComposerSnapshot& snapshot,
-                                                            detail::TranscriptLayoutCache const& layout_cache, RuntimeDraftState* draft_state,
+                                                            detail::TranscriptLayoutCache const& layout_cache, Composer* draft_state,
                                                             std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                             std::function<bool(std::size_t)> const& toggle_tool,
                                                             std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now = Clock::now());
@@ -227,10 +227,10 @@ class RuntimeTranscriptSelectionState final
   [[nodiscard]] static std::optional<ItemSourceAuthority> source_authority(ComposerSnapshot const& snapshot, std::size_t item_index);
   [[nodiscard]] static bool source_authority_compatible(ItemSourceAuthority const& previous, ItemSourceAuthority const& current);
   [[nodiscard]] bool refresh_source_authorities_or_clear(ComposerSnapshot const& snapshot);
-  void begin_selection(TranscriptSelectionEndpoint const& endpoint, ComposerSnapshot const& snapshot, RuntimeDraftState* draft_state,
+  void begin_selection(TranscriptSelectionEndpoint const& endpoint, ComposerSnapshot const& snapshot, Composer* draft_state,
                        std::ptrdiff_t frozen_to_live_item_index_shift);
-  void begin_granular_selection(TranscriptSelectionUnit const& unit, SelectionGranularity granularity, ComposerSnapshot const& snapshot,
-                                RuntimeDraftState* draft_state, std::ptrdiff_t frozen_to_live_item_index_shift);
+  void begin_granular_selection(TranscriptSelectionUnit const& unit, SelectionGranularity granularity, ComposerSnapshot const& snapshot, Composer* draft_state,
+                                std::ptrdiff_t frozen_to_live_item_index_shift);
   void extend_selection(TranscriptSelectionEndpoint const& endpoint, ComposerSnapshot const& snapshot, std::ptrdiff_t frozen_to_live_item_index_shift);
   void extend_granular_selection(TranscriptSelectionUnit const& unit, ComposerSnapshot const& snapshot, std::ptrdiff_t frozen_to_live_item_index_shift,
                                  detail::TranscriptLayout const& layout);

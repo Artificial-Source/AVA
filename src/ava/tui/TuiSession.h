@@ -1,14 +1,16 @@
 #pragma once
 
 #include "BranchSummaryOperation.h"
+#include "Composer.h"
 #include "SelectorHost.h"
+#include "SelectorInputController.h"
 #include "SessionSelector.h"
 #include "SessionTransitionCoordinator.h"
 #include "SettingsDialog.h"
+#include "TuiInputDispatcher.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_active_run_internal.h"
-#include "runtime_draft_internal.h"
 #include "runtime_input_internal.h"
 #include "runtime_mermaid_internal.h"
 #include "runtime_navigation_internal.h"
@@ -49,12 +51,22 @@ class TuiSession final
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
   void settle_opened_session(std::string status);
   bool synchronize_committed_session();
-  void select_slash_command();
-  void select_file_reference();
-  void select_path_completion();
-  bool force_path_completion();
-  void insert_input_text(runtime_input::RuntimeInput const& input);
-  SelectListInputResult classify_selector_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_signal_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_resize_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_wheel_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_command_output_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_workspace_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_branch_summary_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_search_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_selector_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_jump_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_primary_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_editor_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_session_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_transcript_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_composer_navigation_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome handle_tail_input(runtime_input::RuntimeInput const& input);
+  TuiInputOutcome render_input();
 
   // Declaration order is dependency order; all borrowed controller references
   // refer to earlier members and remain valid through their destruction.
@@ -64,10 +76,11 @@ class TuiSession final
   RuntimePluginUiCoordinator plugin_ui_;
   bool terminal_write_failed_ = false;
   bool terminal_signal_received_ = false;
-  RuntimeDraftState draft_state_;
+  Composer draft_state_;
   RuntimeRenderer renderer_;
   RuntimeNavigationController navigation_;
   SelectorHost selectors_;
+  SelectorInputController selector_input_;
   SettingsDialog settings_;
   SessionSelector session_selector_;
   BranchSummaryOperation branch_summary_;
@@ -81,6 +94,8 @@ class TuiSession final
   SessionTransitionCoordinator session_transitions_;
   RuntimeActiveRunController active_run_controller_;
   RuntimeSubmitController submit_controller_;
+  // Registered targets above outlive the dispatcher; the session cannot move.
+  TuiInputDispatcher input_dispatcher_;
 };
 
 } // namespace ava::tui

@@ -16,7 +16,7 @@ struct RuntimeInput;
 } // namespace runtime_input
 
 struct RuntimeActiveRunState;
-struct RuntimeDraftState;
+class Composer;
 struct TuiRuntimeOptions;
 class RuntimeActionController;
 class RuntimeNavigationController;
@@ -119,7 +119,7 @@ struct RuntimeActiveRunOutcome
 class RuntimeActiveRunController final
 {
  public:
-  RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+  RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
                              RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                              RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
                              RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
@@ -156,7 +156,6 @@ class RuntimeActiveRunController final
   [[nodiscard]] std::optional<bool> run_active_command(RuntimeActiveRunState& state);
   [[nodiscard]] std::optional<bool> reject_disabled_visible_completion();
   [[nodiscard]] bool queue_active_draft(RuntimeActiveRunState& state, bool follow_up_only);
-  void insert_active_text(runtime_input::RuntimeInput const& active_input);
 
   InputHandling handle_preemptive_input(RuntimeActiveRunState& state, runtime_input::RuntimeInput const& active_input);
   InputHandling handle_completion_acceptance(runtime_input::RuntimeInput const& active_input);
@@ -169,7 +168,7 @@ class RuntimeActiveRunController final
 
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
-  RuntimeDraftState& draft_state_;
+  Composer& draft_state_;
   RuntimeRenderer& renderer_;
   RuntimePromptCoordinator& prompt_coordinator_;
   RuntimePromptStashController& prompt_stash_;

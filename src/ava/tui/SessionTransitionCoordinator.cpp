@@ -1,7 +1,7 @@
 #include "sys.h"
+#include "Composer.h"
 #include "SelectorHost.h"
 #include "SessionTransitionCoordinator.h"
-#include "runtime_draft_internal.h"
 #include "runtime_render_internal.h"
 #include "runtime_state_internal.h"
 #include "runtime_subagent_workspace_internal.h"
@@ -11,7 +11,7 @@
 
 namespace ava::tui {
 
-SessionTransitionCoordinator::SessionTransitionCoordinator(RuntimePresentationState& presentation, RuntimeDraftState& draft, RuntimeRenderer& renderer,
+SessionTransitionCoordinator::SessionTransitionCoordinator(RuntimePresentationState& presentation, Composer& draft, RuntimeRenderer& renderer,
                                                            TranscriptSearchController& search, RuntimeSubagentWorkspaceController& workspace,
                                                            SelectorHost& selectors)
     : presentation_(presentation), draft_(draft), renderer_(renderer), search_(search), workspace_(workspace), selectors_(selectors)

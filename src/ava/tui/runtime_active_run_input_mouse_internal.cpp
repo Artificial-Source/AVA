@@ -1,11 +1,11 @@
 #include "sys.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime_actions_internal.h"
 #include "ava/tui/runtime_active_run_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -23,10 +23,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
 {
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
-  auto& draft = draft_state_.draft;
-  auto& draft_state = draft_state_;
-  auto& selected_slash_command_index = draft_state_.selected_slash_command_index;
-  auto& path_completion_force_active = draft_state_.path_completion_force_active;
+  auto const& draft = draft_state_.draft();
   auto& completion_cache = renderer_.completion_cache;
 
   using Key = terminal::Key;
@@ -39,7 +36,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
       if (auto const clicked = slash_palette_selection_for_screen_position(snapshot, active_event.mouse_row, active_event.mouse_column))
       {
         renderer_.clear_transcript_selection();
-        selected_slash_command_index = *clicked;
+        draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, *clicked))
         {
           snapshot.status = "command disabled: " + *disabled_reason;
@@ -48,9 +45,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         else
         {
           auto selection = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, *clicked);
-          draft_state.clear_selection();
-          static_cast<void>(replace_composer_draft(draft, std::move(selection.text), selection.cursor));
-          selected_slash_command_index = 0;
+          draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Pointer);
           snapshot.status = "command selected - press Enter to queue";
         }
         return to_input_handling(renderer_.request_render());
@@ -59,7 +54,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
                                                                                                    completion_cache, snapshot.file_references_generation))
       {
         renderer_.clear_transcript_selection();
-        selected_slash_command_index = *clicked;
+        draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
           snapshot.status = "reference disabled: " + *disabled_reason;
@@ -68,9 +63,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         else
         {
           auto selection = navigation_.selected_completion_text(*clicked);
-          draft_state.clear_selection();
-          static_cast<void>(replace_composer_draft(draft, std::move(selection.text), selection.cursor));
-          selected_slash_command_index = 0;
+          draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Pointer);
           snapshot.status = "file reference selected";
         }
         return to_input_handling(renderer_.request_render());
@@ -79,7 +72,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
                                                                                                     completion_cache, snapshot.file_references_generation))
       {
         renderer_.clear_transcript_selection();
-        selected_slash_command_index = *clicked;
+        draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
           snapshot.status = "path disabled: " + *disabled_reason;
@@ -88,10 +81,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         else
         {
           auto selection = navigation_.selected_completion_text(*clicked);
-          draft_state.clear_selection();
-          static_cast<void>(replace_composer_draft(draft, std::move(selection.text), selection.cursor));
-          selected_slash_command_index = 0;
-          path_completion_force_active = false;
+          draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::PointerPath);
           snapshot.status = "path selected";
         }
         return to_input_handling(renderer_.request_render());
@@ -109,29 +99,20 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
       if (auto const cursor = composer_input_cursor_for_screen_position(snapshot, active_event.mouse_row, active_event.mouse_column))
       {
         renderer_.clear_transcript_selection();
-        draft.cursor = clamp_composer_draft_cursor_to_atomic_boundary(draft, *cursor);
-        draft_state.clear_selection();
-        if (active_event.key == Key::MouseLeftPress)
-        {
-          draft_state.draft_selection_anchor = draft.cursor;
-          draft_state.draft_selection_cursor = draft.cursor;
-          draft_state.mouse_selecting = true;
-        }
+        draft_state_.begin_pointer_selection(*cursor, active_event.key == Key::MouseLeftPress, ComposerEditContext::ActiveRun);
         snapshot.status = "cursor moved";
         return to_input_handling(renderer_.request_render());
       }
     }
-    else if (draft_state.mouse_selecting)
+    else if (draft_state_.mouse_selecting())
     {
       if (auto const cursor = composer_input_cursor_for_screen_position(snapshot, active_event.mouse_row, active_event.mouse_column))
       {
-        auto const next_cursor = clamp_composer_draft_cursor_to_atomic_boundary(draft, *cursor);
-        draft_state.draft_selection_cursor = next_cursor;
-        draft.cursor = next_cursor;
-        snapshot.status = draft_state.selection_bounds() ? "selection active" : "cursor moved";
+        draft_state_.extend_pointer_selection(*cursor, ComposerEditContext::ActiveRun);
+        snapshot.status = draft_state_.selection_bounds() ? "selection active" : "cursor moved";
       }
       if (active_event.key == Key::MouseLeftRelease)
-        draft_state.mouse_selecting = false;
+        draft_state_.end_pointer_selection();
       return to_input_handling(renderer_.request_render());
     }
   }
@@ -197,7 +178,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_res
   }
   if (active_event.key == terminal::Key::Space)
   {
-    insert_active_text(active_input);
+    draft_state_.insert_input(active_input, snapshot, ComposerEditContext::ActiveRun);
     return to_input_handling(renderer_.request_render());
   }
   return InputHandling::Unhandled;

@@ -2,6 +2,7 @@
 #include "SelectorHost.h"
 #include "SessionSelector.h"
 #include "SettingsDialog.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -11,7 +12,6 @@
 #include "ava/tui/runtime_actions_internal.h"
 #include "ava/tui/runtime_active_run_internal.h"
 #include "ava/tui/runtime_commands_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -43,10 +43,9 @@ using runtime_commands::stash_command_argument;
 using runtime_commands::tool_command_argument;
 using runtime_transcript::copy_text_to_terminal_clipboard;
 using runtime_transcript::diff_transcript_text;
-using runtime_transcript::push_history;
 using runtime_views::compact_path_leaf;
 
-RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state,
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                  RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
@@ -70,20 +69,11 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& input_history = draft_state_.input_history;
-  auto& history_index = draft_state_.history_index;
-  auto& draft_input = draft_state_.draft_input;
-  auto& draft = draft_state_.draft;
-  auto& jump_mode = draft_state_.jump_mode;
-  auto& selected_slash_command_index = draft_state_.selected_slash_command_index;
-  auto& slash_palette_suppressed = draft_state_.slash_palette_suppressed;
-  auto& path_completion_force_active = draft_state_.path_completion_force_active;
-  auto& draft_scroll_offset = draft_state_.draft_scroll_offset;
-  auto& pending_escape_clear = draft_state_.pending_escape_clear;
+  auto const& draft = draft_state_.draft();
   auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
   auto& detached_new_output_count = renderer_.detached_new_output_count;
   auto& detached_sidebar_snapshot = renderer_.detached_sidebar_snapshot;
-  pending_escape_clear = false;
+  draft_state_.cancel_escape();
   std::optional<std::string> immediate_slash_submission;
   if (forced_submission)
   {
@@ -95,13 +85,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   {
     immediate_slash_submission = expanded_composer_draft_text(draft);
   }
-  else if (!slash_palette_suppressed && slash_palette_visible(draft.text, draft.cursor, snapshot.slash_commands))
+  else if (!draft_state_.palette_suppressed() && slash_palette_visible(draft.text, draft.cursor, snapshot.slash_commands))
   {
     auto const matches = filter_slash_commands(draft.text, draft.cursor, snapshot.slash_commands);
     if (!matches.empty())
     {
-      selected_slash_command_index = clamp_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index);
-      if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index))
+      draft_state_.select_completion(clamp_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()));
+      if (auto const disabled_reason =
+              slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()))
       {
         snapshot.status = "command disabled: " + *disabled_reason;
         ava::core::Application::instance().terminal_context().beep();
@@ -111,53 +102,40 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      auto const& selected_item = matches[selected_slash_command_index];
-      auto const selection_text = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index);
+      auto const& selected_item = matches[draft_state_.completion_index()];
+      auto const selection_text = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index());
       if (!selected_item.argument_completion && selected_item.command == "/connect")
       {
         immediate_slash_submission = selection_text.text;
       }
       else
       {
-        draft_state_.clear_selection();
-        static_cast<void>(replace_composer_draft(draft, std::move(selection_text.text), selection_text.cursor));
-        selected_slash_command_index = 0;
-        path_completion_force_active = false;
-        draft_scroll_offset = 0;
-        history_index.reset();
-        draft_input.clear();
+        draft_state_.accept_completion(std::move(selection_text.text), selection_text.cursor);
         snapshot.status = "command selected - press Enter to run";
-        snapshot.selected_slash_command_index = selected_slash_command_index;
+        snapshot.selected_slash_command_index = draft_state_.completion_index();
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      selected_slash_command_index = 0;
-      path_completion_force_active = false;
-      snapshot.selected_slash_command_index = selected_slash_command_index;
+      draft_state_.reset_completion();
+      snapshot.selected_slash_command_index = draft_state_.completion_index();
     }
   }
   if (navigation_.file_reference_palette_active())
   {
-    selected_slash_command_index = navigation_.clamp_completion(selected_slash_command_index);
-    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
+    draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
+    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
       snapshot.status = "reference disabled: " + *disabled_reason;
       ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    auto selection = navigation_.selected_completion_text(selected_slash_command_index);
-    draft_state_.clear_selection();
-    static_cast<void>(replace_composer_draft(draft, std::move(selection.text), selection.cursor));
-    selected_slash_command_index = 0;
-    path_completion_force_active = false;
-    draft_scroll_offset = 0;
-    history_index.reset();
-    draft_input.clear();
+    auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
+    draft_state_.accept_completion(std::move(selection.text), selection.cursor);
     snapshot.status = "file reference selected";
-    snapshot.selected_slash_command_index = selected_slash_command_index;
+    snapshot.selected_slash_command_index = draft_state_.completion_index();
     if (!renderer_.render())
     {
       return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -166,23 +144,17 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   }
   if (navigation_.path_completion_palette_active())
   {
-    selected_slash_command_index = navigation_.clamp_completion(selected_slash_command_index);
-    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
+    draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
+    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
       snapshot.status = "path disabled: " + *disabled_reason;
       ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    auto selection = navigation_.selected_completion_text(selected_slash_command_index);
-    draft_state_.clear_selection();
-    static_cast<void>(replace_composer_draft(draft, std::move(selection.text), selection.cursor));
-    selected_slash_command_index = 0;
-    path_completion_force_active = false;
-    draft_scroll_offset = 0;
-    history_index.reset();
-    draft_input.clear();
+    auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
+    draft_state_.accept_completion(std::move(selection.text), selection.cursor);
     snapshot.status = "path selected";
-    snapshot.selected_slash_command_index = selected_slash_command_index;
+    snapshot.selected_slash_command_index = draft_state_.completion_index();
     if (!renderer_.render())
     {
       return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -191,19 +163,12 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   }
   auto submitted = immediate_slash_submission ? *immediate_slash_submission : expanded_composer_draft_text(draft);
   renderer_.clear_transcript_selection();
-  draft_state_.clear_selection();
-  reset_composer_draft(draft);
-  jump_mode = ComposerJumpMode::None;
-  draft_scroll_offset = 0;
-  history_index.reset();
-  draft_input.clear();
-  selected_slash_command_index = 0;
-  path_completion_force_active = false;
+  draft_state_.reset_after_submit();
   if (!submitted.empty())
   {
     if (auto stash_argument = stash_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       bool success = true;
       if (stash_argument->empty())
         success = prompt_stash_.open_selector();
@@ -222,7 +187,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (exact_command(submitted, "/jobs"))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       static_cast<void>(subagent_workspace_.open_selector());
       if (!renderer_.request_render())
       {
@@ -232,7 +197,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (exact_command(submitted, "/models") || exact_command(submitted, "/model"))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (!action_controller_.open_model_selector())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -241,7 +206,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (exact_command(submitted, "/scoped-models"))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (!action_controller_.open_scoped_model_selector())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -250,7 +215,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume"))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (!session_selector_.open())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -259,7 +224,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto fork_from_query = fork_from_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (!action_controller_.open_fork_user_turn_selector(*fork_from_query))
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -268,7 +233,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto search_query = search_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       static_cast<void>(transcript_search_.open(std::move(*search_query)));
       if (!renderer_.request_render())
       {
@@ -283,7 +248,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       // target fall through so command_reload's canonical validation and reports win.
       if (auto const parsed_reload_target = reload_target_from_argument(*reload_target))
       {
-        push_history(input_history, submitted);
+        draft_state_.record_submission(submitted);
         if (*parsed_reload_target == ReloadTarget::DisplaySettings)
         {
           if (auto reloaded = frontend_.on_reload_display_settings())
@@ -317,7 +282,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (runtime_commands::local_display_settings_command(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       auto applied = frontend_.on_local_display_settings_action(submitted);
       if (!applied)
       {
@@ -335,7 +300,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
       snapshot.status = "keybindings opened";
       transcript_scroll_offset = 0;
@@ -347,7 +312,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (submitted == "/sidebar")
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       snapshot.sidebar_drawer_visible = true;
       snapshot.sidebar_drawer_scroll_offset = 0;
       transcript_scroll_offset = 0;
@@ -362,7 +327,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (submitted == "/settings")
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       settings_dialog_.open();
       transcript_scroll_offset = 0;
       if (!renderer_.request_render())
@@ -373,7 +338,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (exact_command(submitted, "/overview"))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (!action_controller_.toggle_startup_overview())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -382,7 +347,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto attach_target = attach_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (attach_target->empty())
       {
         open_command_error(snapshot, submitted, "invalid_argument: usage: /attach <image-path>");
@@ -413,7 +378,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto tool_query = tool_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       auto const indexed_tool = latest_matching_indexed_tool(snapshot, *tool_query);
       auto const transcript_index = indexed_tool ? indexed_provider_tool_transcript_index(snapshot, *indexed_tool) : std::nullopt;
       if (transcript_index && navigation_.toggle_tool_details_at(*transcript_index))
@@ -440,7 +405,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto diff_query = diff_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       auto diff_text = latest_indexed_tool_diff_copy_text(snapshot, *diff_query);
       if (diff_text)
       {
@@ -460,7 +425,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto copy_target = copy_command_argument(submitted))
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       auto const target = parse_copy_target(*copy_target);
       // Exact target name "user" opens the public user-turn picker. No alias is
       // accepted; remaining text becomes the selector's initial filter query.
@@ -544,7 +509,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (submitted == "/details" || submitted == "/details compact" || submitted == "/details rich" || submitted == "/details expanded")
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (submitted == "/details compact")
         snapshot.tool_presentation = ToolPresentation::Compact;
       else if (submitted == "/details rich")
@@ -562,7 +527,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (submitted == "/thinking" || submitted == "/thinking details")
     {
-      push_history(input_history, submitted);
+      draft_state_.record_submission(submitted);
       if (submitted == "/thinking details")
       {
         auto const item_index = navigation_.toggle_latest_thinking_details();

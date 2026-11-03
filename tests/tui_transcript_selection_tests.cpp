@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
@@ -63,7 +64,7 @@ ava::tui::TranscriptItem private_launch_selection_task()
 template <typename ToggleTool, typename ToggleThinking>
 ava::tui::TranscriptSelectionMouseResult handle(
     ava::tui::RuntimeTranscriptSelectionState& state, ava::tui::InputEvent const& event, ava::tui::ComposerSnapshot& snapshot,
-    ava::tui::detail::TranscriptLayoutCache const& cache, ava::tui::RuntimeDraftState* draft, std::size_t& scroll, ToggleTool const& toggle_tool,
+    ava::tui::detail::TranscriptLayoutCache const& cache, ava::tui::Composer* draft, std::size_t& scroll, ToggleTool const& toggle_tool,
     ToggleThinking const& toggle_thinking, std::ptrdiff_t frozen_to_live_shift = 0,
     ava::tui::RuntimeTranscriptSelectionState::Clock::time_point now = ava::tui::RuntimeTranscriptSelectionState::Clock::now())
 {
@@ -181,9 +182,8 @@ void run_tui_transcript_selection_tests()
     click_snapshot.transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "stable source"}};
     auto click_cache = selection_cache(granular_layout, 100);
     ava::tui::RuntimeTranscriptSelectionState click_state;
-    ava::tui::RuntimeDraftState click_draft;
-    click_draft.draft.text = "draft stays";
-    click_draft.draft.cursor = 4;
+    ava::tui::Composer click_draft;
+    click_draft.replace_draft("draft stays", 4);
     std::size_t click_scroll = 0;
     auto never = [](std::size_t) { return false; };
     auto click = [&](std::size_t row, std::size_t column, std::chrono::milliseconds at) {
@@ -208,7 +208,7 @@ void run_tui_transcript_selection_tests()
     click(1, 10, std::chrono::milliseconds(1000));
     auto const different_word_resets = click_state.empty();
     expect(single_empty && double_text == "alpha" && triple_text == granular_layout.lines[0] && fourth_resets && timeout_resets && different_word_resets &&
-               click_draft.draft.text == "draft stays" && click_draft.draft.cursor == 4,
+               click_draft.draft().text == "draft stays" && click_draft.draft().cursor == 4,
            "500 ms click chains select word on click two, visual row on click three, reset on click four, timeout, or a different word, and never edit the "
            "composer draft");
 
@@ -251,7 +251,7 @@ void run_tui_transcript_selection_tests()
     drag_snapshot.transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "stable source"}};
     auto const drag_cache = selection_cache(granular_layout, 110);
     ava::tui::RuntimeTranscriptSelectionState drag_state;
-    ava::tui::RuntimeDraftState drag_draft;
+    ava::tui::Composer drag_draft;
     std::size_t drag_scroll = 0;
     auto never = [](std::size_t) { return false; };
     auto send = [&](ava::tui::terminal::Key key, std::size_t row, std::size_t column, int milliseconds) {
@@ -348,7 +348,7 @@ void run_tui_transcript_selection_tests()
     auto const expired = indicator.expire_if_due(started + std::chrono::milliseconds(1000)) && !indicator.visible();
     ava::tui::ComposerSnapshot streaming_snapshot;
     ava::tui::SidebarSnapshot streaming_sidebar;
-    ava::tui::RuntimeDraftState streaming_draft;
+    ava::tui::Composer streaming_draft;
     ava::tui::RuntimeRenderer streaming_renderer(frontend.frontend(), streaming_snapshot, streaming_sidebar, streaming_draft);
     streaming_snapshot.transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "streaming", .stream_id = "live", .append_only_stream = true});
     ++streaming_snapshot.transcript_generation;
@@ -371,10 +371,9 @@ void run_tui_transcript_selection_tests()
       .lines = {"tool header", "body text"}, .block_boundaries = {0, 2}, .message_starts = {0}, .content_starts = {0}, .message_item_indices = {0}};
   auto cache = selection_cache(header_layout);
   ava::tui::RuntimeTranscriptSelectionState state;
-  ava::tui::RuntimeDraftState draft;
-  draft.draft.text = "draft";
-  draft.draft_selection_anchor = 0;
-  draft.draft_selection_cursor = 3;
+  ava::tui::Composer draft;
+  draft.replace_draft("draft", 0);
+  draft.extend_selection_to(3, snapshot);
   std::size_t scroll = 0;
   std::size_t toggles = 0;
   std::size_t last_toggled = std::string::npos;
@@ -574,7 +573,7 @@ void run_tui_transcript_selection_tests()
                                                                  .message_item_indices = {1}};
     auto frozen_tool_cache = selection_cache(frozen_tool_layout, 10);
     ava::tui::RuntimeTranscriptSelectionState frozen_state;
-    ava::tui::RuntimeDraftState frozen_draft;
+    ava::tui::Composer frozen_draft;
     std::size_t frozen_scroll = 0;
     std::size_t tool_toggle_index = std::string::npos;
     std::size_t tool_toggles = 0;
@@ -660,7 +659,7 @@ void run_tui_transcript_selection_tests()
         .lines = {"tool header", "body text"}, .block_boundaries = {0, 2}, .message_starts = {0}, .content_starts = {0}, .message_item_indices = {0}};
     auto cancel_cache = selection_cache(cancel_layout, 20);
     ava::tui::RuntimeTranscriptSelectionState cancel_state;
-    ava::tui::RuntimeDraftState cancel_draft;
+    ava::tui::Composer cancel_draft;
     std::size_t cancel_scroll = 0;
     std::size_t cancel_toggles = 0;
     auto toggle_cancel = [&](std::size_t) {
@@ -744,7 +743,7 @@ void run_tui_transcript_selection_tests()
     copy_layout.message_item_indices = {0};
     auto copy_cache = selection_cache(copy_layout, 30);
     ava::tui::RuntimeTranscriptSelectionState copy_state;
-    ava::tui::RuntimeDraftState copy_draft;
+    ava::tui::Composer copy_draft;
     std::size_t copy_scroll = 0;
     static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), copy_snapshot, copy_cache, &copy_draft, copy_scroll,
                              never_toggle, never_toggle));
@@ -780,7 +779,7 @@ void run_tui_transcript_selection_tests()
                                                                     .message_item_indices = {1}};
     auto frozen_private_cache = selection_cache(std::move(frozen_private_layout), 40);
     ava::tui::RuntimeTranscriptSelectionState copy_state;
-    ava::tui::RuntimeDraftState copy_draft;
+    ava::tui::Composer copy_draft;
     std::size_t copy_scroll = 0;
     static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), copy_snapshot, frozen_private_cache, &copy_draft,
                              copy_scroll, never_toggle, never_toggle, /*frozen_to_live_shift=*/-1));

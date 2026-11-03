@@ -1,7 +1,7 @@
 #pragma once
 
+#include "ava/tui/Composer.h"
 #include "ava/tui/composer_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
 
 #include <chrono>
@@ -115,7 +115,8 @@ class RuntimeRenderer final
 {
  public:
   // Render `snapshot` and apply its cursor settings through `terminal_context` when provided.
-  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context = nullptr);
+  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, Composer& draft_state,
+                  terminal::Context* terminal_context = nullptr);
 
   [[nodiscard]] bool render();
   [[nodiscard]] bool render_processing_frame();
@@ -165,7 +166,7 @@ class RuntimeRenderer final
 
   ComposerSnapshot& snapshot_;
   SidebarSnapshot& sidebar_;
-  RuntimeDraftState& draft_state_;
+  Composer& draft_state_;
   terminal::Context* terminal_context_ = nullptr;
   RuntimeTranscriptSelectionState transcript_selection_;
   std::ptrdiff_t pending_live_selection_item_index_shift_ = 0;

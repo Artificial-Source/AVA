@@ -7,7 +7,7 @@
 namespace ava::tui {
 
 class RuntimePresentationState;
-struct RuntimeDraftState;
+class Composer;
 class RuntimeRenderer;
 class TranscriptSearchController;
 class RuntimeSubagentWorkspaceController;
@@ -20,7 +20,7 @@ class TuiFrontEnd;
 class SessionTransitionCoordinator final
 {
  public:
-  SessionTransitionCoordinator(RuntimePresentationState& presentation, RuntimeDraftState& draft, RuntimeRenderer& renderer, TranscriptSearchController& search,
+  SessionTransitionCoordinator(RuntimePresentationState& presentation, Composer& draft, RuntimeRenderer& renderer, TranscriptSearchController& search,
                                RuntimeSubagentWorkspaceController& workspace, SelectorHost& selectors);
   SessionTransitionCoordinator(SessionTransitionCoordinator const&) = delete;
   SessionTransitionCoordinator& operator=(SessionTransitionCoordinator const&) = delete;
@@ -37,7 +37,7 @@ class SessionTransitionCoordinator final
 
  private:
   RuntimePresentationState& presentation_;
-  RuntimeDraftState& draft_;
+  Composer& draft_;
   RuntimeRenderer& renderer_;
   TranscriptSearchController& search_;
   RuntimeSubagentWorkspaceController& workspace_;

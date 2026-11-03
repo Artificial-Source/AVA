@@ -19,7 +19,7 @@
 
 namespace ava::tui {
 
-struct RuntimeDraftState;
+class Composer;
 class RuntimeRenderer;
 class SelectorHost;
 class SessionTransitionCoordinator;

@@ -11,7 +11,7 @@ class SettingsDialog;
 class SessionSelector;
 class RuntimeActionController;
 class RuntimeActiveRunController;
-struct RuntimeDraftState;
+class Composer;
 class RuntimeNavigationController;
 class RuntimePresentationState;
 class RuntimePromptStashController;
@@ -39,7 +39,7 @@ struct RuntimeSubmitOutcome
 class RuntimeSubmitController final
 {
  public:
-  RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+  RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
                           RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                           RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                           TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
@@ -52,7 +52,7 @@ class RuntimeSubmitController final
  private:
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
-  RuntimeDraftState& draft_state_;
+  Composer& draft_state_;
   RuntimeRenderer& renderer_;
   RuntimeNavigationController& navigation_;
   RuntimeActionController& action_controller_;

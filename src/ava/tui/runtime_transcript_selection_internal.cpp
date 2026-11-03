@@ -850,8 +850,8 @@ std::optional<TranscriptSelectionHit> RuntimeTranscriptSelectionState::hit_test(
   return hit;
 }
 
-void RuntimeTranscriptSelectionState::begin_selection(TranscriptSelectionEndpoint const& endpoint, ComposerSnapshot const& snapshot,
-                                                      RuntimeDraftState* draft_state, std::ptrdiff_t frozen_to_live_item_index_shift)
+void RuntimeTranscriptSelectionState::begin_selection(TranscriptSelectionEndpoint const& endpoint, ComposerSnapshot const& snapshot, Composer* draft_state,
+                                                      std::ptrdiff_t frozen_to_live_item_index_shift)
 {
   if (draft_state)
     draft_state->clear_selection();
@@ -871,7 +871,7 @@ void RuntimeTranscriptSelectionState::begin_selection(TranscriptSelectionEndpoin
 }
 
 void RuntimeTranscriptSelectionState::begin_granular_selection(TranscriptSelectionUnit const& unit, SelectionGranularity granularity,
-                                                               ComposerSnapshot const& snapshot, RuntimeDraftState* draft_state,
+                                                               ComposerSnapshot const& snapshot, Composer* draft_state,
                                                                std::ptrdiff_t frozen_to_live_item_index_shift)
 {
   if (draft_state)
@@ -1147,7 +1147,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
 }
 
 TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(InputEvent const& event, ComposerSnapshot& snapshot,
-                                                                             detail::TranscriptLayoutCache const& layout_cache, RuntimeDraftState* draft_state,
+                                                                             detail::TranscriptLayoutCache const& layout_cache, Composer* draft_state,
                                                                              std::size_t& transcript_scroll_offset,
                                                                              std::ptrdiff_t frozen_to_live_item_index_shift,
                                                                              std::function<bool(std::size_t)> const& toggle_tool,

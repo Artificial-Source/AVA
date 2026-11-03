@@ -1,13 +1,13 @@
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_actions_internal.h"
-#include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
@@ -90,7 +90,7 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
 
 }  // namespace
 
-RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state,
                                                  RuntimeRenderer& renderer, SelectorHost& selectors, SessionSelector& session_selector)
     : frontend_(frontend),
       presentation_state_(presentation_state),
@@ -144,32 +144,16 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
 
 bool RuntimeActionController::clear_draft_for_interrupt()
 {
-  draft_state_.pending_escape_clear = false;
-  draft_state_.jump_mode = ComposerJumpMode::None;
-  draft_state_.history_index.reset();
-  draft_state_.draft_input.clear();
-  draft_state_.selected_slash_command_index = 0;
-  draft_state_.slash_palette_suppressed = false;
-  draft_state_.path_completion_force_active = false;
-  draft_state_.draft_scroll_offset = 0;
-  draft_state_.clear_selection();
+  draft_state_.reset_interaction();
   presentation_state_.snapshot.status.clear();
-  return apply_composer_draft_action(draft_state_.draft, TuiAction::ClearInput);
+  return draft_state_.apply_action(TuiAction::ClearInput);
 }
 
 bool RuntimeActionController::open_external_editor()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
-  draft_state_.jump_mode = ComposerJumpMode::None;
-  draft_state_.history_index.reset();
-  draft_state_.draft_input.clear();
-  draft_state_.selected_slash_command_index = 0;
-  draft_state_.slash_palette_suppressed = false;
-  draft_state_.path_completion_force_active = false;
-  draft_state_.draft_scroll_offset = 0;
-  draft_state_.clear_selection();
+  draft_state_.reset_interaction();
   // Protocol handoff invalidates any incomplete press/drag/header arm while preserving
   // a committed transcript range.
   renderer_.cancel_pointer_interaction();
@@ -181,7 +165,7 @@ bool RuntimeActionController::open_external_editor()
   // Balance AVA-owned protocols after leaving curses/alt-screen so the shell
   // and $VISUAL/$EDITOR inherit a clean Kitty stack, paste, and mouse state.
   terminal_context.leave_terminal_for_handoff();
-  auto edited = frontend_.on_external_editor(draft_state_.draft.text);
+  auto edited = frontend_.on_external_editor(draft_state_.draft().text);
   refresh_geometry_from_kernel();
   terminal_context.restore_terminal_after_handoff();
 
@@ -196,8 +180,7 @@ bool RuntimeActionController::open_external_editor()
     snapshot.status = "external editor canceled";
     return renderer_.render();
   }
-  snapshot.status =
-      replace_composer_draft(draft_state_.draft, std::move(**edited)) ? "external editor updated draft" : "external editor closed without changes";
+  snapshot.status = draft_state_.replace_draft(std::move(**edited)) ? "external editor updated draft" : "external editor closed without changes";
   return renderer_.render();
 }
 
@@ -205,15 +188,7 @@ bool RuntimeActionController::suspend_to_background()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
-  draft_state_.jump_mode = ComposerJumpMode::None;
-  draft_state_.history_index.reset();
-  draft_state_.draft_input.clear();
-  draft_state_.selected_slash_command_index = 0;
-  draft_state_.slash_palette_suppressed = false;
-  draft_state_.path_completion_force_active = false;
-  draft_state_.draft_scroll_offset = 0;
-  draft_state_.clear_selection();
+  draft_state_.reset_interaction();
   // Suspend handoff cancels in-flight pointer interaction; committed ranges remain.
   renderer_.cancel_pointer_interaction();
   terminal_reset_mouse_tracking();
@@ -261,15 +236,7 @@ bool RuntimeActionController::queue_pending_image_attachment(ava::session::Image
 bool RuntimeActionController::paste_clipboard_image()
 {
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
-  draft_state_.jump_mode = ComposerJumpMode::None;
-  draft_state_.history_index.reset();
-  draft_state_.draft_input.clear();
-  draft_state_.selected_slash_command_index = 0;
-  draft_state_.slash_palette_suppressed = false;
-  draft_state_.path_completion_force_active = false;
-  draft_state_.draft_scroll_offset = 0;
-  draft_state_.clear_selection();
+  draft_state_.reset_interaction();
   snapshot.status = "reading clipboard image";
   if (!renderer_.render())
     return false;
@@ -324,7 +291,7 @@ void RuntimeActionController::toggle_thinking_visibility()
 bool RuntimeActionController::open_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
   snapshot.status = "model selector opened";
@@ -345,7 +312,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
     }
     return true;
   }
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Reasoning, std::move(*view));
   snapshot.status = "thinking mode selector opened";
@@ -356,7 +323,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
 bool RuntimeActionController::open_scoped_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
   snapshot.status = "scoped model selector opened";
@@ -367,7 +334,7 @@ bool RuntimeActionController::open_scoped_model_selector()
 bool RuntimeActionController::toggle_startup_overview()
 {
   auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   if (selectors_.kind() == ActiveSelectList::Overview && selectors_.view())
   {
@@ -398,7 +365,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ForkUserTurn, std::move(*opened));
   snapshot.status = "fork-from selector opened";
@@ -416,7 +383,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
-  draft_state_.pending_escape_clear = false;
+  draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::CopyUserTurn, std::move(*opened));
   snapshot.status = "copy user-turn selector opened";
