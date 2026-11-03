@@ -303,6 +303,7 @@ set(AVA_TESTS_SOURCES
   "tui_command_output_tests.cpp"
   "tui_completion_tests.cpp"
   "tui_composer_rendering_tests.cpp"
+  "tui_event_loop_tests.cpp"
   "tui_keybinding_tests.cpp"
   "tui_markdown_tests.cpp"
   "tui_mermaid_tests.cpp"
@@ -426,6 +427,7 @@ set(AVA_TEST_SUITES
   mermaid_render
   permission_rules
   tui_composer
+  tui_event_loop
   tui_pending_requests
   terminal_horizontal_layout
   terminal_paragraph
