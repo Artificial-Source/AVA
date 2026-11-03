@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SelectorHost.h"
+#include "SettingsDialog.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_active_run_internal.h"
@@ -38,12 +39,6 @@ class TuiSession final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  void clear_settings_preview();
-  void begin_settings_preview_baseline();
-  void ensure_settings_session();
-  void rebuild_settings_view(SettingsSection section, std::string query = {}, std::optional<std::size_t> selected = std::nullopt);
-  void apply_settings_highlight_preview();
-  void close_settings();
   void restore_branch_summary_selector(SelectListView view);
   void present_branch_summary_status(std::string status);
   bool settle_branch_summary(TuiBranchSummarySnapshot const& operation);
@@ -78,6 +73,7 @@ class TuiSession final
   RuntimeRenderer renderer_;
   RuntimeNavigationController navigation_;
   SelectorHost selectors_;
+  SettingsDialog settings_;
   RuntimePromptStashController prompt_stash_;
 
   // Temporary branch-summary ownership, extracted in 04/04.
@@ -89,8 +85,6 @@ class TuiSession final
   std::size_t branch_summary_prior_selected_index_ = 0;
   std::string branch_summary_selected_source_value_;
   bool branch_summary_exit_ready_ = false;
-  runtime_views::SettingsNavigationState settings_nav_;
-  bool settings_session_open_ = false;
   TranscriptSearchController transcript_search_;
   std::optional<PendingSessionArchiveAction> session_archive_confirmation_;
   RuntimePromptCoordinator prompt_coordinator_;

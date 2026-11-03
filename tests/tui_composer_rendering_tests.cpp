@@ -5,6 +5,7 @@
 #include "ava/app/command_palette.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/SelectorHost.h"
+#include "ava/tui/SettingsDialog.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -1401,8 +1402,9 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                                   navigation, action_controller, transcript_search, subagent_workspace);
+  ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
-                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list);
+                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog);
 
   auto continued = [](ava::tui::RuntimeSubmitOutcome const& outcome) {
     return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;

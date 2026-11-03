@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "SelectorHost.h"
+#include "SettingsDialog.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -48,7 +49,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                  RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                 SelectorHost& selectors)
+                                                 SelectorHost& selectors, SettingsDialog& settings_dialog)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -59,14 +60,14 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
       prompt_stash_(prompt_stash),
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
-      selectors_(selectors)
+      selectors_(selectors),
+      settings_dialog_(settings_dialog)
 {
 }
 
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& sidebar = presentation_state_.sidebar;
   auto& input_history = draft_state_.input_history;
   auto& history_index = draft_state_.history_index;
   auto& draft_input = draft_state_.draft_input;
@@ -360,15 +361,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/settings")
     {
       push_history(input_history, submitted);
-      if (selectors_.kind() == ActiveSelectList::Overview)
-        snapshot.startup_overview.reset();
-      // Workspace trust is popup-only. Refresh it once at initialization so a
-      // close/reopen observes backend changes without ordinary snapshot transport.
-      snapshot.project_trust = frontend_.read_project_trust();
-      auto settings_snapshot = snapshot;
-      settings_snapshot.sidebar = sidebar;
-      selectors_.open(ActiveSelectList::Settings, settings_select_list_view(settings_snapshot, frontend_.key_bindings()));
-      snapshot.status = "settings opened";
+      settings_dialog_.open();
       transcript_scroll_offset = 0;
       if (!renderer_.request_render())
       {

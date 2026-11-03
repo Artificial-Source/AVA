@@ -52,6 +52,7 @@ add_library(ava_tui
   "TuiFrontEnd.cpp"
   "TuiSession.cpp"
   "SelectorHost.cpp"
+  "SettingsDialog.cpp"
 )
 
 target_link_libraries(ava_tui

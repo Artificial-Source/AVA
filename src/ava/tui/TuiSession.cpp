@@ -39,6 +39,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       renderer_(&frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, &terminal_context),
       navigation_(frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, renderer_),
       selectors_(presentation_state_.snapshot),
+      settings_(frontend, presentation_state_, selectors_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings()),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
       prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, &selectors_),
@@ -48,7 +49,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       active_run_controller_(frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
                              action_controller_, transcript_search_, subagent_workspace_, std::bind_front(&TuiSession::service_mermaid_presentation, this)),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
-                         transcript_search_, subagent_workspace_, selectors_)
+                         transcript_search_, subagent_workspace_, selectors_, settings_)
 {
 }
 
@@ -57,87 +58,6 @@ TuiSession::~TuiSession()
   // Each collaborator is still alive here; shutdown also covers early run returns.
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown(presentation_state_.snapshot);
-  clear_tui_theme_preview();
-}
-
-void TuiSession::clear_settings_preview()
-{
-  settings_nav_.preview.cancel();
-  settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-}
-
-void TuiSession::begin_settings_preview_baseline()
-{
-  settings_nav_.preview.begin(runtime_views::DisplayPresentationBaseline{.show_images = presentation_state_.snapshot.show_images,
-                                                                         .image_width_cells = presentation_state_.snapshot.image_width_cells,
-                                                                         .cursor = presentation_state_.snapshot.cursor});
-}
-
-void TuiSession::ensure_settings_session()
-{
-  if (settings_session_open_)
-    return;
-  settings_nav_.reset();
-  begin_settings_preview_baseline();
-  settings_session_open_ = true;
-}
-
-void TuiSession::rebuild_settings_view(SettingsSection section, std::string query, std::optional<std::size_t> selected)
-{
-  ensure_settings_session();
-  auto settings_snapshot = presentation_state_.snapshot;
-  settings_snapshot.sidebar = presentation_state_.sidebar;
-  // Build rows from authoritative presentation so preview overlays do not rewrite candidate labels.
-  settings_snapshot.show_images = settings_nav_.preview.authoritative.show_images;
-  settings_snapshot.image_width_cells = settings_nav_.preview.authoritative.image_width_cells;
-  settings_snapshot.cursor = settings_nav_.preview.authoritative.cursor;
-  // active_tui_theme() consults the presentation overlay; clear it only while constructing rows.
-  auto const restage_theme_preview = settings_nav_.preview.active();
-  settings_nav_.preview.clear_theme_overlay();
-  auto view = settings_select_list_view_for_section(&frontend_, section, settings_snapshot, frontend_.key_bindings());
-  if (restage_theme_preview)
-    settings_nav_.preview.apply_theme_overlay();
-  view.query = std::move(query);
-  if (selected)
-    view.selected_item_index = *selected;
-  view.selected_item_index = clamp_select_list_selection(view, view.selected_item_index);
-  selectors_.open(ActiveSelectList::Settings, std::move(view));
-  settings_nav_.section = section;
-  settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-}
-
-void TuiSession::apply_settings_highlight_preview()
-{
-  if (selectors_.kind() != ActiveSelectList::Settings || !selectors_.view() || !settings_nav_.in_display())
-  {
-    if (settings_nav_.preview.active())
-    {
-      settings_nav_.preview.cancel();
-      settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-    }
-    return;
-  }
-  auto const index = selectors_.view()->selected_item_index;
-  if (index >= selectors_.view()->items.size())
-  {
-    settings_nav_.preview.cancel();
-    settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-    return;
-  }
-  auto const& item = selectors_.view()->items[index];
-  if (auto overlay = runtime_views::settings_preview_overlay_for_action(item.value, presentation_state_.snapshot))
-    settings_nav_.preview.update(std::move(*overlay));
-  else
-    settings_nav_.preview.cancel();
-  settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-}
-
-void TuiSession::close_settings()
-{
-  selectors_.close();
-  clear_settings_preview();
-  settings_nav_.reset();
-  settings_session_open_ = false;
 }
 
 void TuiSession::restore_branch_summary_selector(SelectListView view)
@@ -318,51 +238,14 @@ bool TuiSession::maybe_reload_display_settings()
   if (outcome != DisplaySettingsReloadPollOutcome::Applied)
     return true;
 
-  // Applied is an explicit app signal. Always rebase/reapply while settings are open — never
-  // infer from post-hydration value equality (overlay can mask true→false authority changes).
-  if (settings_session_open_ && selectors_.kind() == ActiveSelectList::Settings)
-  {
-    // Capture the actionable selection identity before hydration rebuild can shift indexes.
-    std::string selected_action_value;
-    std::optional<std::size_t> prior_selected_index;
-    std::string query;
-    std::string staged_overlay_action;
-    if (selectors_.view())
-    {
-      query = selectors_.view()->query;
-      prior_selected_index = selectors_.view()->selected_item_index;
-      if (*prior_selected_index < selectors_.view()->items.size())
-      {
-        auto const& item = selectors_.view()->items[*prior_selected_index];
-        if (!item.value.empty())
-          selected_action_value = item.value;
-      }
-    }
-    if (settings_nav_.preview.overlay && !settings_nav_.preview.overlay->action_token.empty())
-      staged_overlay_action = settings_nav_.preview.overlay->action_token;
-
-    reapply_settings_preview_after_display_reload(settings_nav_.preview, presentation_state_.snapshot);
-    if (settings_nav_.in_display() && selectors_.view())
-    {
-      rebuild_settings_view(settings_nav_.section, query, std::nullopt);
-      if (selectors_.view())
-      {
-        selectors_.update_selection(
-            runtime_views::reselect_settings_display_row_after_rebuild(*selectors_.view(), selected_action_value, staged_overlay_action, prior_selected_index),
-            selectors_.view()->query);
-        // Keep overlay and Enter target aligned with the restored row identity.
-        apply_settings_highlight_preview();
-      }
-    }
-  }
+  settings_.rebase_after_display_reload();
   // Paint exactly once after overlay staging so the first frame is the final staged state.
   return renderer_.render();
 }
 
 bool TuiSession::toggle_startup_overview()
 {
-  if (settings_session_open_)
-    close_settings();
+  settings_.close();
   return action_controller_.toggle_startup_overview();
 }
 
@@ -800,208 +683,56 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     }
     if (selectors_.view())
     {
-      if (selectors_.kind() == ActiveSelectList::Settings)
-        ensure_settings_session();
-      else if (settings_session_open_)
-      {
-        // Another selector replaced settings: drop any presentation-only preview.
-        clear_settings_preview();
-        settings_nav_.reset();
-        settings_session_open_ = false;
-      }
+      settings_.synchronize_selector();
 
       auto input_result = classify_selector_input(input);
       if (input_result.action == SelectListInputAction::Redraw && selectors_.view())
       {
         session_archive_confirmation_.reset();
-        selectors_.update_selection(input_result.selected_item_index, std::move(input_result.query));
         if (selectors_.kind() == ActiveSelectList::Settings)
-          apply_settings_highlight_preview();
-      }
-      else if (input_result.action == SelectListInputAction::Cancel && selectors_.kind() == ActiveSelectList::Settings && selectors_.view())
-      {
-        // Esc in a section returns to root (restoring root query/selection when available).
-        // Esc at root closes. If a section is open without a root frame (reload/confirm edge),
-        // still pop to root rather than trapping the user in the section.
-        if (!settings_nav_.is_root())
-        {
-          std::string root_query;
-          std::optional<std::size_t> root_selected;
-          if (settings_nav_.root_frame)
-          {
-            root_query = settings_nav_.root_frame->query;
-            root_selected = settings_nav_.root_frame->selected_item_index;
-          }
-          settings_nav_.root_frame.reset();
-          clear_settings_preview();
-          begin_settings_preview_baseline();
-          rebuild_settings_view(SettingsSection::Root, std::move(root_query), root_selected);
-          presentation_state_.snapshot.status = "settings";
-        }
+          settings_.highlight(input_result.selected_item_index, std::move(input_result.query));
         else
-        {
-          close_settings();
-          presentation_state_.snapshot.status = "view canceled";
-        }
+          selectors_.update_selection(input_result.selected_item_index, std::move(input_result.query));
       }
-      else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Settings && selectors_.view())
+      else if (input_result.action == SelectListInputAction::Cancel && selectors_.kind() == ActiveSelectList::Settings)
       {
-        using namespace runtime_views;
-
-        auto const* selected_item = selectors_.selected_item(input_result.selected_item_index);
-        std::string selected_value = selected_item ? selected_item->value : std::string{};
-        auto const current_query = input_result.query;
-        auto const current_selected = input_result.selected_item_index;
-
-        if (auto section = runtime_views::settings_section_for_action(selected_value))
+        settings_.cancel();
+      }
+      else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Settings)
+      {
+        auto result = settings_.resolve(input_result);
+        if (auto* command = std::get_if<std::string>(&result))
         {
-          // Section Enter rebuilds in place rather than generic teardown-first Resolve.
-          settings_nav_.root_frame =
-              runtime_views::SettingsFrameState{.section = SettingsSection::Root, .query = current_query, .selected_item_index = current_selected};
-          clear_settings_preview();
-          begin_settings_preview_baseline();
-          rebuild_settings_view(*section);
-          presentation_state_.snapshot.status = "settings section opened";
-        }
-        else if (selected_value == kSettingsOpenModels)
-        {
-          close_settings();
-          static_cast<void>(action_controller_.open_model_selector());
-        }
-        else if (selected_value == kSettingsOpenScopedModels)
-        {
-          close_settings();
-          static_cast<void>(action_controller_.open_scoped_model_selector());
-        }
-        else if (selected_value == kSettingsOpenReasoning)
-        {
-          close_settings();
-          static_cast<void>(action_controller_.open_reasoning_selector(false));
-        }
-        else if (selected_value == kSettingsOpenKeybindings)
-        {
-          close_settings();
-          selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
-          presentation_state_.snapshot.status = "keybindings opened";
-          renderer_.transcript_scroll_offset = 0;
-        }
-        else if (selected_value == kSettingsEditKeybindings)
-        {
-          close_settings();
+          bool const edits_keybindings = *command == "/keybindings set ";
           draft_state_.clear_selection();
-          static_cast<void>(replace_composer_draft(draft_state_.draft, "/keybindings set "));
+          static_cast<void>(replace_composer_draft(draft_state_.draft, std::move(*command)));
           draft_state_.selected_slash_command_index = 0;
           draft_state_.path_completion_force_active = false;
           draft_state_.draft_scroll_offset = 0;
           draft_state_.history_index.reset();
           draft_state_.draft_input.clear();
-          presentation_state_.snapshot.status = "keybinding edit command drafted";
-        }
-        else if (selected_value == kSettingsReloadKeybindings)
-        {
-          close_settings();
-          auto reloaded = frontend_.on_reload_key_bindings();
-          if (!reloaded)
-          {
-            presentation_state_.snapshot.status = reloaded.error().format();
-            terminal_context_.beep();
-          }
-          else
-          {
-            presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
-            presentation_state_.snapshot.status = "keybindings reloaded";
-          }
-        }
-        else if (selected_value == kSettingsDraftPermissions || selected_value == kSettingsDraftTools || selected_value == kSettingsDraftPlugins ||
-                 selected_value == kSettingsDraftMcp || selected_value == kSettingsDraftJobs || selected_value == kSettingsDraftSessions ||
-                 selected_value == kSettingsDraftThinking || selected_value == kSettingsDraftDetails)
-        {
-          std::string draft_command = "/help";
-          if (selected_value == kSettingsDraftPermissions)
-            draft_command = "/permissions";
-          else if (selected_value == kSettingsDraftTools)
-            draft_command = "/details";
-          else if (selected_value == kSettingsDraftPlugins)
-            draft_command = "/plugins";
-          else if (selected_value == kSettingsDraftMcp)
-            draft_command = "/mcp";
-          else if (selected_value == kSettingsDraftJobs)
-            draft_command = "/jobs";
-          else if (selected_value == kSettingsDraftSessions)
-            draft_command = "/sessions";
-          else if (selected_value == kSettingsDraftThinking)
-            draft_command = "/thinking";
-          else if (selected_value == kSettingsDraftDetails)
-            draft_command = "/details";
-          close_settings();
-          draft_state_.clear_selection();
-          static_cast<void>(replace_composer_draft(draft_state_.draft, std::move(draft_command)));
-          draft_state_.selected_slash_command_index = 0;
-          draft_state_.path_completion_force_active = false;
-          draft_state_.draft_scroll_offset = 0;
-          draft_state_.history_index.reset();
-          draft_state_.draft_input.clear();
-          presentation_state_.snapshot.status = "command drafted";
-        }
-        else if (selected_value.empty() || (selected_item && !selected_item->enabled))
-        {
-          presentation_state_.snapshot.status = "settings action unavailable from this row";
-          terminal_context_.beep();
-        }
-        else if (settings_nav_.in_display())
-        {
-          auto const confirm_token = selected_value;
-          clear_settings_preview();
-          auto selected = frontend_.on_local_display_settings_action(confirm_token);
-          if (selected)
-          {
-            auto status = selected->status;
-            presentation_state_.apply_local_display_settings(frontend_, std::move(selected->settings));
-            begin_settings_preview_baseline();
-            rebuild_settings_view(settings_nav_.section, current_query, current_selected);
-            presentation_state_.snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
-          }
-          else
-          {
-            presentation_state_.snapshot.status = selected.error().format();
-            begin_settings_preview_baseline();
-            terminal_context_.beep();
-          }
+          presentation_state_.snapshot.status = edits_keybindings ? "keybinding edit command drafted" : "command drafted";
         }
         else
         {
-          // Confirm persists exactly once through the app callback; preview is cleared first so
-          // authoritative reload becomes the new baseline.
-          auto const confirm_token = selected_value;
-          clear_settings_preview();
-          auto selected = frontend_.on_settings_selected(confirm_token);
-          if (selected)
+          switch (std::get<SettingsDialogRequest>(result))
           {
-            presentation_state_.refresh_after_backend_action(frontend_);
-            auto status = std::move(*selected);
-            presentation_state_.snapshot.status = status;
-            begin_settings_preview_baseline();
-            if (settings_nav_.in_display())
-            {
-              // Remain in the presentation section with refreshed authoritative rows after a
-              // successful confirm. Feedback stays on the transient status surface; local
-              // settings actions never append chat/transcript items.
-              auto const receipt = status.empty() ? std::string("display setting saved") : status;
-              rebuild_settings_view(settings_nav_.section, current_query, current_selected);
-              presentation_state_.snapshot.status = receipt;
-            }
-            else
-            {
-              close_settings();
-            }
-          }
-          else
-          {
-            // Error restores latest authoritative presentation and keeps the section open.
-            begin_settings_preview_baseline();
-            settings_nav_.preview.apply_image_overlay(presentation_state_.snapshot);
-            presentation_state_.snapshot.status = selected.error().format();
-            terminal_context_.beep();
+            case SettingsDialogRequest::Models:
+              static_cast<void>(action_controller_.open_model_selector());
+              break;
+            case SettingsDialogRequest::ScopedModels:
+              static_cast<void>(action_controller_.open_scoped_model_selector());
+              break;
+            case SettingsDialogRequest::Reasoning:
+              static_cast<void>(action_controller_.open_reasoning_selector(false));
+              break;
+            case SettingsDialogRequest::Hotkeys:
+              selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
+              presentation_state_.snapshot.status = "keybindings opened";
+              renderer_.transcript_scroll_offset = 0;
+              break;
+            case SettingsDialogRequest::None:
+              break;
           }
         }
       }
@@ -1294,20 +1025,6 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
         {
           presentation_state_.snapshot.status = resolved_list == ActiveSelectList::Reasoning ? "thinking mode unchanged" : "view canceled";
         }
-        else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsOpenModels)
-        {
-          static_cast<void>(action_controller_.open_model_selector());
-        }
-        else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsOpenScopedModels)
-        {
-          static_cast<void>(action_controller_.open_scoped_model_selector());
-        }
-        else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsOpenKeybindings)
-        {
-          selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
-          presentation_state_.snapshot.status = "keybindings opened";
-          renderer_.transcript_scroll_offset = 0;
-        }
         else if (resolved_list == ActiveSelectList::Hotkeys && !selected_value.empty())
         {
           auto draft_command = std::string("/keybindings set ") + selected_value + " ";
@@ -1319,31 +1036,6 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           draft_state_.history_index.reset();
           draft_state_.draft_input.clear();
           presentation_state_.snapshot.status = "keybinding edit command drafted";
-        }
-        else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsEditKeybindings)
-        {
-          draft_state_.clear_selection();
-          static_cast<void>(replace_composer_draft(draft_state_.draft, "/keybindings set "));
-          draft_state_.selected_slash_command_index = 0;
-          draft_state_.path_completion_force_active = false;
-          draft_state_.draft_scroll_offset = 0;
-          draft_state_.history_index.reset();
-          draft_state_.draft_input.clear();
-          presentation_state_.snapshot.status = "keybinding edit command drafted";
-        }
-        else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsReloadKeybindings)
-        {
-          auto reloaded = frontend_.on_reload_key_bindings();
-          if (!reloaded)
-          {
-            presentation_state_.snapshot.status = reloaded.error().format();
-            terminal_context_.beep();
-          }
-          else
-          {
-            presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
-            presentation_state_.snapshot.status = "keybindings reloaded";
-          }
         }
         else if (resolved_list == ActiveSelectList::Model)
         {
@@ -1440,39 +1132,6 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           settle_local_command_status(presentation_state_.snapshot, decision.status);
           if (decision.beep)
             terminal_context_.beep();
-        }
-        else if (resolved_list == ActiveSelectList::Settings && settings_nav_.in_display())
-        {
-          clear_settings_preview();
-          auto selected = frontend_.on_local_display_settings_action(selected_value);
-          if (selected)
-          {
-            auto status = selected->status;
-            presentation_state_.apply_local_display_settings(frontend_, std::move(selected->settings));
-            begin_settings_preview_baseline();
-            rebuild_settings_view(settings_nav_.section);
-            presentation_state_.snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
-          }
-          else
-          {
-            presentation_state_.snapshot.status = selected.error().format();
-            begin_settings_preview_baseline();
-            terminal_context_.beep();
-          }
-        }
-        else if (resolved_list == ActiveSelectList::Settings)
-        {
-          auto selected = frontend_.on_settings_selected(selected_value);
-          if (selected)
-          {
-            presentation_state_.refresh_after_backend_action(frontend_);
-            presentation_state_.snapshot.status = std::move(*selected);
-          }
-          else
-          {
-            presentation_state_.snapshot.status = selected.error().format();
-            terminal_context_.beep();
-          }
         }
         else
         {

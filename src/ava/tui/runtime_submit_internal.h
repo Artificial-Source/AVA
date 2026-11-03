@@ -7,6 +7,7 @@
 namespace ava::tui {
 
 class SelectorHost;
+class SettingsDialog;
 class RuntimeActionController;
 class RuntimeActiveRunController;
 struct RuntimeDraftState;
@@ -40,7 +41,8 @@ class RuntimeSubmitController final
   RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                           RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                           RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
-                          TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors);
+                          TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
+                          SettingsDialog& settings_dialog);
   RuntimeSubmitController(RuntimeSubmitController const&) = delete;
   RuntimeSubmitController& operator=(RuntimeSubmitController const&) = delete;
 
@@ -58,6 +60,7 @@ class RuntimeSubmitController final
   TranscriptSearchController& transcript_search_;
   RuntimeSubagentWorkspaceController& subagent_workspace_;
   SelectorHost& selectors_;
+  SettingsDialog& settings_dialog_;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

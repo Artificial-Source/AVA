@@ -98,3 +98,24 @@ Build sequence for04/01:
 - Production C++ was formatted with clang-format22; test API adaptations were formatted on changed ranges with the same formatter. `git diff --check` passed. No tests or runtime/TUI smoke were executed.
 
 - Final full build exit0, all34 scheduled steps completed including ava_tests linkage; no warnings/errors in the final log. Compilation and projection-interface integration are verified; runtime behavior remains untested until the planned final gate.
+
+
+## 06/04/02 — Settings dialog lifetime and preview ownership
+
+Inputs fully read: handoff, inventory, architecture, current migration ledger including04/01 interfaces, and04/02 description. `SettingsDialog.h/.cpp` now own private navigation/root checkpoint, preview baseline/overlay and open lifetime. Session no longer retains those fields or their settings algorithms. The dialog borrows earlier-lived frontend, presentation, SelectorHost and terminal Context. One explicit TuiFrontEnd friendship grants existing protected settings callbacks; backend persistence/trust authority stays external.
+
+`open()` reads popup-local trust, begins one baseline and builds root rows. `highlight(index, query)` updates the host and reversible preview without persistence. `cancel()` restores root query/index from a section (also when the root checkpoint is absent), or closes at root. `resolve(input)` owns section navigation and authoritative confirmation: it copies the selected action before any close/rebuild, clears preview before exactly one callback, rebases after success/failure, preserves the local display section on save, and keeps errors open with transient status. Cross-feature actions return `variant<SettingsDialogRequest, string>`: next-selector requests or an owned draft command. Session coordinates actions/composer mutations without giving the dialog a mutable draft/action reference bundle. `/settings` submission now calls this same owner.
+
+`close()` closes only a Settings host view, then retires preview/navigation. `synchronize_selector()` retires an old preview after another feature replaced the view without closing the replacement. Destructor cleanup restores the baseline and clears global theme preview while presentation/context remain alive; cleanup is idempotent. The former session-level theme cleanup moved into this owner. Settings is declared after SelectorHost and before consumers; its references survive destruction.
+
+Display reload remains explicit orchestration: action-controller Applied result -> `rebase_after_display_reload()` -> one renderer paint. Rebase captures query/index/exact action/staged action, reapplies hydrated authority, rebuilds rows from authoritative image/cursor values with theme overlay temporarily suppressed, restores action identity, and reapplies highlight. Value equality never substitutes for Applied. Existing last-known-good custom-theme fallback is retained in the preview calculation helper.
+
+The duplicate generic Settings Resolve arms were removed: inside the enclosing hosted-view gate, the earlier Settings Cancel/Resolve branches consume those same inputs before generic Resolve/Cancel can run. No distinct reachable behavior was removed. The older redundant in-display check inside the non-display success arm remains for final obsolete-glue review11; it is not new feature state.
+
+Printing is a specific sensitive-data exception: the dialog retains the full presentation and selector aggregates containing arbitrary transcript/stash content, which deliberately have no safe generated content printer. It uses documented OPT_OUT rather than exposing that content. New fields are private, files match the class and cpp begins with sys.h. No empty stub or mutable state getter was added. The sole submit test fixture was adapted to construct a shared dialog against the Application-owned Context; assertions remain unchanged, and no tests were run.
+
+Remaining cross-feature draft application/selector dispatch is composition work for05/01; generic preview value helpers and their existing test seams remain for final11 audit. Session-selector and branch-summary extraction remain04/03–04. No terminal-thread, signal or RPC policy changed.
+
+Build: staged new headers, then activation + `scripts/build.sh --target generate-print-members` succeeded. Full `scripts/build.sh` (configured BetaTest/EnableDebugON/LibcwdON/testsON, GCC16.2, four jobs, cloud execution access) is recorded below after completion. No manual reconfigure or tests. Changed C++ formatted with clang-format22; diff-check is the commit gate.
+
+- First full compile caught an unused submit sidebar alias after settings extraction; it was removed. Final full build exit0, all34 scheduled steps including ava_tests linkage, log `/workspace/ava-tools/goal0402-build-final.log`. No warnings/errors in the final log. Diff-check passed; no behavioral checks run.
