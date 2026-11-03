@@ -16,7 +16,7 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 struct ComposerSnapshot;
-struct RuntimePluginUiCoordinatorState;
+class RuntimePluginUiCoordinatorState;
 class TuiEventLoop;
 
 struct TuiPluginUiPollResult
@@ -78,9 +78,6 @@ class RuntimePluginUiCoordinator final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  [[nodiscard]] bool clear_surface(std::optional<TuiPluginUiBinding> const& binding = std::nullopt);
-  void expire_submission(std::chrono::steady_clock::time_point now);
-
   RuntimePresentationState& presentation_;
   // Worker endpoint calls retain shared synchronized state until their modal wait
   // ends. Endpoints themselves hold weak references and cannot extend admission.

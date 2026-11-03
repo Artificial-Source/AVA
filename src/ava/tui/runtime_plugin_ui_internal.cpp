@@ -208,82 +208,190 @@ std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_bind
 
 }  // namespace
 
-struct RuntimePluginUiCoordinatorState
+// Shared transport for plugin endpoints. The coordinator owns admission and the
+// UI projection; copied worker endpoints hold only a weak reference and pin this
+// state for a call. All private fields are protected by mutex_. TUI-only methods
+// take the projection for a synchronous call and never retain it. Lock order is
+// state mutex, then modal mutex; worker cancellation releases modal locks first.
+class RuntimePluginUiCoordinatorState final
 {
-  mutable std::mutex mutex;
-  bool shutdown = false;
-  bool active = false;
-  bool accepting = false;
-  bool deadline_expired = false;
-  bool expiry_report_pending = false;
-  // Cancellation publishes an allocation-free clear request under mutex. The
-  // TUI poll consumes it before applying any records from this generation.
-  bool clear_pending = false;
-  std::uint64_t generation = 0;
-  std::string invocation_id;
-  std::chrono::steady_clock::time_point deadline{};
-  std::optional<TuiPluginUiBinding> owner;
-  std::deque<PluginUiQueueRecord> queue;
-  std::shared_ptr<PendingPluginUiModal> outstanding_modal;
-  std::shared_ptr<PendingPluginUiModal> visible_modal;
-  std::function<void()> after_enqueue_for_test;
-  std::function<void(std::size_t)> after_queue_swap_for_test;
-  TuiWakeup wakeup;
+ public:
+  // TUI thread, before admission. Store only the resource-safe weak wake capability.
+  bool attach_wakeup(TuiWakeup wakeup);
+  // TUI thread: cancel old waiters, then open one new generation until its deadline.
+  [[nodiscard]] std::optional<std::uint64_t> begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline);
+  // Worker thread, while holding a shared pin. Publish before waking; a synchronous
+  // modal keeps this call alive until its result, cancellation, or deadline.
+  [[nodiscard]] TuiPluginUiReply present(std::uint64_t request_generation, TuiPluginUiRequest const& request,
+                                         std::chrono::steady_clock::time_point request_deadline, TuiPluginUiCancelCallback cancel_requested);
+  // Worker endpoint: a stale generation/binding cannot close a later submission.
+  void close(std::uint64_t request_generation, TuiPluginUiBinding const& binding);
+  // TUI timer: close admission and release waiters before requesting a clear frame.
+  void expire(std::chrono::steady_clock::time_point now);
+  // TUI thread: drain one finite batch. Generation validation, projection and Ack
+  // share the state lock, so cancellation cannot acknowledge unpublished content.
+  [[nodiscard]] TuiPluginUiPollResult poll(RuntimePresentationState& presentation_, bool host_modal_conflict, std::chrono::steady_clock::time_point now,
+                                           bool observe_deadline);
+  // TUI thread: retire modal ownership before completing the worker outside the lock.
+  void resolve_visible(TuiPluginUiReply reply);
+  // Either thread: cancellation/deadline observation without touching the projection.
+  [[nodiscard]] bool deadline_reached(std::chrono::steady_clock::time_point now) const;
+  // TUI thread: decide whether its deadline registration can be cancelled.
+  [[nodiscard]] bool active() const;
+  // Either thread: cancel without allocation, then notify after releasing the lock.
+  void cancel();
+  // TUI thread before worker join: release waiters and retire the current binding.
+  void finish();
+  // TUI thread before owner destruction: close admission permanently and retire wakeups.
+  void shutdown();
+  // Test synchronization only; hooks are exchanged under lock and invoked outside it.
+  void set_after_enqueue_for_test(std::function<void()> hook);
+  // Test synchronization only; observes a swapped batch before generation validation.
+  void set_after_queue_swap_for_test(std::function<void(std::size_t)> hook);
 
-  // Opaque synchronized transport contains arbitrary plugin messages, callback
-  // captures and mutex resources; it must not become generated debug output.
+  // Plugin messages and callbacks may contain arbitrary user or plugin content.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  // Caller holds mutex_. Release all waiters before setting up projection removal;
+  // no allocation or binding copy may interrupt the cancellation sequence.
+  void cancel_locked();
+  // Guards every transport field below across worker and TUI calls.
+  mutable std::mutex mutex_;
+  // Set once by shutdown; later begin/present calls cannot reopen admission.
+  bool shutdown_ = false;
+  // Set by begin and cleared by cancellation; TUI uses it to retire the deadline timer.
+  bool active_ = false;
+  // Admission permission for requests of the current generation; cancellation clears it.
+  bool accepting_ = false;
+  // Latched expiry for worker cancellation predicates; begin/finish clear it.
+  bool deadline_expired_ = false;
+  // One TUI poll reports each expiry; expire sets and poll exchanges it.
+  bool expiry_report_pending_ = false;
+  // Allocation-free projection-removal request; cancel sets and TUI poll consumes it.
+  bool clear_pending_ = false;
+  // Incremented by begin so copied endpoints cannot act on a later submission.
+  std::uint64_t generation_ = 0;
+  // Current invocation identity, established before admission by begin.
+  std::string invocation_id_;
+  // Current monotonic deadline; begin sets it and both threads may observe it under lock.
+  std::chrono::steady_clock::time_point deadline_{};
+  // Current plugin/command/invocation binding; finish/shutdown retire it.
+  std::optional<TuiPluginUiBinding> owner_;
+  // Worker publications drained by TUI poll; cancellation releases their waiters first.
+  std::deque<PluginUiQueueRecord> queue_;
+  // Shared with the waiting worker; prevents admission of a second synchronous modal.
+  std::shared_ptr<PendingPluginUiModal> outstanding_modal_;
+  // Shared with the waiting worker while the published modal can receive TUI input.
+  std::shared_ptr<PendingPluginUiModal> visible_modal_;
+  // One-shot race-test hook, transferred to a worker-local callable before invocation.
+  std::function<void()> after_enqueue_for_test_;
+  // One-shot race-test hook, transferred to TUI-local storage before invocation.
+  std::function<void(std::size_t)> after_queue_swap_for_test_;
+  // Copied under lock, invoked outside it; shutdown clears the stored capability.
+  TuiWakeup wakeup_;
 };
 
 namespace {
-
-void cancel_locked(RuntimePluginUiCoordinatorState& state)
+// TUI thread: remove only the matching published surfaces. The caller serializes
+// transport validation where needed; this helper neither resolves nor owns waits.
+bool clear_plugin_surface(RuntimePresentationState& presentation_, std::optional<TuiPluginUiBinding> const& binding = std::nullopt)
 {
-  if (!state.active && !state.accepting && !state.owner && !state.outstanding_modal && !state.visible_modal)
-    return;
-  state.active = false;
-  state.accepting = false;
-  for (auto const& record : state.queue)
-    complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-  state.queue.clear();
-  // Release waiters before the TUI clears its projection. No queue allocation
-  // or binding-string copy may stand between cancellation and their wakeup.
-  state.clear_pending = true;
-  complete_modal(state.outstanding_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-  complete_modal(state.visible_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-  state.outstanding_modal.reset();
-  state.visible_modal.reset();
+  bool changed = false;
+  if (!binding || (presentation_.screen().plugin_ui_dock && presentation_.screen().plugin_ui_dock->binding == *binding))
+  {
+    changed = changed || presentation_.screen().plugin_ui_dock.has_value();
+    presentation_.publish_plugin_dock(std::nullopt);
+  }
+  if (!binding || (presentation_.screen().plugin_ui_modal && presentation_.screen().plugin_ui_modal->binding == *binding))
+  {
+    changed = changed || presentation_.screen().plugin_ui_modal.has_value();
+    presentation_.publish_plugin_modal(std::nullopt);
+  }
+  return changed;
+}
+} // namespace
+
+bool RuntimePluginUiCoordinatorState::attach_wakeup(TuiWakeup wakeup)
+{
+  std::lock_guard lock(mutex_);
+  // Install scheduling before begin, and never reattach a shut-down coordinator.
+  ASSERT(!active_ && !shutdown_);
+  if (active_ || shutdown_)
+    return false;
+  wakeup_ = std::move(wakeup);
+  return true;
 }
 
-TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state, std::uint64_t generation, TuiPluginUiRequest const& request,
-                                 std::chrono::steady_clock::time_point deadline, TuiPluginUiCancelCallback cancel_requested)
+std::optional<std::uint64_t> RuntimePluginUiCoordinatorState::begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline)
 {
-  auto state = weak_state.lock();
-  if (!state || !safe_request(request) || callback_canceled(cancel_requested))
+  std::lock_guard lock(mutex_);
+  if (shutdown_)
+    return std::nullopt;
+  complete_modal(outstanding_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  complete_modal(visible_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  for (auto const& record : queue_)
+    complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  queue_.clear();
+  invocation_id_ = binding.invocation_id;
+  owner_ = std::move(binding);
+  outstanding_modal_.reset();
+  visible_modal_.reset();
+  clear_pending_ = false;
+  active_ = true;
+  accepting_ = true;
+  deadline_expired_ = false;
+  expiry_report_pending_ = false;
+  deadline_ = deadline;
+  return ++generation_;
+}
+
+void RuntimePluginUiCoordinatorState::cancel_locked()
+{
+  if (!active_ && !accepting_ && !owner_ && !outstanding_modal_ && !visible_modal_)
+    return;
+  active_ = false;
+  accepting_ = false;
+  for (auto const& record : queue_)
+    complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  queue_.clear();
+  // Release waiters before the TUI clears its projection. No queue allocation
+  // or binding-string copy may stand between cancellation and their wakeup.
+  clear_pending_ = true;
+  complete_modal(outstanding_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  complete_modal(visible_modal_, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  outstanding_modal_.reset();
+  visible_modal_.reset();
+}
+
+TuiPluginUiReply RuntimePluginUiCoordinatorState::present(std::uint64_t request_generation, TuiPluginUiRequest const& request,
+                                                          std::chrono::steady_clock::time_point request_deadline, TuiPluginUiCancelCallback cancel_requested)
+{
+  if (!safe_request(request) || callback_canceled(cancel_requested))
     return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
 
   std::shared_ptr<PendingPluginUiModal> modal;
   std::function<void()> after_enqueue;
   TuiWakeup wakeup;
   {
-    std::lock_guard lock(state->mutex);
-    if (state->shutdown || !state->active || !state->accepting || state->generation != generation || state->deadline != deadline ||
-        std::chrono::steady_clock::now() >= deadline || request.binding.invocation_id != state->invocation_id)
+    std::lock_guard lock(mutex_);
+    if (shutdown_ || !active_ || !accepting_ || generation_ != request_generation || deadline_ != request_deadline ||
+        std::chrono::steady_clock::now() >= request_deadline || request.binding.invocation_id != invocation_id_)
     {
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
     }
-    if (!state->owner || *state->owner != request.binding || state->queue.size() >= kTuiPluginUiMaxQueuedRecords - 1)
+    if (!owner_ || *owner_ != request.binding || queue_.size() >= kTuiPluginUiMaxQueuedRecords - 1)
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
 
     bool const is_modal = request.kind == TuiPluginUiKind::Select || request.kind == TuiPluginUiKind::Confirm;
-    if (is_modal && (state->outstanding_modal || state->visible_modal))
+    if (is_modal && (outstanding_modal_ || visible_modal_))
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
     modal = std::make_shared<PendingPluginUiModal>();
     if (is_modal)
-      state->outstanding_modal = modal;
-    state->queue.push_back(PluginUiQueueRecord{.generation = generation, .request = request, .modal = modal});
-    after_enqueue = std::exchange(state->after_enqueue_for_test, {});
-    wakeup = state->wakeup;
+      outstanding_modal_ = modal;
+    queue_.push_back(PluginUiQueueRecord{.generation = request_generation, .request = request, .modal = modal});
+    after_enqueue = std::exchange(after_enqueue_for_test_, {});
+    wakeup = wakeup_;
   }
   wakeup.notify();
   if (after_enqueue)
@@ -296,24 +404,24 @@ TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> 
       if (modal->reply)
         return *modal->reply;
       auto const now = std::chrono::steady_clock::now();
-      if (now < deadline)
-        modal->ready.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(20)));
+      if (now < request_deadline)
+        modal->ready.wait_until(lock, std::min(request_deadline, now + std::chrono::milliseconds(20)));
       if (modal->reply)
         return *modal->reply;
     }
-    if (callback_canceled(cancel_requested) || std::chrono::steady_clock::now() >= deadline)
+    if (callback_canceled(cancel_requested) || std::chrono::steady_clock::now() >= request_deadline)
     {
       complete_modal(modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-      std::lock_guard lock(state->mutex);
-      if (state->outstanding_modal == modal)
-        state->outstanding_modal.reset();
-      if (state->visible_modal == modal)
-        state->visible_modal.reset();
+      std::lock_guard lock(mutex_);
+      if (outstanding_modal_ == modal)
+        outstanding_modal_.reset();
+      if (visible_modal_ == modal)
+        visible_modal_.reset();
       return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
     }
     {
-      std::lock_guard lock(state->mutex);
-      if (state->shutdown || state->generation != generation || !state->active)
+      std::lock_guard lock(mutex_);
+      if (shutdown_ || generation_ != request_generation || !active_)
       {
         complete_modal(modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
         return {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
@@ -322,23 +430,236 @@ TuiPluginUiReply present_request(std::weak_ptr<RuntimePluginUiCoordinatorState> 
   }
 }
 
-void close_binding(std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state, std::uint64_t generation, TuiPluginUiBinding const& binding)
+void RuntimePluginUiCoordinatorState::close(std::uint64_t request_generation, TuiPluginUiBinding const& binding)
 {
-  auto state = weak_state.lock();
-  if (!state)
-    return;
   TuiWakeup wakeup;
   {
-    std::lock_guard lock(state->mutex);
-    if (state->shutdown || state->generation != generation || !state->owner || *state->owner != binding)
+    std::lock_guard lock(mutex_);
+    if (shutdown_ || generation_ != request_generation || !owner_ || *owner_ != binding)
       return;
-    cancel_locked(*state);
-    wakeup = state->wakeup;
+    cancel_locked();
+    wakeup = wakeup_;
   }
   wakeup.notify();
 }
 
-}  // namespace
+void RuntimePluginUiCoordinatorState::expire(std::chrono::steady_clock::time_point now)
+{
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(mutex_);
+    if (!active_ || now < deadline_)
+      return;
+    deadline_expired_ = true;
+    expiry_report_pending_ = true;
+    cancel_locked();
+    wakeup = wakeup_;
+  }
+  wakeup.notify();
+}
+
+TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationState& presentation_, bool host_modal_conflict,
+                                                            std::chrono::steady_clock::time_point now, bool observe_deadline)
+{
+  auto const& snapshot = presentation_.screen();
+  TuiPluginUiPollResult result;
+  std::deque<PluginUiQueueRecord> records;
+  std::function<void(std::size_t)> after_queue_swap;
+  {
+    std::lock_guard lock(mutex_);
+    // Standalone fixtures retain explicit-clock servicing. An attached owner
+    // receives expiry only from its registered member timer.
+    if (observe_deadline && active_ && now >= deadline_)
+    {
+      deadline_expired_ = true;
+      expiry_report_pending_ = true;
+      cancel_locked();
+    }
+    if (std::exchange(clear_pending_, false))
+      result.changed = clear_plugin_surface(presentation_) || result.changed;
+    result.deadline_expired = std::exchange(expiry_report_pending_, false);
+    records.swap(queue_);
+    after_queue_swap = std::exchange(after_queue_swap_for_test_, {});
+  }
+  if (after_queue_swap)
+    after_queue_swap(records.size());
+
+  if (host_modal_conflict && snapshot.plugin_ui_modal)
+  {
+    std::shared_ptr<PendingPluginUiModal> modal;
+    {
+      std::lock_guard lock(mutex_);
+      modal = std::move(visible_modal_);
+      if (outstanding_modal_ == modal)
+        outstanding_modal_.reset();
+    }
+    complete_modal(modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+    presentation_.publish_plugin_modal(std::nullopt);
+    result.changed = true;
+  }
+
+  for (auto& record : records)
+  {
+    auto const& request = record.request;
+    if (request.kind == TuiPluginUiKind::Status || request.kind == TuiPluginUiKind::Widget)
+    {
+      std::lock_guard lock(mutex_);
+      auto const current = record.generation == generation_ && active_ && accepting_ && owner_ && *owner_ == request.binding && modal_pending(record.modal);
+      if (!current)
+      {
+        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+        continue;
+      }
+
+      auto candidate = snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->binding == request.binding
+                           ? *snapshot.plugin_ui_dock
+                           : TuiPluginUiDockView{.binding = request.binding, .status = std::nullopt, .widgets = {}};
+      if (request.kind == TuiPluginUiKind::Status)
+        candidate.status = request.text;
+      else
+        candidate.widgets.push_back(TuiPluginUiWidgetView{.title = request.title, .lines = request.lines});
+
+      auto candidate_snapshot = snapshot;
+      candidate_snapshot.plugin_ui_dock = candidate;
+      auto const geometry = plugin_ui_surface_geometry(candidate_snapshot, request.kind);
+      auto const within_limits = candidate.widgets.size() <= kTuiPluginUiMaxWidgets && dock_line_count(candidate) <= kTuiPluginUiMaxWidgetLines &&
+                                 dock_text_bytes(candidate) <= kTuiPluginUiMaxTextBytes;
+      if (!within_limits)
+      {
+        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+        continue;
+      }
+      if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
+      {
+        cancel_locked();
+        result.changed = clear_plugin_surface(presentation_, request.binding) || result.changed;
+        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+        continue;
+      }
+
+      presentation_.publish_plugin_dock(std::move(candidate));
+      result.changed = true;
+      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Ack, .option_id = {}});
+      continue;
+    }
+
+    std::lock_guard lock(mutex_);
+    auto const current = record.generation == generation_ && active_ && accepting_ && owner_ && *owner_ == request.binding && modal_pending(record.modal);
+    if (!current || host_modal_conflict || snapshot.plugin_ui_modal)
+    {
+      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+      if (outstanding_modal_ == record.modal)
+        outstanding_modal_.reset();
+      continue;
+    }
+
+    auto const selected = request.kind == TuiPluginUiKind::Confirm ? std::size_t{1} : std::size_t{0};
+    auto candidate = TuiPluginUiModalView{.binding = request.binding,
+                                          .request_id = request.request_id,
+                                          .kind = request.kind,
+                                          .title = request.title,
+                                          .description = request.description,
+                                          .options = request.options,
+                                          .selected_option = selected};
+    auto candidate_snapshot = snapshot;
+    candidate_snapshot.plugin_ui_modal = candidate;
+    auto const geometry = plugin_ui_surface_geometry(candidate_snapshot, request.kind);
+    if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
+    {
+      cancel_locked();
+      result.changed = clear_plugin_surface(presentation_, request.binding) || result.changed;
+      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+      continue;
+    }
+
+    presentation_.publish_plugin_modal(std::move(candidate));
+    visible_modal_ = record.modal;
+    result.changed = true;
+  }
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(mutex_);
+    // A rejected surface may publish Clear while consuming this batch. Keep
+    // that later record runnable after releasing the mailbox lock.
+    if (!queue_.empty())
+      wakeup = wakeup_;
+  }
+  wakeup.notify();
+  return result;
+}
+
+void RuntimePluginUiCoordinatorState::resolve_visible(TuiPluginUiReply reply)
+{
+  std::shared_ptr<PendingPluginUiModal> modal;
+  {
+    std::lock_guard lock(mutex_);
+    modal = std::move(visible_modal_);
+    if (outstanding_modal_ == modal)
+      outstanding_modal_.reset();
+  }
+  complete_modal(modal, std::move(reply));
+}
+
+bool RuntimePluginUiCoordinatorState::deadline_reached(std::chrono::steady_clock::time_point now) const
+{
+  std::lock_guard lock(mutex_);
+  return deadline_expired_ || (active_ && now >= deadline_);
+}
+
+bool RuntimePluginUiCoordinatorState::active() const
+{
+  std::lock_guard lock(mutex_);
+  return active_;
+}
+
+void RuntimePluginUiCoordinatorState::cancel()
+{
+  TuiWakeup wakeup;
+  {
+    std::lock_guard lock(mutex_);
+    cancel_locked();
+    wakeup = wakeup_;
+  }
+  wakeup.notify();
+}
+
+void RuntimePluginUiCoordinatorState::finish()
+{
+  {
+    std::lock_guard lock(mutex_);
+    cancel_locked();
+    queue_.clear();
+    owner_.reset();
+    outstanding_modal_.reset();
+    visible_modal_.reset();
+    deadline_expired_ = false;
+    expiry_report_pending_ = false;
+  }
+}
+
+void RuntimePluginUiCoordinatorState::shutdown()
+{
+  {
+    std::lock_guard lock(mutex_);
+    shutdown_ = true;
+    cancel_locked();
+    queue_.clear();
+    owner_.reset();
+    wakeup_ = {};
+  }
+}
+
+void RuntimePluginUiCoordinatorState::set_after_enqueue_for_test(std::function<void()> hook)
+{
+  std::lock_guard lock(mutex_);
+  after_enqueue_for_test_ = std::move(hook);
+}
+
+void RuntimePluginUiCoordinatorState::set_after_queue_swap_for_test(std::function<void(std::size_t)> hook)
+{
+  std::lock_guard lock(mutex_);
+  after_queue_swap_for_test_ = std::move(hook);
+}
 
 bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
 {
@@ -357,35 +678,12 @@ RuntimePluginUiCoordinator::~RuntimePluginUiCoordinator()
 
 void RuntimePluginUiCoordinator::attach_loop(TuiEventLoop& loop)
 {
-  // Attach this nonmoving coordinator exactly once, before opening a submission.
+  // Attach this stable coordinator exactly once, before opening a submission.
   ASSERT(!loop_attached_);
-  if (loop_attached_)
+  if (loop_attached_ || !state_->attach_wakeup(loop.wakeup()))
     return;
-  {
-    std::lock_guard lock(state_->mutex);
-    // Install scheduling before begin_submission, and never reattach a shut-down coordinator.
-    ASSERT(!state_->active && !state_->shutdown);
-    if (state_->active || state_->shutdown)
-      return;
-    state_->wakeup = loop.wakeup();
-  }
-  deadline_timer_ = loop.member_timer(*this, &RuntimePluginUiCoordinator::expire_submission);
+  deadline_timer_ = loop.member_timer(*state_, &RuntimePluginUiCoordinatorState::expire);
   loop_attached_ = true;
-}
-
-void RuntimePluginUiCoordinator::expire_submission(std::chrono::steady_clock::time_point now)
-{
-  TuiWakeup wakeup;
-  {
-    std::lock_guard lock(state_->mutex);
-    if (!state_->active || now < state_->deadline)
-      return;
-    state_->deadline_expired = true;
-    state_->expiry_report_pending = true;
-    cancel_locked(*state_);
-    wakeup = state_->wakeup;
-  }
-  wakeup.notify();
 }
 
 std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(std::string_view submitted, std::string invocation_id,
@@ -395,50 +693,27 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
   if (!binding || invocation_id.empty())
     return std::nullopt;
   auto const deadline = now + kTuiPluginUiInvocationDeadline;
-  std::uint64_t generation = 0;
-  {
-    std::lock_guard lock(state_->mutex);
-    if (state_->shutdown)
-      return std::nullopt;
-    complete_modal(state_->outstanding_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    complete_modal(state_->visible_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    for (auto const& record : state_->queue)
-      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    state_->queue.clear();
-    state_->owner = TuiPluginUiBinding{.plugin_id = binding->first, .command = binding->second, .invocation_id = invocation_id};
-    state_->outstanding_modal.reset();
-    state_->visible_modal.reset();
-    state_->clear_pending = false;
-    state_->active = true;
-    state_->accepting = true;
-    state_->deadline_expired = false;
-    state_->expiry_report_pending = false;
-    state_->invocation_id = std::move(invocation_id);
-    state_->deadline = deadline;
-    generation = ++state_->generation;
-  }
+  auto const generation = state_->begin({.plugin_id = binding->first, .command = binding->second, .invocation_id = std::move(invocation_id)}, deadline);
+  if (!generation)
+    return std::nullopt;
   deadline_timer_.arm_at(deadline);
   std::weak_ptr<RuntimePluginUiCoordinatorState> weak_state = state_;
+  // Copied endpoints can outlive the coordinator. A call pins transport only;
+  // no endpoint captures projection, timer, or coordinator references.
   return TuiPluginUiEndpoint{.runtime_token = runtime_token_,
                              .deadline = deadline,
-                             .present = std::bind_front(present_request, weak_state, generation),
-                             .close = std::bind_front(close_binding, weak_state, generation)};
-}
-
-bool RuntimePluginUiCoordinator::clear_surface(std::optional<TuiPluginUiBinding> const& binding)
-{
-  bool changed = false;
-  if (!binding || (presentation_.screen().plugin_ui_dock && presentation_.screen().plugin_ui_dock->binding == *binding))
-  {
-    changed = changed || presentation_.screen().plugin_ui_dock.has_value();
-    presentation_.publish_plugin_dock(std::nullopt);
-  }
-  if (!binding || (presentation_.screen().plugin_ui_modal && presentation_.screen().plugin_ui_modal->binding == *binding))
-  {
-    changed = changed || presentation_.screen().plugin_ui_modal.has_value();
-    presentation_.publish_plugin_modal(std::nullopt);
-  }
-  return changed;
+                             .present =
+                                 [weak_state, generation = *generation](TuiPluginUiRequest const& request, std::chrono::steady_clock::time_point deadline,
+                                                                        TuiPluginUiCancelCallback cancel_requested) {
+                                   if (auto state = weak_state.lock())
+                                     return state->present(generation, request, deadline, std::move(cancel_requested));
+                                   return TuiPluginUiReply{.action = TuiPluginUiReplyKind::Cancel, .option_id = {}};
+                                 },
+                             .close =
+                                 [weak_state, generation = *generation](TuiPluginUiBinding const& binding) {
+                                   if (auto state = weak_state.lock())
+                                     state->close(generation, binding);
+                                 }};
 }
 
 bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
@@ -468,137 +743,11 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
 
 TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now)
 {
-  auto const& snapshot = presentation_.screen();
-  TuiPluginUiPollResult result;
-  result.changed = cancel_unfittable_surfaces();
-  std::deque<PluginUiQueueRecord> records;
-  std::function<void(std::size_t)> after_queue_swap;
-  {
-    std::lock_guard lock(state_->mutex);
-    // Standalone fixtures retain explicit-clock servicing. An attached owner
-    // receives expiry only from its registered member timer.
-    if (!loop_attached_ && state_->active && now >= state_->deadline)
-    {
-      state_->deadline_expired = true;
-      state_->expiry_report_pending = true;
-      cancel_locked(*state_);
-    }
-    if (std::exchange(state_->clear_pending, false))
-      result.changed = clear_surface() || result.changed;
-    result.deadline_expired = std::exchange(state_->expiry_report_pending, false);
-    records.swap(state_->queue);
-    after_queue_swap = std::exchange(state_->after_queue_swap_for_test, {});
-  }
-  if (after_queue_swap)
-    after_queue_swap(records.size());
-
-  if (host_modal_conflict && snapshot.plugin_ui_modal)
-  {
-    std::shared_ptr<PendingPluginUiModal> modal;
-    {
-      std::lock_guard lock(state_->mutex);
-      modal = std::move(state_->visible_modal);
-      if (state_->outstanding_modal == modal)
-        state_->outstanding_modal.reset();
-    }
-    complete_modal(modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    presentation_.publish_plugin_modal(std::nullopt);
-    result.changed = true;
-  }
-
-  for (auto& record : records)
-  {
-    auto const& request = record.request;
-    if (request.kind == TuiPluginUiKind::Status || request.kind == TuiPluginUiKind::Widget)
-    {
-      std::lock_guard lock(state_->mutex);
-      auto const current = record.generation == state_->generation && state_->active && state_->accepting && state_->owner &&
-                           *state_->owner == request.binding && modal_pending(record.modal);
-      if (!current)
-      {
-        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-        continue;
-      }
-
-      auto candidate = snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->binding == request.binding
-                           ? *snapshot.plugin_ui_dock
-                           : TuiPluginUiDockView{.binding = request.binding, .status = std::nullopt, .widgets = {}};
-      if (request.kind == TuiPluginUiKind::Status)
-        candidate.status = request.text;
-      else
-        candidate.widgets.push_back(TuiPluginUiWidgetView{.title = request.title, .lines = request.lines});
-
-      auto candidate_snapshot = snapshot;
-      candidate_snapshot.plugin_ui_dock = candidate;
-      auto const geometry = plugin_ui_surface_geometry(candidate_snapshot, request.kind);
-      auto const within_limits = candidate.widgets.size() <= kTuiPluginUiMaxWidgets && dock_line_count(candidate) <= kTuiPluginUiMaxWidgetLines &&
-                                 dock_text_bytes(candidate) <= kTuiPluginUiMaxTextBytes;
-      if (!within_limits)
-      {
-        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-        continue;
-      }
-      if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
-      {
-        cancel_locked(*state_);
-        result.changed = clear_surface(request.binding) || result.changed;
-        complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-        continue;
-      }
-
-      presentation_.publish_plugin_dock(std::move(candidate));
-      result.changed = true;
-      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Ack, .option_id = {}});
-      continue;
-    }
-
-    std::lock_guard lock(state_->mutex);
-    auto const current = record.generation == state_->generation && state_->active && state_->accepting && state_->owner && *state_->owner == request.binding &&
-                         modal_pending(record.modal);
-    if (!current || host_modal_conflict || snapshot.plugin_ui_modal)
-    {
-      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-      if (state_->outstanding_modal == record.modal)
-        state_->outstanding_modal.reset();
-      continue;
-    }
-
-    auto const selected = request.kind == TuiPluginUiKind::Confirm ? std::size_t{1} : std::size_t{0};
-    auto candidate = TuiPluginUiModalView{.binding = request.binding,
-                                          .request_id = request.request_id,
-                                          .kind = request.kind,
-                                          .title = request.title,
-                                          .description = request.description,
-                                          .options = request.options,
-                                          .selected_option = selected};
-    auto candidate_snapshot = snapshot;
-    candidate_snapshot.plugin_ui_modal = candidate;
-    auto const geometry = plugin_ui_surface_geometry(candidate_snapshot, request.kind);
-    if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
-    {
-      cancel_locked(*state_);
-      result.changed = clear_surface(request.binding) || result.changed;
-      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-      continue;
-    }
-
-    presentation_.publish_plugin_modal(std::move(candidate));
-    state_->visible_modal = record.modal;
-    result.changed = true;
-  }
-  TuiWakeup wakeup;
-  bool active;
-  {
-    std::lock_guard lock(state_->mutex);
-    active = state_->active;
-    // A rejected surface may publish Clear while consuming this batch. Keep
-    // that later record runnable after releasing the mailbox lock.
-    if (!state_->queue.empty())
-      wakeup = state_->wakeup;
-  }
-  if (!active)
+  auto const geometry_changed = cancel_unfittable_surfaces();
+  auto result = state_->poll(presentation_, host_modal_conflict, now, !loop_attached_);
+  result.changed = result.changed || geometry_changed;
+  if (!state_->active())
     deadline_timer_.cancel();
-  wakeup.notify();
   return result;
 }
 
@@ -676,76 +825,44 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
   if (!resolve)
     return TuiPluginUiInputResult::Handled;
 
-  std::shared_ptr<PendingPluginUiModal> modal;
-  {
-    std::lock_guard lock(state_->mutex);
-    modal = std::move(state_->visible_modal);
-    if (state_->outstanding_modal == modal)
-      state_->outstanding_modal.reset();
-  }
-  complete_modal(modal, std::move(reply));
+  state_->resolve_visible(std::move(reply));
   presentation_.publish_plugin_modal(std::nullopt);
   return TuiPluginUiInputResult::Redraw;
 }
 
 bool RuntimePluginUiCoordinator::deadline_reached(std::chrono::steady_clock::time_point now) const
 {
-  std::lock_guard lock(state_->mutex);
-  return state_->deadline_expired || (state_->active && now >= state_->deadline);
+  return state_->deadline_reached(now);
 }
 
 void RuntimePluginUiCoordinator::cancel_active()
 {
-  TuiWakeup wakeup;
-  {
-    std::lock_guard lock(state_->mutex);
-    cancel_locked(*state_);
-    wakeup = state_->wakeup;
-  }
-  wakeup.notify();
+  state_->cancel();
 }
 
 void RuntimePluginUiCoordinator::finish_submission()
 {
   deadline_timer_.cancel();
-  {
-    std::lock_guard lock(state_->mutex);
-    cancel_locked(*state_);
-    state_->queue.clear();
-    state_->owner.reset();
-    state_->outstanding_modal.reset();
-    state_->visible_modal.reset();
-    state_->deadline_expired = false;
-    state_->expiry_report_pending = false;
-  }
-  static_cast<void>(clear_surface());
+  state_->finish();
+  static_cast<void>(clear_plugin_surface(presentation_));
 }
 
 void RuntimePluginUiCoordinator::shutdown()
 {
   deadline_timer_.cancel();
-  {
-    std::lock_guard lock(state_->mutex);
-    state_->shutdown = true;
-    cancel_locked(*state_);
-    state_->queue.clear();
-    state_->owner.reset();
-    state_->wakeup = {};
-  }
+  state_->shutdown();
   runtime_token_.reset();
-  static_cast<void>(clear_surface());
+  static_cast<void>(clear_plugin_surface(presentation_));
 }
 
 void RuntimePluginUiCoordinator::set_after_enqueue_for_test(std::function<void()> hook)
 {
-  std::lock_guard lock(state_->mutex);
-  state_->after_enqueue_for_test = std::move(hook);
+  state_->set_after_enqueue_for_test(std::move(hook));
 }
 
 void RuntimePluginUiCoordinator::set_after_queue_swap_for_test(std::function<void(std::size_t)> hook)
 {
-  std::lock_guard lock(state_->mutex);
-  state_->after_queue_swap_for_test = std::move(hook);
+  state_->set_after_queue_swap_for_test(std::move(hook));
 }
 
 }  // namespace ava::tui
