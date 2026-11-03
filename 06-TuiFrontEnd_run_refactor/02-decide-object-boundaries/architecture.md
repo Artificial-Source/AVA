@@ -1,6 +1,6 @@
 # 06/02 — Ownership decisions
 
-Inputs read: 06/handoff.md and the source-verified 06/01/inventory.md. Baseline runtime remains the plan branch. These are agent-selected decisions under the user's instruction to continue without waiting for review; they are reviewable, not a claim that the maintainer has personally approved them. No unresolved question blocks implementation. Scheduling contracts are deliberately reserved for goal07 after goal06's fresh audit.
+Inputs read: 06/handoff.md and the source-verified 06/01/inventory.md. Baseline runtime remains the plan branch. These are agent-selected decisions under the user's instruction to continue without waiting for review; they are reviewable, not a claim that the maintainer has personally approved them. No unresolved question blocks implementation. Scheduling contracts are selected in07 after06’s fresh audit; see06/07/event-contracts.md.
 
 ## Selected owners and files
 
@@ -25,7 +25,7 @@ New domain classes have CamelCase names in matching headers/implementation files
 | RuntimeSubagentWorkspaceController | Private mode, selector return checkpoint, workspace/job/generation and poll deadline | Open/refresh/navigate/close its presentation; cleanup closes only its own host and does not cancel backend jobs. |
 | RuntimeActiveRunController (evolved into serviced ActiveRun; matching ActiveRun files if renamed) | Owned request/future, event accumulation/queue/context, cancellation/close intent, completion outcome | Start/consume/update/input/complete/cancel. Never run a terminal loop in the final state. Holds worker data through join and retires sinks on all exits. |
 | TuiEventLoop | Waiter registrations, member timers, local stop state, notification readiness | One wait/dispatch owner. Goal07 chooses detailed API; clients register callbacks rather than compute wait durations. |
-| Spinner | Frame phase and timer registration | Start/tick/stop; member callback every 250ms, skip missed ticks. Renderer owns drawing, spinner owns phase. |
+| Spinner | Frame phase and timer registration | Start/tick/stop; member callback every120ms (actual composer cadence), skip missed ticks. Renderer owns drawing, spinner owns phase. |
 
 Focused prompt coordinator/stash, plugin UI, transcript search and subagent workspace remain collaborators. Prompt UI must eventually become serviced modal operations too: inventory found permission/question terminal loops in addition to active-run. Worker condition-variable waits are permitted; a second TUI input loop is not. External editor/suspend are explicit terminal handoffs, not competing terminal ownership.
 
@@ -93,3 +93,11 @@ Goals04/01–04 establish selector/features in order. Goals05/01–03 migrate co
 ## Evidence
 
 No runtime changes in goal02. `source /workspace/ava-tools/activate.sh; scripts/build.sh` in /workspace/AVA passes with existing dev BetaTest/EnableDebug=ON/GCC16.2/Ninja build. No tests run. `git diff --check` is the pre-commit hygiene gate, not behavioral proof.
+
+## Goal07 scheduling reconciliation
+
+The actual integration contract is `06/07/event-contracts.md`, informed by the post-extraction audit. TuiEventLoop composes existing utils::threading::EventLoop with fixed terminal/application watches, private absolute-deadline member timers and local stop. Move-only timer handles are canceled before stable callback targets and the earlier-lived loop die. Weak shared waiter-resource capabilities publish wake hints without referencing session/presentation; authoritative queues/results publish first. Active submission and both prompt modals become serviced operations, including scoped sink/worker retirement.
+
+Actual Spinner cadence is120ms, not the earlier illustrative250ms; late repeating callbacks skip missed ticks. Renderer batches paint after application/input service and owns its16ms deadline, with explicit flush exceptions for synchronous terminal handoffs. Signal/resize observation uses a100ms control member timer without changing handlers/thread policy. Workspace150ms, display500ms, branch250ms and Mermaid16ms retry/discovery timers are deliberate because their current source contracts lack complete frontend notifications. Mermaid retryable/unsubmitted work counts as pending. Plugin and question auto-resolution own120s and100ms timers respectively. None of these feature clients compute a global wait duration.
+
+Application batches are bounded at256 events and terminal batches at32 events, with retained backlog defeating blocking and due timers serviced despite continuous readiness. Buffered ncurses/startup input is checked before sleep. Terminal HUP/error has an explicit close/failure policy; signals preserve130 outcome precedence. Existing decoder subreads and synchronous backend/editor/suspend work remain documented latency limits. These agent-selected decisions proceed under user authorization; no claim of personal maintainer approval is made.

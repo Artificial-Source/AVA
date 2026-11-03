@@ -261,3 +261,12 @@ A new discrepancy is explicit: architecture’s250ms Spinner example differs fro
 Goal07 owns the design decisions;08 creates loop/timer APIs;09 converts active/prompt operations and producers;10 integrates one loop and painting;11 closes all obsolete seams. The analysis-only checkpoint uses the existing BetaTest/EnableDebug=ON/libcwd/tests=ON/GCC16.2/Ninja build without manual reconfiguration. Build result follows. No tests run.
 
 - Goal06 incremental `source /workspace/ava-tools/activate.sh; scripts/build.sh` exited0 (no work required), log `/workspace/ava-tools/goal06-build.log`. Diff-check passed. No C++ files changed, so formatting was not applicable; no runtime/tests run.
+
+
+## 06/07 — Event and timer decisions
+
+Required inputs read through06. `06/07/event-contracts.md` specifies stable waiter watches, private member timers, weak resource-backed wake capabilities, payload-before-notify completion, bounded fairness, buffered input, coherent paint and explicit teardown. Architecture is reconciled, including actual120ms Spinner cadence and honest discovery timers. The06 Mermaid bridge filename citation is corrected. No runtime changes, no blocking maintainer question, no claim of personal approval. The user explicitly authorized agent decisions instead of waiting at this review goal.
+
+08 must record real APIs;09 must own active/event/prompt lifetimes and remove nested modal waits;10 integrates every timer and the only live TUI loop;11 removes all unused temporary seams. Existing signal/thread/RPC policy stays unchanged. Incremental build evidence follows; no tests run.
+
+- Goal07 incremental `source /workspace/ava-tools/activate.sh; scripts/build.sh` exited0 (no work required), log `/workspace/ava-tools/goal07-build.log`. Diff-check passed; no C++ changes or tests.
