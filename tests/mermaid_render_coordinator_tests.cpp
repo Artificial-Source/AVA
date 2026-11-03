@@ -9,6 +9,7 @@
 #include "ava/app/tui/tui_display_settings.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -618,7 +619,11 @@ void test_tui_bridge_epoch_reload_and_callback_lifetime()
   auto const deadline = ava::tests::now_plus_seconds(10);
   while (!completion && std::chrono::steady_clock::now() < deadline)
   {
-    for (auto& candidate : callbacks.drain())
+    // Busy is not an empty queue: retain the wait until a successful drain.
+    auto drained = callbacks.drain();
+    if (!drained)
+      continue;
+    for (auto& candidate : *drained)
     {
       if (candidate.identity == 2)
         completion = std::move(candidate);
@@ -671,11 +676,51 @@ void test_configuration_and_immediate_request_bounds()
          "invalid reconfiguration retains the last good epoch, while disabled and over-64-KiB source requests produce typed payload-free fallbacks");
 }
 
+// Immediate fallback publications notify synchronously, late registration observes queued work, and unregister stops notifications.
+void test_completion_notification_publication_registration_and_unregister()
+{
+  std::atomic<unsigned> notifications{0};
+  auto coordinator = ava::app::MermaidRenderCoordinator::create({.epoch = 9, .enabled = false, .argv = {}});
+  if (!ava::tests::require(coordinator.has_value(), "notification coordinator starts without a helper"))
+    return;
+  // The callback runs under the coordinator mutex and may only perform bounded, noexcept publication.
+  auto notify = [&notifications]() noexcept { notifications.fetch_add(1, std::memory_order_relaxed); };
+  (*coordinator)->set_completion_notifier(notify);
+  expect(notifications.load() == 0, "registration on an empty completion queue does not notify");
+  auto disabled = (*coordinator)->enqueue({.identity = 1, .config_epoch = 9, .source = "source"});
+  expect(disabled == ava::app::MermaidEnqueueResult::CompletedFallback && notifications.load() == 1, "disabled completion notifies before enqueue returns");
+  auto completions = (*coordinator)->take_completions();
+  expect(completions.size() == 1 && completions.front().identity == 1 && completions.front().outcome == ava::app::MermaidRenderOutcome::Disabled,
+         "notification corresponds to an already published disabled completion");
+
+  (*coordinator)->set_completion_notifier({});
+  auto oversized = (*coordinator)->enqueue({.identity = 2, .config_epoch = 9, .source = std::string(ava::app::kMaxMermaidSourceBytes + 1, 'x')});
+  expect(oversized == ava::app::MermaidEnqueueResult::CompletedFallback && notifications.load() == 1,
+         "unregistered publication queues the source-size fallback without notifying");
+  (*coordinator)->set_completion_notifier(notify);
+  expect(notifications.load() == 2, "registration synchronously notifies for an existing completion");
+  completions = (*coordinator)->take_completions();
+  expect(completions.size() == 1 && completions.front().identity == 2 && completions.front().outcome == ava::app::MermaidRenderOutcome::SourceTooLarge,
+         "late registration preserves the queued source-size fallback");
+  (*coordinator)->set_completion_notifier({});
+  (*coordinator)->set_completion_notifier(notify);
+  expect(notifications.load() == 2, "re-registration after draining does not invent a completion");
+  auto const immediate_oversized =
+      (*coordinator)->enqueue({.identity = 3, .config_epoch = 9, .source = std::string(ava::app::kMaxMermaidSourceBytes + 1, 'x')});
+  expect(immediate_oversized == ava::app::MermaidEnqueueResult::CompletedFallback && notifications.load() == 3,
+         "source-size fallback notifies synchronously before enqueue returns");
+  completions = (*coordinator)->take_completions();
+  expect(completions.size() == 1 && completions.front().identity == 3 && completions.front().outcome == ava::app::MermaidRenderOutcome::SourceTooLarge,
+         "source-size notification corresponds to its already published fallback");
+  (*coordinator)->set_completion_notifier({});
+}
+
 }  // namespace
 
 void run_mermaid_render_coordinator_tests()
 {
   ava::tests::HermeticTestEnvironment environment("mermaid-tests-");
+  test_completion_notification_publication_registration_and_unregister();
   test_display_settings_mermaid_schema_and_preservation();
   test_no_shell_environment_and_descriptor_launch();
   test_typed_process_and_output_failures();

@@ -29,6 +29,7 @@
 #include <poll.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include "debug.h"
 #ifdef __linux__
 #include <sys/syscall.h>
 #endif
@@ -685,10 +686,35 @@ struct MermaidRenderCoordinator::Impl
     return std::ranges::any_of(queue, [&](auto const& work) { return std::ranges::find(work.identities, identity) != work.identities.end(); });
   }
 
+  // Producer or caller thread, with mutex held. The notifier only signals safe
+  // shared state; it must not read this queue or call frontend code.
+  void notify_completion_locked() noexcept
+  {
+    if (!completion_notifier)
+      return;
+    try
+    {
+      completion_notifier();
+    }
+    catch (...)
+    {
+      try
+      {
+        Dout(dc::warning, "Mermaid completion notification failed");
+      }
+      catch (...)
+      { /* Notification diagnostics must not terminate the worker. */
+      }
+    }
+  }
+
+  // Publish before notification so a woken consumer cannot miss the result.
+  // Called with mutex held for worker, cache, fallback and cancellation results.
   void add_completion_locked(std::uint64_t identity, MermaidRenderOutcome outcome, std::string text = {}, bool from_cache = false)
   {
     completions.push_back(MermaidRenderCompletion{
         .identity = identity, .config_epoch = configuration.epoch, .outcome = outcome, .text = std::move(text), .from_cache = from_cache});
+    notify_completion_locked();
   }
 
   auto find_cache_locked(std::string const& source) { return std::ranges::find(cache, source, &CacheEntry::source); }
@@ -768,6 +794,9 @@ struct MermaidRenderCoordinator::Impl
   std::deque<Work> queue;
   std::optional<Work> active;
   std::vector<MermaidRenderCompletion> completions;
+  // Replaced by registration and invoked after publication, both under mutex.
+  // Captures must remain safe independently of the frontend owner lifetime.
+  std::function<void()> completion_notifier;
   std::deque<CacheEntry> cache;
   std::size_t accepted_cache_bytes = 0;
   bool shutting_down = false;
@@ -907,6 +936,14 @@ std::vector<MermaidRenderCompletion> MermaidRenderCoordinator::take_completions(
   std::vector<MermaidRenderCompletion> result;
   result.swap(impl_->completions);
   return result;
+}
+
+void MermaidRenderCoordinator::set_completion_notifier(std::function<void()> notifier)
+{
+  std::lock_guard lock(impl_->mutex);
+  impl_->completion_notifier = std::move(notifier);
+  if (!impl_->completions.empty())
+    impl_->notify_completion_locked();
 }
 
 MermaidRenderCoordinatorStats MermaidRenderCoordinator::stats() const

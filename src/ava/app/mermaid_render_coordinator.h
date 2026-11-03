@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -115,6 +116,11 @@ class MermaidRenderCoordinator final
   [[nodiscard]] MermaidEnqueueResult enqueue(MermaidRenderRequest request);
   [[nodiscard]] bool cancel(std::uint64_t identity, std::uint64_t config_epoch);
   [[nodiscard]] std::vector<MermaidRenderCompletion> take_completions();
+  // Any thread, before admission or during teardown. Replacement is serialized
+  // with publication; an existing completion triggers the new notifier too.
+  // Called under the queue mutex: only bounded, nonthrowing notification work is
+  // allowed, with no reentry into this coordinator. Empty unregisters it.
+  void set_completion_notifier(std::function<void()> notifier);
   [[nodiscard]] MermaidRenderCoordinatorStats stats() const;
 
   [[nodiscard]] bool wait_for_in_flight(std::chrono::milliseconds timeout) const;

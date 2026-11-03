@@ -72,6 +72,7 @@ ava::tui::TuiMermaidRenderBridge MermaidTuiBridge::tui_bridge()
       .enqueue = [self](ava::tui::TuiMermaidRenderRequest request) { return self->enqueue(std::move(request)); },
       .cancel = [self](std::uint64_t identity, std::uint64_t config_epoch) { return self->cancel(identity, config_epoch); },
       .drain = [self] { return self->drain(); },
+      .set_completion_notifier = [self](std::function<void()> notifier) { self->set_completion_notifier(std::move(notifier)); },
   };
 }
 
@@ -79,7 +80,7 @@ ava::tui::TuiMermaidEnqueueResult MermaidTuiBridge::enqueue(ava::tui::TuiMermaid
 {
   std::unique_lock lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock())
-    return ava::tui::TuiMermaidEnqueueResult::QueueFull;
+    return ava::tui::TuiMermaidEnqueueResult::Busy;
   if (shutdown_ || !coordinator_ || request.config_epoch != epoch_ || !settings_.enabled)
     return ava::tui::TuiMermaidEnqueueResult::Rejected;
   auto result = MermaidEnqueueResult::StaleEpoch;
@@ -122,11 +123,13 @@ bool MermaidTuiBridge::cancel(std::uint64_t identity, std::uint64_t config_epoch
   }
 }
 
-std::vector<ava::tui::TuiMermaidRenderCompletion> MermaidTuiBridge::drain() noexcept
+std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> MermaidTuiBridge::drain() noexcept
 {
   std::unique_lock lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock() || shutdown_ || !coordinator_)
-    return {};
+  if (!lock.owns_lock())
+    return std::nullopt;
+  if (shutdown_ || !coordinator_)
+    return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
   std::vector<MermaidRenderCompletion> completions;
   try
   {
@@ -134,7 +137,7 @@ std::vector<ava::tui::TuiMermaidRenderCompletion> MermaidTuiBridge::drain() noex
   }
   catch (...)
   {
-    return {};
+    return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
   }
   std::vector<ava::tui::TuiMermaidRenderCompletion> projected;
   projected.reserve(completions.size());
@@ -147,6 +150,13 @@ std::vector<ava::tui::TuiMermaidRenderCompletion> MermaidTuiBridge::drain() noex
                                                              .text = accepted ? std::move(completion.text) : std::string{}});
   }
   return projected;
+}
+
+void MermaidTuiBridge::set_completion_notifier(std::function<void()> notifier)
+{
+  std::lock_guard lock(mutex_);
+  if (coordinator_)
+    coordinator_->set_completion_notifier(std::move(notifier));
 }
 
 void MermaidTuiBridge::shutdown() noexcept

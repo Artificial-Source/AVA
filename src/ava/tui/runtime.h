@@ -57,6 +57,8 @@ struct TuiMermaidRenderRequest
 
 enum class TuiMermaidEnqueueResult : std::uint8_t
 {
+  // The bridge lock was contended; retry with a bounded backoff.
+  Busy,
   Accepted,
   QueueFull,
   Rejected,
@@ -81,7 +83,12 @@ struct TuiMermaidRenderBridge
   bool enabled = false;
   std::function<TuiMermaidEnqueueResult(TuiMermaidRenderRequest)> enqueue;
   std::function<bool(std::uint64_t identity, std::uint64_t config_epoch)> cancel;
-  std::function<std::vector<TuiMermaidRenderCompletion>()> drain;
+  // TUI thread: nullopt means lock contention; an empty vector means no results.
+  std::function<std::optional<std::vector<TuiMermaidRenderCompletion>>()> drain;
+  // Register before submitting work; an empty callback unregisters. The callback
+  // runs after publication under the producer lock and must only signal bounded
+  // thread-safe state. It must not reenter the bridge or borrow a TUI owner.
+  std::function<void(std::function<void()>)> set_completion_notifier{};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

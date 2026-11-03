@@ -42,7 +42,11 @@ class MermaidTuiBridge final : public std::enable_shared_from_this<MermaidTuiBri
 
   [[nodiscard]] ava::tui::TuiMermaidEnqueueResult enqueue(ava::tui::TuiMermaidRenderRequest request) noexcept;
   [[nodiscard]] bool cancel(std::uint64_t identity, std::uint64_t config_epoch) noexcept;
-  [[nodiscard]] std::vector<ava::tui::TuiMermaidRenderCompletion> drain() noexcept;
+  // TUI thread: nullopt preserves lock contention as Busy for bounded retries.
+  [[nodiscard]] std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> drain() noexcept;
+  // TUI setup/teardown only. The notifier may run on the rendering worker and
+  // must not borrow UI owners; registration is serialized with shutdown.
+  void set_completion_notifier(std::function<void()> notifier);
 
   mutable std::mutex mutex_;
   std::unique_ptr<MermaidRenderCoordinator> coordinator_;

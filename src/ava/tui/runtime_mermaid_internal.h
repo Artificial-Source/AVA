@@ -5,8 +5,10 @@
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -43,7 +45,6 @@ class RuntimeMermaidPresentationController final
   void attach_loop(TuiEventLoop& loop);
   [[nodiscard]] MermaidServiceOutcome service();
   [[nodiscard]] MermaidServiceOutcome service_if_changed();
-  [[nodiscard]] MermaidServiceOutcome take_service_outcome() noexcept;
   void shutdown() noexcept;
 
   // Reconciliation records hold arbitrary diagram source/output, and borrowed
@@ -76,9 +77,11 @@ class RuntimeMermaidPresentationController final
   void drain_completions() noexcept;
   void enforce_result_byte_bound() noexcept;
   [[nodiscard]] std::vector<detail::MermaidAcceptedPresentation> accepted_presentations() const;
-  [[nodiscard]] bool has_pending_work() const noexcept;
-  void synchronize_discovery_timer();
-  void discover_progress(TuiTimer::Clock::time_point now);
+  // TUI thread, after a bridge attempt. Only Busy arms a one-shot retry;
+  // completion notifications wake accepted/queued work without polling.
+  void synchronize_retry_timer();
+  // Timer callback publishes readiness only; bridge calls wait for application servicing.
+  void mark_retry_due(TuiTimer::Clock::time_point now);
 
   ComposerSnapshot& snapshot_;
   RuntimeRenderer& renderer_;
@@ -95,8 +98,15 @@ class RuntimeMermaidPresentationController final
   bool observed_snapshot_ = false;
   std::uint64_t next_identity_ = 1;
   bool shutdown_ = false;
-  MermaidServiceOutcome service_outcome_ = MermaidServiceOutcome::Unchanged;
-  TuiTimer discovery_timer_;
+  // A copied notifier may outlive this controller. Its shared atomic and weak
+  // wake capability remain safe; the callback never captures this or a UI view.
+  std::shared_ptr<std::atomic_bool> completion_ready_ = std::make_shared<std::atomic_bool>(false);
+  // TUI-owned Busy state. Unrelated input/paint turns must not shorten retry_at_.
+  bool bridge_busy_ = false;
+  bool retry_due_ = false;  // Set by the timer, consumed by service_if_changed.
+  std::chrono::milliseconds retry_delay_{100};  // First contention100ms, subsequent250ms.
+  std::optional<TuiTimer::Clock::time_point> retry_at_;  // Present until a retry is eligible.
+  TuiTimer retry_timer_;  // Canceled before bridge callbacks are unregistered at shutdown.
 };
 
 }  // namespace ava::tui

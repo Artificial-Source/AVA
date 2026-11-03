@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "TuiEventLoop.h"
+#include "TuiWakeup.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
@@ -80,45 +81,47 @@ RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
 
 void RuntimeMermaidPresentationController::attach_loop(TuiEventLoop& loop)
 {
-  discovery_timer_ = loop.member_timer(*this, &RuntimeMermaidPresentationController::discover_progress);
-  synchronize_discovery_timer();
+  retry_timer_ = loop.member_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
+  if (bridge_.set_completion_notifier)
+  {
+    bridge_.set_completion_notifier([ready = completion_ready_, wakeup = loop.wakeup()]() noexcept {
+      // Publish readiness before waking. Only shared/weak values cross threads;
+      // a copied callback cannot reach a retired controller or terminal object.
+      ready->store(true, std::memory_order_release);
+      wakeup.notify();
+    });
+  }
+  synchronize_retry_timer();
 }
 
-bool RuntimeMermaidPresentationController::has_pending_work() const noexcept
+void RuntimeMermaidPresentationController::synchronize_retry_timer()
 {
-  if (shutdown_)
-    return false;
-  if (bridge_.drain && !outstanding_requests_.empty())
-    return true;
-  if (!enabled_ || config_epoch_ == 0 || !bridge_.enqueue)
-    return false;
-  return std::ranges::any_of(records_, [](Record const& record) { return !record.submitted && !record.failed && !record.accepted_text; });
+  if (shutdown_ || !bridge_busy_)
+  {
+    retry_timer_.cancel();
+    retry_at_.reset();
+    retry_delay_ = std::chrono::milliseconds(100);
+  }
+  else if (!retry_at_)
+  {
+    retry_at_ = TuiTimer::Clock::now() + retry_delay_;
+    retry_timer_.arm_at(*retry_at_);
+    retry_delay_ = std::chrono::milliseconds(250);
+  }
 }
 
-void RuntimeMermaidPresentationController::synchronize_discovery_timer()
+void RuntimeMermaidPresentationController::mark_retry_due(TuiTimer::Clock::time_point)
 {
-  if (!has_pending_work())
-    discovery_timer_.cancel();
-  else if (!discovery_timer_.active())
-    discovery_timer_.repeat(std::chrono::milliseconds{16});
-}
-
-void RuntimeMermaidPresentationController::discover_progress(TuiTimer::Clock::time_point)
-{
-  auto const outcome = service();
-  if (service_outcome_ != MermaidServiceOutcome::RenderFailed && outcome != MermaidServiceOutcome::Unchanged)
-    service_outcome_ = outcome;
-}
-
-MermaidServiceOutcome RuntimeMermaidPresentationController::take_service_outcome() noexcept
-{
-  return std::exchange(service_outcome_, MermaidServiceOutcome::Unchanged);
+  retry_at_.reset();
+  retry_due_ = true;
 }
 
 MermaidServiceOutcome RuntimeMermaidPresentationController::service_if_changed()
 {
-  if (shutdown_ || (observed_snapshot_ && observed_transcript_generation_ == snapshot_.transcript_generation && session_id_ == snapshot_.session_id &&
-                    config_epoch_ == snapshot_.mermaid_config_epoch && enabled_ == snapshot_.mermaid_enabled))
+  auto const completion_ready = completion_ready_->exchange(false, std::memory_order_acq_rel);
+  auto const retry_due = std::exchange(retry_due_, false);
+  if (shutdown_ || (!completion_ready && !retry_due && observed_snapshot_ && observed_transcript_generation_ == snapshot_.transcript_generation &&
+                    session_id_ == snapshot_.session_id && config_epoch_ == snapshot_.mermaid_config_epoch && enabled_ == snapshot_.mermaid_enabled))
     return MermaidServiceOutcome::Unchanged;
   return service();
 }
@@ -244,6 +247,16 @@ void RuntimeMermaidPresentationController::enqueue_waiting() noexcept
         outstanding_requests_.emplace_back(config_epoch_, record.request_identity);
         ++pending;
       }
+      else if (result == TuiMermaidEnqueueResult::Busy)
+      {
+        bridge_busy_ = true;
+        return;
+      }
+      else if (result == TuiMermaidEnqueueResult::QueueFull)
+      {
+        // A completion releases capacity and supplies the next notification.
+        return;
+      }
       else if (result == TuiMermaidEnqueueResult::Rejected)
       {
         record.submitted = true;
@@ -265,7 +278,13 @@ void RuntimeMermaidPresentationController::drain_completions() noexcept
   std::vector<TuiMermaidRenderCompletion> completions;
   try
   {
-    completions = bridge_.drain();
+    auto drained = bridge_.drain();
+    if (!drained)
+    {
+      bridge_busy_ = true;
+      return;
+    }
+    completions = std::move(*drained);
   }
   catch (...)
   {
@@ -334,7 +353,7 @@ MermaidServiceOutcome RuntimeMermaidPresentationController::service()
   if (preserve_viewport && !renderer_.transcript().has_deferred_update())
     old_anchor = renderer_.capture_transcript_viewport();
   auto const changed_item = service_projection();
-  synchronize_discovery_timer();
+  synchronize_retry_timer();
   if (!changed_item)
     return MermaidServiceOutcome::Unchanged;
   transcript_search_.refresh_after_transcript_mutation(0, *changed_item);
@@ -377,15 +396,22 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     reconcile(snapshot);
   }
 
-  // Retire completions before enqueueing, including canceled records from a
-  // prior session. Disabled presentation still drains its outstanding work.
-  drain_completions();
-  if (enabled_ && config_epoch_ != 0)
+  // Keep Busy backoff even when unrelated input changes the transcript. On an
+  // eligible attempt, drain canceled/old-session results before admitting more
+  // work. Disabled presentation must also release those coordinator slots.
+  if (!retry_at_ || TuiTimer::Clock::now() >= *retry_at_)
   {
-    enqueue_waiting();
-    // Enqueue can produce an immediate cache/fallback completion.
+    retry_at_.reset();
+    bridge_busy_ = false;
     drain_completions();
-    enforce_result_byte_bound();
+    if (!bridge_busy_ && enabled_ && config_epoch_ != 0)
+    {
+      enqueue_waiting();
+      // Enqueue may publish cache/fallback results synchronously.
+      if (!bridge_busy_)
+        drain_completions();
+      enforce_result_byte_bound();
+    }
   }
 
   auto const after = accepted_identities(records_);
@@ -409,7 +435,26 @@ void RuntimeMermaidPresentationController::shutdown() noexcept
   if (shutdown_)
     return;
   shutdown_ = true;
-  discovery_timer_.cancel();
+  retry_timer_.cancel();
+  retry_at_.reset();
+  if (bridge_.set_completion_notifier)
+  {
+    try
+    {
+      bridge_.set_completion_notifier({});
+    }
+    catch (...)
+    {
+      // A retained callback still owns only its atomic and a weak wake capability.
+      try
+      {
+        Dout(dc::warning, "Mermaid notification retirement failed");
+      }
+      catch (...)
+      { /* Diagnostics must not escape noexcept teardown. */
+      }
+    }
+  }
   cancel_all();
   outstanding_requests_.clear();
   bridge_ = {};

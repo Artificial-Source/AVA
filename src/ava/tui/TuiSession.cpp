@@ -1191,8 +1191,7 @@ void TuiSession::service_presentations()
     loop_.request_stop();
     return;
   }
-  if (subagent_workspace_.take_render_failure() || mermaid_presentation_.take_service_outcome() == MermaidServiceOutcome::RenderFailed ||
-      mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)
+  if (subagent_workspace_.take_render_failure() || mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)
   {
     apply_input_outcome(TuiInputOutcome::Failure);
     return;
