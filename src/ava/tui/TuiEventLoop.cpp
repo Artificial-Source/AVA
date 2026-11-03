@@ -17,7 +17,6 @@ TuiEventLoop::TuiEventLoop(int input_fd) : wait_state_(std::make_shared<TuiWaitS
 
 TuiEventLoop::~TuiEventLoop()
 {
-  wait_state_->disable();
   // Destroy every TuiTimer handle before its loop, including disarmed handles; declare the loop before its clients.
   ASSERT(timers_.empty());
 }

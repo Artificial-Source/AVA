@@ -10,8 +10,6 @@ TuiWaitState::TuiWaitState(int input_fd)
 
 void TuiWaitState::notify() noexcept
 {
-  if (!enabled_.load(std::memory_order_acquire))
-    return;
   try
   {
     waiter_.notify(application_event_);
@@ -20,11 +18,6 @@ void TuiWaitState::notify() noexcept
   {
     notification_failed_.store(true, std::memory_order_release);
   }
-}
-
-void TuiWaitState::disable() noexcept
-{
-  enabled_.store(false, std::memory_order_release);
 }
 
 bool TuiWaitState::notification_failed() const noexcept

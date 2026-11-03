@@ -66,8 +66,9 @@ class TuiEventLoop final
   void arm_timer_after(std::uint64_t id, Clock::duration delay, Clock::time_point now);
   void repeat_timer(std::uint64_t id, Clock::duration interval, Clock::time_point now);
 
-  // Shared ownership exists solely so an in-flight weak wake can retain actual
-  // waiter resources while the TUI owner retires its notification capability.
+  // Shared ownership pins OS resources during producer notification. Releasing
+  // this share does not stop an in-flight notify; the last producer pin may own
+  // destruction. Once all shares expire, later weak wakeups do nothing.
   std::shared_ptr<TuiWaitState> wait_state_;
   std::map<std::uint64_t, TuiTimerRegistration> timers_;
   std::uint64_t next_timer_id_ = 1;
