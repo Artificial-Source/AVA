@@ -703,6 +703,54 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
   return passed;
 }
 
+// Attached prompt rendering deferred paint failure and previously let shutdown replace Io with cancellation.
+bool test_attached_prompt_render_failure_returns_io()
+{
+  EventLoopFixture event_loop;
+  static_cast<void>(ava::core::Application::instance().terminal_context());
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::ComposerSnapshot snapshot;
+  ava::tui::SidebarSnapshot sidebar;
+  ava::tui::Composer composer;
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, composer);
+  renderer.attach_loop(event_loop.loop());
+  ava::tui::TuiSessionGrantRegistry grants;
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, grants, renderer, event_loop.loop());
+  bool passed = true;
+  for (bool permission : {false, true})
+  {
+    coordinator.open_admission();
+    auto worker = ava::core::make_async("paint_failure_prompt", [&] {
+      if (permission)
+      {
+        ava::permissions::PermissionPrompt prompt;
+        prompt.operation = ava::permissions::Operation::RunCommand;
+        prompt.mode = ava::core::Mode::Build;
+        prompt.command = "echo permission";
+        prompt.tool_name = "bash";
+        auto result = coordinator.permission_resolver()(prompt);
+        return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render permission prompt";
+      }
+      ava::agent::QuestionPrompt prompt{.header = "Question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
+      auto result = coordinator.question_resolver()(prompt);
+      return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render question prompt";
+    });
+    auto const deadline = ava::tests::now_plus_seconds(2);
+    while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    auto const started = coordinator.start_pending();
+    bool const projected = permission ? snapshot.permission_prompt.has_value() : snapshot.question_prompt.has_value();
+    // Exercise the end-of-batch failure notification directly: this does not inject an actual terminal write failure.
+    static_cast<void>(coordinator.fail_active_render());
+    bool const cleared = !coordinator.has_active() && !snapshot.permission_prompt && !snapshot.question_prompt;
+    coordinator.shutdown();
+    bool const io = worker.get();
+    passed = started == ava::tui::PromptServiceOutcome::Active && projected && cleared && io && passed;
+  }
+  return passed;
+}
+
 bool test_atomic_search_input_prompt_precedence()
 {
   EventLoopFixture event_loop;
@@ -1853,6 +1901,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "atomic_search")
   {
+    expect(test_attached_prompt_render_failure_returns_io(), "deferred prompt paint failure reaches its worker as Io before shutdown");
     expect(
         test_atomic_search_input_prompt_precedence(),
         "actual prompt-coordinator locking linearizes retained search input before provider enqueue, then lets the queued prompt discard stale input and run "

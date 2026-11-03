@@ -89,6 +89,10 @@ class RuntimePromptCoordinator final
   [[nodiscard]] PromptServiceOutcome service();
   [[nodiscard]] PromptServiceOutcome handle_input(runtime_input::RuntimeInput const& input);
   [[nodiscard]] PromptServiceOutcome cancel_active(PromptCancelReason reason);
+  // TUI thread only, after a failed batch paint and before shutdown. Retire any
+  // borrowed prompt callbacks before waking its worker with the original Io error.
+  // A failure must not run automatic question resolution and turn into success.
+  void fail_active_render();
   [[nodiscard]] bool has_active() const noexcept;
   [[nodiscard]] bool has_pending_requests() const;
   [[nodiscard]] SearchInputPromptDispatchResult dispatch_search_input_with_prompt_precedence(std::function<bool()> const& dispatch_search_input,

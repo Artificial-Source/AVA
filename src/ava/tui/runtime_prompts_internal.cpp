@@ -767,6 +767,14 @@ PromptServiceOutcome RuntimePromptCoordinator::cancel_active(PromptCancelReason 
   }
 }
 
+void RuntimePromptCoordinator::fail_active_render()
+{
+  if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_))
+    static_cast<void>(complete_permission(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"))));
+  else if (std::holds_alternative<std::shared_ptr<PendingQuestionRequest>>(active_request_))
+    static_cast<void>(complete_question(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"))));
+}
+
 void RuntimePromptCoordinator::interrupt_claimed_request(ClaimedPromptRequest const& request)
 {
   if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))

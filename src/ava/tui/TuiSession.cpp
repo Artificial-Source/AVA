@@ -1266,6 +1266,9 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       break;
     if (!terminal_closing_ && !renderer_.paint_ready_frame())
     {
+      // The renderer only queued prompt paints earlier in this turn. Report the
+      // actual write failure before shutdown can answer the claim as interrupted.
+      prompt_coordinator_.fail_active_render();
       apply_input_outcome(TuiInputOutcome::Failure);
       break;
     }
