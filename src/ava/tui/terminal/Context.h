@@ -329,8 +329,10 @@ class Context final
   // Re-enter ncurses program mode, repaint its retained virtual screen, and explicitly restore every AVA-owned protocol.
   void restore_terminal_after_handoff();
 
-  // Read one ncurses Key from the terminal input. Called from read_curses_input_from_terminal.
-  Key read_curses_key(wint_t& value);
+  // TUI thread only. Read one native key with the current timeout. A missing
+  // value means no input was read; Key::Unknown means a native key was consumed.
+  // Callers must keep draining after Unknown before waiting on the descriptor.
+  std::optional<Key> read_curses_key(wint_t& value);
 
   // Read the next character iff that is a plain wide character (not a KEY_CODE).
   std::optional<wchar_t> read_plain_wide_character();

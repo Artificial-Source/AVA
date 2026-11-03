@@ -588,11 +588,11 @@ int Context::read_wch(wint_t* wch_out)
   return ::get_wch(wch_out);
 }
 
-Key Context::read_curses_key(wint_t& value)
+std::optional<Key> Context::read_curses_key(wint_t& value)
 {
   int const result = read_wch(&value);
   if (result == ERR)
-    return Key::Unknown;
+    return std::nullopt;
   if (result == KEY_CODE_YES)
   {
     struct Entry

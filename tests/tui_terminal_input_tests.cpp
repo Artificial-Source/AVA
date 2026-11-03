@@ -1849,7 +1849,7 @@ void test_startup_input_fifo_order_and_cap()
              ava::tui::runtime_input::enqueue_startup_input(std::move(paste)) && ava::tui::runtime_input::startup_input_queue_size() == 4,
          "startup input queue preserves insertion order for key, resize, and complete paste events");
 
-  auto first = ava::tui::runtime_input::poll_curses_input();
+  auto first = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   auto second = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   expect(first && first->event.key == ava::tui::terminal::Key::Character && first->text == "a" && second && second->resize &&
              ava::tui::runtime_input::startup_input_queue_size() == 2,
@@ -1870,6 +1870,24 @@ void test_startup_input_fifo_order_and_cap()
          "startup input queue rejects events beyond the 64-event cap");
   ava::tui::runtime_input::clear_startup_input_queue();
   expect(ava::tui::runtime_input::startup_input_queue_size() == 0, "clear empties the startup input queue between sessions");
+}
+
+// Discarded control replies must not hide the following ncurses-buffered key.
+void test_poll_distinguishes_discarded_input()
+{
+  using namespace ava::tui::runtime_input;
+  tui_test_support::TuiFrontEndFixture frontend;
+  clear_startup_input_queue();
+  static_cast<void>(ava::tui::terminal::Context::flushinp());
+  push_bytes_to_curses("\x1b]11;rgb:ffff/ffff/ffff\a\x1b[?5uz");
+  ava::tui::arm_terminal_background_response_handler();
+  expect(poll_curses_input().kind == InputPollKind::Discarded, "OSC 11 consumes input without ending the batch");
+  expect(poll_curses_input().kind == InputPollKind::Discarded, "Kitty reply consumes input without ending the batch");
+  auto const key = poll_curses_input();
+  expect(key.kind == InputPollKind::Input && key.input.text == "z", "buffered key survives preceding discarded replies");
+  expect(poll_curses_input().kind == InputPollKind::Empty, "only native exhaustion ends the input batch");
+  ava::tui::disarm_terminal_background_response_handler();
+  ava::tui::reset_detected_terminal_background_appearance();
 }
 
 void test_osc11_handler_arming_and_virtual_probe()
@@ -1924,7 +1942,7 @@ void test_osc11_handler_arming_and_virtual_probe()
              active.badge == "OSC 11" && active.detail.find("OSC 11") != std::string::npos && active.detail.find("ffff") == std::string::npos,
          "virtual probe applies OSC 11 light theme without exposing raw reply bytes");
 
-  auto const queued = ava::tui::runtime_input::poll_curses_input();
+  auto const queued = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   expect(queued && queued->event.key == ava::tui::terminal::Key::Character && queued->text == "z" && ava::tui::runtime_input::startup_input_queue_size() == 0,
          "virtual probe preserves a key typed during OSC 11 drain and discards Kitty protocol replies");
 
@@ -2060,7 +2078,7 @@ void test_osc11_reply_inside_startup_bracketed_paste(bool use_st)
   expect(ava::tui::detected_terminal_background_appearance() == ava::tui::TerminalBackgroundAppearance::Light,
          use_st ? "ST OSC 11 reply inside startup paste sets light appearance" : "BEL OSC 11 reply inside startup paste sets light appearance");
 
-  auto const queued = ava::tui::runtime_input::poll_curses_input();
+  auto const queued = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   expect(queued && queued->bracketed_paste && queued->text == "helloworld" && ava::tui::runtime_input::startup_input_queue_size() == 0,
          use_st ? "ST OSC 11 reply is stripped from one complete startup paste with contiguous user text"
                 : "BEL OSC 11 reply is stripped from one complete startup paste with contiguous user text");
@@ -2104,7 +2122,7 @@ void test_non_owned_escape_inside_startup_bracketed_paste_is_preserved()
 
   expect(!ava::tui::detected_terminal_background_appearance(), "non-OSC-11 escape inside startup paste does not mutate appearance");
 
-  auto const queued = ava::tui::runtime_input::poll_curses_input();
+  auto const queued = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   // ESC/BEL are stripped by paste normalization; printable OSC body remains so the
   // sequence is not silently discarded under protocol ownership.
   expect(queued && queued->bracketed_paste && queued->text == "ab]12;rgb:ff/ff/ffcd" && ava::tui::runtime_input::startup_input_queue_size() == 0,
@@ -2146,7 +2164,7 @@ void test_disarmed_and_malformed_osc11_inside_startup_bracketed_paste_preserve_s
     ava::tui::runtime_input::drain_startup_probe_input(std::chrono::milliseconds(50));
 
     expect(!ava::tui::detected_terminal_background_appearance(), "disarmed OSC 11 reply inside startup paste does not mutate appearance");
-    auto const queued = ava::tui::runtime_input::poll_curses_input();
+    auto const queued = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
     expect(queued && queued->bracketed_paste && queued->text == "pre]11;rgb:ffff/ffff/ffffpost" && ava::tui::runtime_input::startup_input_queue_size() == 0,
            "disarmed valid OSC 11 inside paste is preserved under ordinary normalization");
 
@@ -2178,7 +2196,7 @@ void test_disarmed_and_malformed_osc11_inside_startup_bracketed_paste_preserve_s
     ava::tui::disarm_terminal_background_response_handler();
 
     expect(!ava::tui::detected_terminal_background_appearance(), "malformed OSC 11 inside startup paste does not mutate appearance");
-    auto const queued = ava::tui::runtime_input::poll_curses_input();
+    auto const queued = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
     expect(queued && queued->bracketed_paste && queued->text == "x]11;rgb:ff/ffy" && ava::tui::runtime_input::startup_input_queue_size() == 0,
            "malformed OSC 11 inside paste is preserved under ordinary normalization");
 
@@ -2237,7 +2255,7 @@ std::optional<ava::tui::runtime_input::RuntimeInput> read_direct_mouse_event(std
 // Drain unexpected input after a mouse report; failures include the triggering label.
 void expect_no_residual_mouse_payload(std::string_view label)
 {
-  auto residual = ava::tui::runtime_input::poll_curses_input();
+  auto residual = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   while (residual)
   {
     expect(!looks_like_leaked_sgr_mouse_payload(*residual), std::string("direct-terminal mouse path must not leak SGR payload characters after ") +
@@ -2245,7 +2263,7 @@ void expect_no_residual_mouse_payload(std::string_view label)
                                                                 (residual->text.empty() ? residual->event.text : residual->text) + "')");
     // Unknown/empty after KEY_MOUSE getmouse failure is also a leak symptom; allow only true absence.
     expect(false, std::string("direct-terminal mouse path left unexpected residual input after ") + std::string(label));
-    residual = ava::tui::runtime_input::poll_curses_input();
+    residual = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
   }
 }
 
@@ -2266,7 +2284,7 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
     int resize_count = 0;
     for (int i = 0; i < 64; ++i)
     {
-      auto input_event = ava::tui::runtime_input::poll_curses_input();
+      auto input_event = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
       if (!input_event)
         break;
       if (input_event->resize)
@@ -2393,6 +2411,7 @@ void run_tui_terminal_osc11_theme_tests()
   test_osc11_background_parser();
   test_osc11_theme_precedence_and_reset();
   test_startup_input_fifo_order_and_cap();
+  test_poll_distinguishes_discarded_input();
   test_osc11_handler_arming_and_virtual_probe();
   test_osc11_tmux_skip_semantics();
   test_osc11_query_writer_and_environment_gate_seam();

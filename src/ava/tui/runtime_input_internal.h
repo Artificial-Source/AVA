@@ -27,7 +27,27 @@ struct RuntimeInput
 
 [[nodiscard]] std::optional<std::string> printable_jump_target(RuntimeInput const& input);
 [[nodiscard]] RuntimeInput read_curses_input();
-[[nodiscard]] std::optional<RuntimeInput> poll_curses_input();
+// Polling distinguishes a consumed protocol reply from an empty native queue.
+// TuiSession counts discarded replies against its input budget and keeps draining.
+enum class InputPollKind
+{
+  Empty,      // No native/startup input remains; the loop may wait.
+  Discarded,  // A protocol reply or unsupported key was consumed; poll again.
+  Input       // The decoded event belongs to the next dispatch stage.
+};
+
+// Returned by value on the TUI thread. input is meaningful only for Input.
+struct InputPollResult
+{
+  InputPollKind kind = InputPollKind::Empty;  // Decoder outcome for this read.
+  RuntimeInput input{};                       // Owned event; no terminal buffer is borrowed.
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+// TUI thread only. Performs one bounded decode without waiting for an initial key.
+// Escape/paste assembly retains its existing timeout after the first byte arrives.
+[[nodiscard]] InputPollResult poll_curses_input();
 [[nodiscard]] std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout);
 
 // Session-scoped startup probe queue: complete RuntimeInput events observed while

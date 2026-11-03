@@ -217,15 +217,14 @@ bool enqueue_startup_input(RuntimeInput input)
   return true;
 }
 
-RuntimeInput read_curses_input_from_terminal()
-{
-  return read_curses_input_from_terminal(core::Application::instance().terminal_context());
-}
-
-RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context)
+// Preserve native emptiness until polling classifies the read. Unsupported input
+// still has a value, so it cannot hide a following key already buffered by ncurses.
+static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& terminal_context)
 {
   wint_t value = 0;
-  Key key = terminal_context.read_curses_key(value);
+  auto key = terminal_context.read_curses_key(value);
+  if (!key)
+    return std::nullopt;
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
   if (key == Key::WideCharacter)
@@ -259,7 +258,17 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
     return event_input(terminal_ncurses_mouse_event(*mouse_event));
   }
 
-  return key_input(key);
+  return key_input(*key);
+}
+
+RuntimeInput read_curses_input_from_terminal()
+{
+  return read_curses_input_from_terminal(core::Application::instance().terminal_context());
+}
+
+RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context)
+{
+  return decode_terminal_input(terminal_context).value_or(unknown_input());
 }
 
 RuntimeInput read_curses_input()
@@ -274,19 +283,18 @@ bool empty_curses_input(RuntimeInput const& input)
   return !input.resize && input.event.key == Key::Unknown && input.text.empty() && !input.bracketed_paste;
 }
 
-std::optional<RuntimeInput> poll_curses_input()
+InputPollResult poll_curses_input()
 {
   if (auto queued = take_startup_input())
-    return queued;
-  RuntimeInput input;
-  {
-    auto& terminal_context = core::Application::instance().terminal_context();
-    auto scoped_timeout = terminal_context.timeout(std::chrono::milliseconds(0));       // Immediately return if there is no input.
-    input = read_curses_input_from_terminal();
-  }
-  if (empty_curses_input(input))
-    return std::nullopt;
-  return input;
+    return {.kind = InputPollKind::Input, .input = std::move(*queued)};
+  auto& terminal_context = core::Application::instance().terminal_context();
+  auto scoped_timeout = terminal_context.timeout(std::chrono::milliseconds(0));
+  auto input = decode_terminal_input(terminal_context);
+  if (!input)
+    return {.kind = InputPollKind::Empty};
+  if (empty_curses_input(*input))
+    return {.kind = InputPollKind::Discarded};
+  return {.kind = InputPollKind::Input, .input = std::move(*input)};
 }
 
 std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout)

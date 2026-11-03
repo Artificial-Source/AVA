@@ -1194,13 +1194,18 @@ bool TuiSession::service_input_batch()
     // more input is decoded. Those bytes remain in ncurses/startup buffering.
     if (!terminal_closing_ && active_run_controller_.active() && !active_run_controller_.accepts_input())
       return true;
-    auto input = runtime_input::poll_curses_input();
-    if (!input)
+    auto polled = runtime_input::poll_curses_input();
+    if (polled.kind == runtime_input::InputPollKind::Empty)
     {
       if (terminal_closing_)
         loop_.request_stop();
       return false;
     }
+    // Discarded control replies consumed input too. Count them toward fairness,
+    // but keep draining before an empty fd can hide ncurses-buffered keys.
+    if (polled.kind == runtime_input::InputPollKind::Discarded)
+      continue;
+    auto const& input = polled.input;
     if (active_run_controller_.active())
       service_control(TuiEventLoop::Clock::now());
     else
@@ -1214,8 +1219,8 @@ bool TuiSession::service_input_batch()
     }
     if (terminal_closing_ || loop_.stopped())
       continue;
-    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(*input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
-                                                         : input_dispatcher_.dispatch(*input);
+    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
+                                                         : input_dispatcher_.dispatch(input);
     apply_input_outcome(outcome);
   }
   // A full batch may leave bytes in ncurses even without fd readiness. Give
