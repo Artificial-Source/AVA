@@ -30,6 +30,9 @@ namespace ava::tui {
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
 constexpr std::size_t kInputBatchLimit = 32;
+// Signals only set atomic bits, and the OS wait retries EINTR. This retained
+// timer supplies a nominal 100 ms observation cadence (ten idle wakes/second).
+// Decode, callbacks and synchronous work can delay the next control turn.
 constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
 } // namespace
 using Key = terminal::Key;
@@ -70,7 +73,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
                          std::bind_front(&TuiSession::handle_editor_input, this), std::bind_front(&TuiSession::handle_session_input, this),
                          std::bind_front(&TuiSession::handle_transcript_input, this), std::bind_front(&TuiSession::handle_composer_navigation_input, this),
                          std::bind_front(&TuiSession::handle_tail_input, this)}),
-      control_timer_(loop_.member_timer(*this, &TuiSession::service_control))
+      control_timer_(loop_.member_timer(*this, &TuiSession::wake_for_control))
 {
   renderer_.attach_loop(loop_);
   plugin_ui_.attach_loop(loop_);
@@ -1128,7 +1131,13 @@ void TuiSession::apply_input_outcome(TuiInputOutcome outcome)
     loop_.request_stop();
 }
 
-void TuiSession::service_control(TuiEventLoop::Clock::time_point)
+void TuiSession::wake_for_control(TuiEventLoop::Clock::time_point)
+{
+  // The timer deadline already wakes wait(). Control actions belong to the
+  // next control stage, never to a due-timer callback.
+}
+
+void TuiSession::service_control()
 {
   if (active_run_controller_.active())
   {
@@ -1250,7 +1259,7 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
 
   while (!loop_.stopped())
   {
-    service_control(TuiEventLoop::Clock::now());
+    service_control();
     if (loop_.stopped())
       break;
     if (terminal_closing_)

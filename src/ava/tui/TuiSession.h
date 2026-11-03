@@ -55,7 +55,12 @@ class TuiSession final
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
   void settle_opened_session(std::string status);
   bool synchronize_committed_session();
-  void service_control(TuiEventLoop::Clock::time_point now);
+  // TUI thread, before due timers. Claim signals and observe terminal failures;
+  // cancellation may release workers, so it must run outside timer callbacks.
+  void service_control();
+  // Plain timer wake: keeps the 100 ms observation cadence without handling
+  // signals or running application work from inside service_due().
+  void wake_for_control(TuiEventLoop::Clock::time_point now);
   [[nodiscard]] bool service_application_updates();
   void service_presentations();
   [[nodiscard]] bool service_input_batch();

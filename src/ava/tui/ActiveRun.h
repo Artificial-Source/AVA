@@ -74,8 +74,9 @@ class ActiveRun final
   ActiveRun& operator=(ActiveRun&&) = delete;
 
   [[nodiscard]] bool start(std::string submitted);
-  // Called once in the session control stage, before timers/application updates.
-  // Inactive operations leave signals for the idle/session policy.
+  // Called in the session control stage and again after decoding retained input.
+  // Inactive operations leave signals for the idle/session policy. Never call
+  // from a timer callback: this can retire prompts and release waiting workers.
   // Handled consumes any input decoded before a claimed signal. Failure means
   // the control action could not render; Pass leaves retained input available.
   [[nodiscard]] TuiInputOutcome service_control();
