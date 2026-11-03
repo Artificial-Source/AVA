@@ -11,6 +11,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 class SelectorHost;
 class RuntimeRenderer;
 class TuiEventLoop;
@@ -32,7 +34,7 @@ class RuntimeSubagentWorkspaceController final
 
   // Frontend, projection and selector host outlive this TUI-owned presentation.
   // Destruction clears only workspace presentation; backend jobs keep their owner.
-  RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SelectorHost& selectors);
+  RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, SelectorHost& selectors);
   ~RuntimeSubagentWorkspaceController();
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
@@ -79,7 +81,7 @@ class RuntimeSubagentWorkspaceController final
   void discover_progress(Clock::time_point now);
 
   TuiFrontEnd const& frontend_;
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   // The session-owned host outlives this controller.
   SelectorHost& selectors_;
   Mode mode_ = Mode::Closed;

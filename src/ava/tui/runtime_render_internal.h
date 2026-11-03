@@ -15,6 +15,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 class TuiFrontEnd;
 class TuiEventLoop;
 
@@ -85,13 +87,27 @@ class FrameScheduler final
   bool failed_ = false;
 };
 
+// TUI thread: callers choose the existing live-tail transition they intend.
+enum class LiveTailReason
+{
+  Requested, // Defer clearing detached chrome until the next paint.
+  LocalCommand, // Clear the count/sidebar now but retain pending layout work.
+  Navigation, // Explicit navigation also discards pending detached work.
+};
+
+// Deferred output preserves the painted viewport; a user expansion needs the new layout immediately.
+enum class TranscriptUpdateMode
+{
+  Deferred,
+  Immediate
+};
+
 class RuntimeRenderer final
 {
  public:
   // Snapshot/sidebar/Composer, frontend and optional Context outlive this renderer.
   // Render the snapshot and apply cursor settings through Context when provided.
-  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& draft_state,
-                  terminal::Context* terminal_context = nullptr);
+  RuntimeRenderer(TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state, terminal::Context* terminal_context = nullptr);
   RuntimeRenderer(RuntimeRenderer const&) = delete;
   RuntimeRenderer& operator=(RuntimeRenderer const&) = delete;
   RuntimeRenderer(RuntimeRenderer&&) = delete;
@@ -123,7 +139,15 @@ class RuntimeRenderer final
   void reset_for_session_transition();
 
   [[nodiscard]] std::unique_lock<std::recursive_mutex> lock_ui();
-  [[nodiscard]] TranscriptView& transcript() noexcept;
+  // TUI thread: renderer prepares/clamps layout and synchronizes timers around all
+  // viewport changes. Readers may borrow the const view until the renderer dies.
+  void scroll_transcript(std::ptrdiff_t rows);
+  void navigate_transcript(std::size_t offset);
+  void show_live_tail(LiveTailReason reason);
+  void complete_transcript_update(TranscriptUpdate const& update, std::ptrdiff_t shift, std::size_t event_count,
+                                  TranscriptUpdateMode mode = TranscriptUpdateMode::Deferred);
+  // Fallback completion has no deferred viewport; remap live selection after eviction.
+  void note_transcript_eviction(std::ptrdiff_t shift);
   [[nodiscard]] TranscriptView const& transcript() const noexcept;
   void reset_wheel_input();
   [[nodiscard]] bool accept_wheel_input(terminal::Key key, WheelBurstGovernor::Clock::time_point now = WheelBurstGovernor::Clock::now());
@@ -162,7 +186,7 @@ class RuntimeRenderer final
   // Explicit-clock semantic servicing for unattached renderer fixtures only.
   void service_auxiliary_timers(std::chrono::steady_clock::time_point now);
 
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   Composer& draft_state_;
   terminal::Context* terminal_context_ = nullptr;
   TranscriptView transcript_;

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "TuiEventLoop.h"
+#include "runtime_state_internal.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -107,9 +108,8 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& composer,
-                                 terminal::Context* terminal_context)
-    : snapshot_(snapshot), draft_state_(composer), terminal_context_(terminal_context), transcript_(snapshot, sidebar, composer), frontend_(frontend)
+RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer, terminal::Context* terminal_context)
+    : presentation_(presentation), draft_state_(composer), terminal_context_(terminal_context), transcript_(presentation, composer), frontend_(frontend)
 {
 }
 
@@ -202,13 +202,65 @@ std::unique_lock<std::recursive_mutex> RuntimeRenderer::lock_ui()
 {
   return std::unique_lock<std::recursive_mutex>(ui_mutex_);
 }
-TranscriptView& RuntimeRenderer::transcript() noexcept
-{
-  return transcript_;
-}
 TranscriptView const& RuntimeRenderer::transcript() const noexcept
 {
   return transcript_;
+}
+void RuntimeRenderer::scroll_transcript(std::ptrdiff_t rows)
+{
+  auto lock = lock_ui();
+  synchronize_detached_transcript_layout();
+  auto const maximum = prepare_transcript_layout();
+  if (rows >= 0)
+    transcript_.scroll_up(static_cast<std::size_t>(rows), maximum);
+  else
+    transcript_.scroll_down(static_cast<std::size_t>(-(rows + 1)) + 1, maximum);
+  show_transcript_position_indicator();
+  synchronize_timers();
+}
+void RuntimeRenderer::navigate_transcript(std::size_t offset)
+{
+  auto lock = lock_ui();
+  transcript_.navigate_to_offset(offset, prepare_transcript_layout());
+  synchronize_timers();
+}
+void RuntimeRenderer::show_live_tail(LiveTailReason reason)
+{
+  auto lock = lock_ui();
+  switch (reason)
+  {
+    case LiveTailReason::Requested:
+      transcript_.request_live_tail();
+      break;
+    case LiveTailReason::LocalCommand:
+      transcript_.reset_for_local_command();
+      break;
+    case LiveTailReason::Navigation:
+      transcript_.return_to_live_tail();
+      break;
+  }
+  synchronize_timers();
+}
+void RuntimeRenderer::complete_transcript_update(TranscriptUpdate const& update, std::ptrdiff_t shift, std::size_t event_count, TranscriptUpdateMode mode)
+{
+  auto lock = lock_ui();
+  if (mode == TranscriptUpdateMode::Immediate)
+  {
+    if (update.detached())
+    {
+      auto const maximum = prepare_transcript_layout();
+      transcript_.restore_layout_anchor(update.anchor(), transcript_layout_cache_, maximum, shift);
+    }
+  }
+  else
+    transcript_.complete_transcript_update(update, shift, event_count);
+  synchronize_timers();
+}
+void RuntimeRenderer::note_transcript_eviction(std::ptrdiff_t shift)
+{
+  auto lock = lock_ui();
+  transcript_.note_live_selection_item_shift(shift);
+  synchronize_timers();
 }
 void RuntimeRenderer::reset_wheel_input()
 {
@@ -220,8 +272,9 @@ bool RuntimeRenderer::accept_wheel_input(terminal::Key key, WheelBurstGovernor::
 }
 std::size_t RuntimeRenderer::prepare_transcript_layout()
 {
-  return detail::composer_max_transcript_scroll_offset_cached(snapshot_, snapshot_.width, snapshot_.height, completion_cache_,
-                                                              snapshot_.file_references_generation, transcript_layout_cache_, snapshot_.transcript_generation);
+  return detail::composer_max_transcript_scroll_offset_cached(presentation_.screen(), presentation_.screen().width, presentation_.screen().height,
+                                                              completion_cache_, presentation_.screen().file_references_generation, transcript_layout_cache_,
+                                                              presentation_.screen().transcript_generation);
 }
 detail::TranscriptViewportAnchor RuntimeRenderer::capture_transcript_viewport()
 {
@@ -252,7 +305,7 @@ detail::ScreenRowCache const& RuntimeRenderer::painted_frame() const noexcept
 }
 detail::CompletionMatchModel const* RuntimeRenderer::refresh_completion_cache()
 {
-  detail::refresh_completion_match_cache(completion_cache_, snapshot_, snapshot_.file_references_generation);
+  detail::refresh_completion_match_cache(completion_cache_, presentation_.screen(), presentation_.screen().file_references_generation);
   return completion_cache_.model ? &*completion_cache_.model : nullptr;
 }
 std::size_t RuntimeRenderer::clamp_completion(std::size_t selected)
@@ -273,24 +326,26 @@ std::size_t RuntimeRenderer::next_completion(std::size_t selected)
 std::optional<std::string> RuntimeRenderer::selected_completion_disabled_reason(std::size_t selected)
 {
   static_cast<void>(refresh_completion_cache());
-  return detail::completion_selection_disabled_reason(completion_cache_, snapshot_.file_references, selected);
+  return detail::completion_selection_disabled_reason(completion_cache_, presentation_.screen().file_references, selected);
 }
 FileReferenceSelectionText RuntimeRenderer::selected_completion_text(std::size_t selected)
 {
   static_cast<void>(refresh_completion_cache());
-  return detail::completion_selection_text(completion_cache_, snapshot_, selected);
+  return detail::completion_selection_text(completion_cache_, presentation_.screen(), selected);
 }
 std::optional<std::size_t> RuntimeRenderer::file_reference_completion_at(std::size_t row, std::size_t column)
 {
-  return detail::file_reference_palette_selection_for_screen_position_cached(snapshot_, row, column, completion_cache_, snapshot_.file_references_generation);
+  return detail::file_reference_palette_selection_for_screen_position_cached(presentation_.screen(), row, column, completion_cache_,
+                                                                             presentation_.screen().file_references_generation);
 }
 std::optional<std::size_t> RuntimeRenderer::path_completion_at(std::size_t row, std::size_t column)
 {
-  return detail::path_completion_palette_selection_for_screen_position_cached(snapshot_, row, column, completion_cache_, snapshot_.file_references_generation);
+  return detail::path_completion_palette_selection_for_screen_position_cached(presentation_.screen(), row, column, completion_cache_,
+                                                                              presentation_.screen().file_references_generation);
 }
 std::size_t RuntimeRenderer::sidebar_drawer_max_scroll() const
 {
-  return sidebar_drawer_max_scroll_offset(frontend_, snapshot_);
+  return sidebar_drawer_max_scroll_offset(frontend_, presentation_.screen());
 }
 
 void RuntimeRenderer::synchronize_detached_transcript_layout()
@@ -308,11 +363,12 @@ bool RuntimeRenderer::prepare_transcript_selection_authority()
   // A deferred detached viewport stays bound to the cache actually drawn.
   if (!transcript_.has_deferred_update())
   {
-    auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot_.height);
-    auto const width = composer_canvas_layout(snapshot_).content_width;
-    auto const compact = detail::composer_layout_policy(snapshot_, height).compact_transcript_spacing;
-    detail::refresh_transcript_layout_cache(transcript_layout_cache_, snapshot_.transcript, snapshot_.transcript_generation, width, snapshot_.tool_presentation,
-                                            snapshot_.thinking_visible, compact, detail::active_mermaid_projection(snapshot_));
+    auto const height = std::max<std::size_t>(detail::kMinHeight, presentation_.screen().height);
+    auto const width = composer_canvas_layout(presentation_.screen()).content_width;
+    auto const compact = detail::composer_layout_policy(presentation_.screen(), height).compact_transcript_spacing;
+    detail::refresh_transcript_layout_cache(transcript_layout_cache_, presentation_.screen().transcript, presentation_.screen().transcript_generation, width,
+                                            presentation_.screen().tool_presentation, presentation_.screen().thinking_visible, compact,
+                                            detail::active_mermaid_projection(presentation_.screen()));
   }
   return transcript_.prepare_selection_authority(transcript_layout_cache_);
 }
@@ -409,17 +465,16 @@ bool RuntimeRenderer::paint_for_handoff()
 
 bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
     auto lock = lock_ui();
-    draft_state_.project(snapshot);
+    presentation_.publish_composer(draft_state_);
     // Publish viewport chrome before freeze/sync/clamp so the N-new reserved row
     // participates in geometry even when the prior stream update was not painted.
     transcript_.begin_frame();
     auto const [width, height] = terminal_size();
-    snapshot.width = width;
-    snapshot.height = height;
+    presentation_.publish_dimensions(width, height);
     auto const compact_spacing = detail::composer_layout_policy(snapshot, height).compact_transcript_spacing;
     auto const presentation_settings_compatible = transcript_layout_cache_.valid && transcript_layout_cache_.tool_presentation == snapshot.tool_presentation &&
                                                   transcript_layout_cache_.thinking_visible == snapshot.thinking_visible &&
@@ -437,16 +492,17 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
     auto const synchronized_detached_viewport = transcript_.has_deferred_update() && !freeze_detached_viewport;
     if (synchronized_detached_viewport)
       synchronize_detached_transcript_layout();
-    snapshot.sidebar_drawer_scroll_offset = std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(frontend_, snapshot));
+    presentation_.publish_sidebar_drawer(snapshot.sidebar_drawer_visible,
+                                         std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(frontend_, snapshot)));
     if (snapshot.command_output)
     {
       auto const geometry = command_output_geometry(width, height);
-      snapshot.command_output->scroll_offset =
+      presentation_.publish_command_output_scroll(
           std::min(snapshot.command_output->scroll_offset,
-                   command_output_max_scroll_offset(*snapshot.command_output, geometry.width, geometry.height, snapshot.tool_presentation));
+                   command_output_max_scroll_offset(*snapshot.command_output, geometry.width, geometry.height, snapshot.tool_presentation)));
     }
     draft_state_.clamp_scroll(draft_state_.max_draft_scroll_offset(snapshot, height));
-    snapshot.draft_scroll_offset = draft_state_.scroll_offset();
+    presentation_.publish_composer(draft_state_);
     if (transcript_.scroll_offset() > 0 && !synchronized_detached_viewport && !freeze_detached_viewport)
       transcript_.clamp_for_frame(prepare_transcript_layout());
     transcript_.finish_frame_viewport();
@@ -534,11 +590,11 @@ bool RuntimeRenderer::render_failed() const
 bool RuntimeRenderer::paint(FrameRenderKind kind, bool freeze_transcript_layout)
 {
   if (terminal_context_)
-    terminal_context_->apply_cursor_settings(snapshot_.cursor);
+    terminal_context_->apply_cursor_settings(presentation_.screen().cursor);
   if (kind == FrameRenderKind::Full)
     return render_full(freeze_transcript_layout);
 
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex_);

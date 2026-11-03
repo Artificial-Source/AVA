@@ -21,6 +21,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 namespace detail {
 [[nodiscard]] bool prompt_wheel_input_suppressed(terminal::Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
                                                  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
@@ -67,8 +69,8 @@ enum class SearchInputPromptDispatchResult
 class RuntimePromptCoordinator final
 {
  public:
-  RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants, RuntimeRenderer& renderer,
-                           TuiEventLoop& loop, SelectorHost* selectors = nullptr);
+  RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
+                           RuntimeRenderer& renderer, TuiEventLoop& loop, SelectorHost* selectors = nullptr);
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;
 
@@ -136,7 +138,7 @@ class RuntimePromptCoordinator final
   void close_competing_selector();
 
   TuiFrontEnd const& frontend_;
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   TuiSessionGrantRegistry& session_grants_;
   RuntimeRenderer& renderer_;
   // Optional: when set, prompt acquisition closes an open startup overview select-list.

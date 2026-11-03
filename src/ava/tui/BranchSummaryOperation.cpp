@@ -72,7 +72,7 @@ void BranchSummaryOperation::restore_selector(SelectListView view)
 
 void BranchSummaryOperation::present_status(std::string status)
 {
-  presentation_state_.screen().status = status;
+  presentation_state_.publish_status(status);
   selectors_.set_subtitle(std::move(status));
 }
 
@@ -191,7 +191,7 @@ BranchSummaryOutcome BranchSummaryOperation::cancel(BranchSummaryCancelMode mode
     present_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Cancel)));
     return renderer_.request_render() ? BranchSummaryOutcome::Pending : BranchSummaryOutcome::RenderFailed;
   }
-  presentation_state_.screen().status = "canceling parent summary";
+  presentation_state_.publish_status("canceling parent summary");
   return poll();
 }
 
@@ -214,7 +214,7 @@ BranchSummaryOutcome BranchSummaryOperation::confirm()
     present_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Confirm)));
     return renderer_.request_render() ? BranchSummaryOutcome::Pending : BranchSummaryOutcome::RenderFailed;
   }
-  presentation_state_.screen().status = "parent summary generation started";
+  presentation_state_.publish_status("parent summary generation started");
   return poll();
 }
 

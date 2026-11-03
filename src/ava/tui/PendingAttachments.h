@@ -7,7 +7,7 @@
 
 namespace ava::tui {
 
-struct ComposerSnapshot;
+class RuntimePresentationState;
 struct PendingAttachmentItem;
 
 // TUI-thread ownership of staged attachment references and their visible badges.
@@ -15,7 +15,7 @@ struct PendingAttachmentItem;
 class PendingAttachments final
 {
  public:
-  explicit PendingAttachments(ComposerSnapshot& screen);
+  explicit PendingAttachments(RuntimePresentationState& presentation);
   PendingAttachments(PendingAttachments const&) = delete;
   PendingAttachments& operator=(PendingAttachments const&) = delete;
 
@@ -28,7 +28,7 @@ class PendingAttachments final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  ComposerSnapshot& screen_;
+  RuntimePresentationState& presentation_;
   std::vector<ava::session::ImageAttachmentRef> references_;
 };
 

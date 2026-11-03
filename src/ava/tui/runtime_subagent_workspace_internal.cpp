@@ -3,6 +3,7 @@
 #include "TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/runtime_render_internal.h"
+#include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 
 #include <algorithm>
@@ -51,8 +52,9 @@ SelectListView unavailable_selector()
 
 }  // namespace
 
-RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SelectorHost& selectors)
-    : frontend_(frontend), snapshot_(snapshot), selectors_(selectors)
+RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, RuntimePresentationState& presentation,
+                                                                       SelectorHost& selectors)
+    : frontend_(frontend), presentation_(presentation), selectors_(selectors)
 {
 }
 
@@ -111,21 +113,22 @@ void RuntimeSubagentWorkspaceController::publish()
   {
     if (selectors_.kind() == ActiveSelectList::SubagentWorkspace)
       selectors_.close();
-    snapshot_.subagent_workspace.reset();
+    presentation_.publish_workspace(std::nullopt);
     return;
   }
   if (mode_ == Mode::Selector)
   {
     selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
     selectors_.open(ActiveSelectList::SubagentWorkspace, selector_);
-    snapshot_.subagent_workspace.reset();
+    presentation_.publish_workspace(std::nullopt);
     return;
   }
-  workspace_.scroll_offset = std::min(workspace_.scroll_offset, subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height));
+  workspace_.scroll_offset =
+      std::min(workspace_.scroll_offset, subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height));
   selectors_.close();
   auto published = workspace_;
   published.refresh_unavailable = published.refresh_unavailable || refresh_unavailable_;
-  snapshot_.subagent_workspace = std::move(published);
+  presentation_.publish_workspace(std::move(published));
 }
 
 bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
@@ -267,7 +270,7 @@ bool RuntimeSubagentWorkspaceController::refresh_inspection()
   auto const& frame = **inspected;
   bool const prior_refresh_unavailable = refresh_unavailable_;
   refresh_unavailable_ = false;
-  auto const old_max = subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height);
+  auto const old_max = subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height);
   bool const followed_tail = workspace_.scroll_offset >= old_max;
   bool changed = prior_refresh_unavailable;
   if (frame.not_modified)
@@ -298,7 +301,7 @@ bool RuntimeSubagentWorkspaceController::refresh_inspection()
   if (frame.generation > 0)
     known_generation_ = frame.generation;
   if (changed && followed_tail)
-    workspace_.scroll_offset = subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height);
+    workspace_.scroll_offset = subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height);
   return changed;
 }
 
@@ -343,7 +346,7 @@ bool RuntimeSubagentWorkspaceController::cycle_workspace(bool forward)
 
 bool RuntimeSubagentWorkspaceController::set_workspace_scroll(std::size_t offset)
 {
-  auto const clamped = std::min(offset, subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height));
+  auto const clamped = std::min(offset, subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height));
   if (clamped == workspace_.scroll_offset)
     return false;
   workspace_.scroll_offset = clamped;
@@ -359,7 +362,7 @@ bool RuntimeSubagentWorkspaceController::scroll_workspace(std::ptrdiff_t delta)
     return set_workspace_scroll(amount > workspace_.scroll_offset ? 0 : workspace_.scroll_offset - amount);
   }
   auto const amount = static_cast<std::size_t>(delta);
-  auto const max = subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height);
+  auto const max = subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height);
   return set_workspace_scroll(amount > max - std::min(max, workspace_.scroll_offset) ? max : workspace_.scroll_offset + amount);
 }
 
@@ -394,7 +397,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
     SelectListInputResult input;
     if (event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick)
     {
-      auto clicked = select_list_selection_for_screen_position(snapshot_, event.mouse_row, event.mouse_column);
+      auto clicked = select_list_selection_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column);
       if (!clicked)
         return result;
       input = SelectListInputResult{.selected_item_index = *clicked, .query = selectors_.view()->query, .action = SelectListInputAction::Resolve};
@@ -500,7 +503,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
   }
   else if (event.key == Key::End || event.key == Key::CtrlEnd)
   {
-    result.changed = set_workspace_scroll(subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height));
+    result.changed = set_workspace_scroll(subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height));
   }
   return result;
 }

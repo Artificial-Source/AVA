@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "runtime_state_internal.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime.h"
@@ -15,18 +16,15 @@
 
 namespace ava::tui {
 
-RuntimeNavigationController::RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, Composer& draft_state,
+RuntimeNavigationController::RuntimeNavigationController(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, Composer& draft_state,
                                                          RuntimeRenderer& renderer)
-    : frontend_(frontend), snapshot_(snapshot), draft_state_(draft_state), renderer_(renderer)
+    : frontend_(frontend), presentation_(presentation), draft_state_(draft_state), renderer_(renderer)
 {
 }
 
 void RuntimeNavigationController::project_completion_input()
 {
-  snapshot_.input = draft_state_.draft().text;
-  snapshot_.input_cursor = draft_state_.draft().cursor;
-  snapshot_.slash_palette_suppressed = draft_state_.palette_suppressed();
-  snapshot_.path_completion_force_active = draft_state_.path_completion_forced();
+  presentation_.publish_composer(draft_state_);
 }
 
 detail::CompletionMatchModel const* RuntimeNavigationController::refresh_completion_cache()
@@ -37,7 +35,8 @@ detail::CompletionMatchModel const* RuntimeNavigationController::refresh_complet
 
 bool RuntimeNavigationController::slash_palette_active() const
 {
-  return !draft_state_.palette_suppressed() && slash_palette_visible(draft_state_.draft().text, draft_state_.draft().cursor, snapshot_.slash_commands);
+  return !draft_state_.palette_suppressed() &&
+         slash_palette_visible(draft_state_.draft().text, draft_state_.draft().cursor, presentation_.screen().slash_commands);
 }
 
 bool RuntimeNavigationController::file_reference_palette_active()
@@ -92,147 +91,97 @@ void RuntimeNavigationController::scroll_up(std::size_t amount)
 {
   draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
-  snapshot_.width = width;
-  snapshot_.height = height;
-  renderer_.synchronize_detached_transcript_layout();
-  auto const max_scroll = renderer_.prepare_transcript_layout();
-  renderer_.transcript().scroll_up(amount, max_scroll);
-  renderer_.show_transcript_position_indicator();
+  presentation_.publish_dimensions(width, height);
+  renderer_.scroll_transcript(static_cast<std::ptrdiff_t>(amount));
 }
 
 void RuntimeNavigationController::scroll_down(std::size_t amount)
 {
   draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
-  snapshot_.width = width;
-  snapshot_.height = height;
-  renderer_.synchronize_detached_transcript_layout();
-  auto const max_scroll = renderer_.prepare_transcript_layout();
-  renderer_.transcript().scroll_down(amount, max_scroll);
-  renderer_.show_transcript_position_indicator();
+  presentation_.publish_dimensions(width, height);
+  renderer_.scroll_transcript(-static_cast<std::ptrdiff_t>(amount));
 }
 
 std::size_t RuntimeNavigationController::transcript_page_size()
 {
   static_cast<void>(refresh_completion_cache());
-  snapshot_.draft_scroll_offset = draft_state_.scroll_offset();
+  presentation_.publish_composer(draft_state_);
   auto const [width, height] = terminal_size();
-  snapshot_.width = width;
-  snapshot_.height = height;
+  presentation_.publish_dimensions(width, height);
   renderer_.synchronize_detached_transcript_layout();
-  auto const body = detail::transcript_body_screen_geometry(snapshot_);
+  auto const body = detail::transcript_body_screen_geometry(presentation_.screen());
   return std::max<std::size_t>(1, body.valid ? body.transcript_height / 2 : std::size_t{0});
 }
 
 bool RuntimeNavigationController::toggle_tool_details_at(std::size_t item_index)
 {
   renderer_.synchronize_detached_transcript_layout();
-  if (item_index >= snapshot_.transcript.size() || !snapshot_.transcript[item_index].tool)
+  if (item_index >= presentation_.screen().transcript.size() || !presentation_.screen().transcript[item_index].tool)
     return false;
-  auto anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport)
-  {
-    anchor = renderer_.capture_transcript_viewport();
-  }
-  auto& tool = *snapshot_.transcript[item_index].tool;
-  tool.details_visible = detail::tool_card_presentation(tool, snapshot_.tool_presentation) != ToolPresentation::Expanded;
-  ++snapshot_.transcript_generation;
-  if (preserve_viewport)
-  {
-    auto const new_max_scroll = renderer_.prepare_transcript_layout();
-    renderer_.transcript().restore_layout_anchor(anchor, renderer_.prepared_transcript_layout(), new_max_scroll, 0);
-  }
-  snapshot_.status = "tool details " + std::string(to_string(detail::tool_card_presentation(tool, snapshot_.tool_presentation)));
+  auto const update = renderer_.begin_transcript_update();
+  static_cast<void>(presentation_.toggle_tool_details(item_index));
+  auto const& tool = *presentation_.screen().transcript[item_index].tool;
+  renderer_.complete_transcript_update(update, 0, 0, TranscriptUpdateMode::Immediate);
+  presentation_.publish_status("tool details " + std::string(to_string(detail::tool_card_presentation(tool, presentation_.screen().tool_presentation))));
   return true;
 }
 
 std::optional<std::size_t> RuntimeNavigationController::toggle_matching_tool_details(std::string_view query)
 {
   renderer_.synchronize_detached_transcript_layout();
-  auto anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport)
-  {
-    anchor = renderer_.capture_transcript_viewport();
-  }
-  auto const item_index = toggle_latest_matching_tool_details(snapshot_.transcript, query, snapshot_.tool_presentation);
+  auto const update = renderer_.begin_transcript_update();
+  auto const item_index = presentation_.toggle_matching_tool_details(query);
   if (!item_index)
     return std::nullopt;
-  ++snapshot_.transcript_generation;
-  if (preserve_viewport)
-  {
-    auto const new_max_scroll = renderer_.prepare_transcript_layout();
-    renderer_.transcript().restore_layout_anchor(anchor, renderer_.prepared_transcript_layout(), new_max_scroll, 0);
-  }
+  renderer_.complete_transcript_update(update, 0, 0, TranscriptUpdateMode::Immediate);
   return item_index;
 }
 
 bool RuntimeNavigationController::toggle_thinking_at(std::size_t item_index)
 {
   renderer_.synchronize_detached_transcript_layout();
-  if (item_index >= snapshot_.transcript.size())
+  if (item_index >= presentation_.screen().transcript.size())
     return false;
-  auto anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport)
-  {
-    anchor = renderer_.capture_transcript_viewport();
-  }
-  auto const width = composer_main_width(snapshot_);
-  if (!toggle_thinking_expansion_at(snapshot_.transcript, item_index, width, snapshot_.thinking_visible))
+  auto const update = renderer_.begin_transcript_update();
+  auto const width = composer_main_width(presentation_.screen());
+  if (!presentation_.toggle_thinking_details(item_index, width))
     return false;
-  ++snapshot_.transcript_generation;
-  if (preserve_viewport)
-  {
-    auto const new_max_scroll = renderer_.prepare_transcript_layout();
-    renderer_.transcript().restore_layout_anchor(anchor, renderer_.prepared_transcript_layout(), new_max_scroll, 0);
-  }
-  snapshot_.status = snapshot_.transcript[item_index].thinking_expanded ? "thinking details expanded" : "thinking details collapsed";
+  renderer_.complete_transcript_update(update, 0, 0, TranscriptUpdateMode::Immediate);
+  presentation_.publish_status(presentation_.screen().transcript[item_index].thinking_expanded ? "thinking details expanded" : "thinking details collapsed");
   return true;
 }
 
 std::optional<std::size_t> RuntimeNavigationController::toggle_latest_thinking_details()
 {
   renderer_.synchronize_detached_transcript_layout();
-  auto anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport)
-  {
-    anchor = renderer_.capture_transcript_viewport();
-  }
-  auto const width = composer_main_width(snapshot_);
-  auto const item_index = toggle_latest_boundable_thinking(snapshot_.transcript, width, snapshot_.thinking_visible);
+  auto const update = renderer_.begin_transcript_update();
+  auto const width = composer_main_width(presentation_.screen());
+  auto const item_index = presentation_.toggle_latest_thinking_details(width);
   if (!item_index)
     return std::nullopt;
-  ++snapshot_.transcript_generation;
-  if (preserve_viewport)
-  {
-    auto const new_max_scroll = renderer_.prepare_transcript_layout();
-    renderer_.transcript().restore_layout_anchor(anchor, renderer_.prepared_transcript_layout(), new_max_scroll, 0);
-  }
-  snapshot_.status = snapshot_.transcript[*item_index].thinking_expanded ? "thinking details expanded" : "thinking details collapsed";
+  renderer_.complete_transcript_update(update, 0, 0, TranscriptUpdateMode::Immediate);
+  presentation_.publish_status(presentation_.screen().transcript[*item_index].thinking_expanded ? "thinking details expanded" : "thinking details collapsed");
   return item_index;
 }
 
 bool RuntimeNavigationController::sidebar_drawer_focused() const
 {
-  return snapshot_.sidebar_drawer_visible && snapshot_.sidebar.has_value() && !snapshot_.permission_prompt && !snapshot_.question_prompt &&
-         !snapshot_.select_list;
+  return presentation_.screen().sidebar_drawer_visible && presentation_.screen().sidebar.has_value() && !presentation_.screen().permission_prompt &&
+         !presentation_.screen().question_prompt && !presentation_.screen().select_list;
 }
 
 void RuntimeNavigationController::close_sidebar_drawer()
 {
-  snapshot_.sidebar_drawer_visible = false;
-  snapshot_.sidebar_drawer_scroll_offset = 0;
+  presentation_.publish_sidebar_drawer(false, 0);
   draft_state_.cancel_escape();
-  snapshot_.status = "session overview closed";
+  presentation_.publish_status("session overview closed");
 }
 
 std::size_t RuntimeNavigationController::sidebar_drawer_page_size() const
 {
   auto const [width, height] = terminal_size();
-  auto drawer_snapshot = snapshot_;
+  auto drawer_snapshot = presentation_.screen();
   drawer_snapshot.width = width;
   drawer_snapshot.height = height;
   auto const composer_lines = detail::composer_block_line_count(drawer_snapshot, height, width);
@@ -255,33 +204,34 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
   if (key_matches_action(frontend_.key_bindings(), TuiAction::PageUp, event.key))
   {
     auto const page = sidebar_drawer_page_size();
-    snapshot_.sidebar_drawer_scroll_offset = page >= snapshot_.sidebar_drawer_scroll_offset ? 0 : snapshot_.sidebar_drawer_scroll_offset - page;
+    presentation_.publish_sidebar_drawer(
+        true, page >= presentation_.screen().sidebar_drawer_scroll_offset ? 0 : presentation_.screen().sidebar_drawer_scroll_offset - page);
     return renderer_.request_render();
   }
   if (key_matches_action(frontend_.key_bindings(), TuiAction::PageDown, event.key))
   {
-    snapshot_.sidebar_drawer_scroll_offset = std::min(max_scroll, snapshot_.sidebar_drawer_scroll_offset + sidebar_drawer_page_size());
+    presentation_.publish_sidebar_drawer(true, std::min(max_scroll, presentation_.screen().sidebar_drawer_scroll_offset + sidebar_drawer_page_size()));
     return renderer_.request_render();
   }
   if (event.key == Key::Home)
   {
-    snapshot_.sidebar_drawer_scroll_offset = 0;
+    presentation_.publish_sidebar_drawer(true, 0);
     return renderer_.request_render();
   }
   if (event.key == Key::End)
   {
-    snapshot_.sidebar_drawer_scroll_offset = max_scroll;
+    presentation_.publish_sidebar_drawer(true, max_scroll);
     return renderer_.request_render();
   }
   if (event.key == Key::MouseWheelUp)
   {
-    if (snapshot_.sidebar_drawer_scroll_offset > 0)
-      --snapshot_.sidebar_drawer_scroll_offset;
+    if (presentation_.screen().sidebar_drawer_scroll_offset > 0)
+      presentation_.publish_sidebar_drawer(true, presentation_.screen().sidebar_drawer_scroll_offset - 1);
     return renderer_.request_render();
   }
   if (event.key == Key::MouseWheelDown)
   {
-    snapshot_.sidebar_drawer_scroll_offset = std::min(max_scroll, snapshot_.sidebar_drawer_scroll_offset + 1);
+    presentation_.publish_sidebar_drawer(true, std::min(max_scroll, presentation_.screen().sidebar_drawer_scroll_offset + 1));
     return renderer_.request_render();
   }
   ava::core::Application::instance().terminal_context().beep();
@@ -291,39 +241,37 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
 void RuntimeNavigationController::jump_to_bottom(std::string status)
 {
   draft_state_.cancel_escape();
-  renderer_.transcript().return_to_live_tail();
+  renderer_.show_live_tail(LiveTailReason::Navigation);
   renderer_.show_transcript_position_indicator();
-  snapshot_.status = std::move(status);
+  presentation_.publish_status(std::move(status));
 }
 
 void RuntimeNavigationController::jump_to_transcript_item(std::size_t item_index, std::string status)
 {
   draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
-  snapshot_.width = width;
-  snapshot_.height = height;
+  presentation_.publish_dimensions(width, height);
   renderer_.synchronize_detached_transcript_layout();
   auto const max_scroll = renderer_.prepare_transcript_layout();
   auto const& layout = renderer_.prepared_transcript_layout().layout;
   auto const message = std::ranges::find(layout.message_item_indices, item_index);
   if (message == layout.message_item_indices.end())
   {
-    snapshot_.status = "transcript item is no longer visible";
+    presentation_.publish_status("transcript item is no longer visible");
     return;
   }
   auto const position = static_cast<std::size_t>(message - layout.message_item_indices.begin());
   auto const target_start = std::min(layout.message_starts[position], max_scroll);
-  renderer_.transcript().navigate_to_offset(max_scroll - target_start, max_scroll);
+  renderer_.navigate_transcript(max_scroll - target_start);
   renderer_.show_transcript_position_indicator();
-  snapshot_.status = std::move(status);
+  presentation_.publish_status(std::move(status));
 }
 
 void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
 {
   draft_state_.cancel_escape();
   auto const [width, height] = terminal_size();
-  snapshot_.width = width;
-  snapshot_.height = height;
+  presentation_.publish_dimensions(width, height);
   renderer_.synchronize_detached_transcript_layout();
   auto const max_scroll = renderer_.prepare_transcript_layout();
   auto const& layout = renderer_.prepared_transcript_layout().layout;
@@ -332,7 +280,8 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
   for (std::size_t position = 0; position < layout.message_starts.size() && position < layout.message_item_indices.size(); ++position)
   {
     auto const item_index = layout.message_item_indices[position];
-    if (item_index < snapshot_.transcript.size() && snapshot_.transcript[item_index].label == "you" && !snapshot_.transcript[item_index].tool)
+    if (item_index < presentation_.screen().transcript.size() && presentation_.screen().transcript[item_index].label == "you" &&
+        !presentation_.screen().transcript[item_index].tool)
     {
       auto const start = std::min(layout.message_starts[position], max_scroll);
       if (user_starts.empty() || user_starts.back() != start)
@@ -342,7 +291,7 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
   if (user_starts.empty())
   {
     renderer_.show_transcript_position_indicator();
-    snapshot_.status = "no retained user turns";
+    presentation_.publish_status("no retained user turns");
     return;
   }
 
@@ -360,7 +309,7 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
     if (!target_start)
     {
       renderer_.show_transcript_position_indicator();
-      snapshot_.status = "oldest retained user turn";
+      presentation_.publish_status("oldest retained user turn");
       return;
     }
   }
@@ -381,9 +330,9 @@ void RuntimeNavigationController::scroll_to_message_boundary(bool previous)
     }
   }
 
-  renderer_.transcript().navigate_to_offset(max_scroll > *target_start ? max_scroll - *target_start : 0, max_scroll);
+  renderer_.navigate_transcript(max_scroll > *target_start ? max_scroll - *target_start : 0);
   renderer_.show_transcript_position_indicator();
-  snapshot_.status = previous ? "previous retained user turn" : "next retained user turn";
+  presentation_.publish_status(previous ? "previous retained user turn" : "next retained user turn");
 }
 
 }  // namespace ava::tui

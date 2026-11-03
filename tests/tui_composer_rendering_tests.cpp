@@ -13,6 +13,7 @@
 #include "ava/tui/SettingsDialog.h"
 #include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -187,24 +188,27 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   }
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().sidebar = presentation.sidebar();
+  presentation.publish_visible_sidebar(presentation.sidebar());
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
+  ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController controller(presentation, renderer, navigation, active_select_list);
 
   auto const [width, height] = ava::tui::terminal_size();
-  presentation.screen().width = width;
-  presentation.screen().height = height;
+  presentation.publish_dimensions(width, height);
   auto const prepared_max_scroll = renderer.prepare_transcript_layout();
+  // Detach before opening the modal: visible selectors capture ordinary scroll
+  // input. Retain that underlying viewport when the later output is published.
+  renderer.navigate_transcript(std::min(prepared_max_scroll, std::size_t{1}));
+  auto const detached_update = renderer.begin_transcript_update();
   auto const opened = controller.open("retained item");
   auto const before = controller.diagnostics();
   auto const full_layout_builds = renderer.prepared_transcript_layout().layout_build_count;
-  renderer.transcript().scroll_up(1, prepared_max_scroll);
-  renderer.transcript().defer_update({}, 0);
-  presentation.screen().transcript.back().text = "retained item tail replacement";
-  ++presentation.screen().transcript_generation;
+  renderer.complete_transcript_update(detached_update, 0, 0);
+  auto changed_transcript = presentation.screen().transcript;
+  changed_transcript.back().text = "retained item tail replacement";
+  presentation.publish_transcript(std::move(changed_transcript));
   controller.refresh_after_transcript_mutation(0, ava::tui::kMaxTranscriptItems - 1);
   auto const after = controller.diagnostics();
 
@@ -268,47 +272,51 @@ bool test_changed_session_snapshot_resets_presentation()
   };
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().sidebar = presentation.sidebar();
-  presentation.screen().queued_messages = {{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}};
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  presentation.publish_visible_sidebar(presentation.sidebar());
+  presentation.publish_queued_messages({{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}});
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
-  presentation.sidebar().activity = {{.id = "activity-old", .label = "tool", .detail = "old activity"}};
-  presentation.sidebar().modified_files = {{.path = "old.cpp"}};
-  presentation.sidebar().session_entry_count = 9;
-  presentation.screen().input = "old composer draft";
-  presentation.screen().input_cursor = presentation.screen().input.size();
-  presentation.screen().input_selection_start = 0;
-  presentation.screen().input_selection_end = 3;
-  presentation.screen().transcript_selection_anchor_item = 0;
-  presentation.screen().transcript_selection_focus_item = 1;
-  presentation.screen().command_output = ava::tui::CommandOutputView{.title_token = "/read", .blocks = {"old local output"}};
-  presentation.screen().local_command_feedback = "old local status";
-  presentation.screen().tool_index = {ava::tui::TuiToolIndexEntry{
-      .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "read", .call_id = "old-local-tool"},
-      .origin = ava::tui::TuiToolIndexOrigin::LocalCommand}};
-  presentation.screen().evicted_tool_index_identities = {"call\nold-evicted-tool"};
-  presentation.screen().next_tool_index_sequence = 7;
+  presentation.publish_run_activity({{.id = "activity-old", .label = "tool", .detail = "old activity"}});
+  presentation.publish_modified_files({{.path = "old.cpp"}});
+  // The sidebar count currently has no backend writer. Exercise its production
+  // reset transform on a standalone DTO instead of adding a test-only live setter.
+  auto sidebar_reset = presentation.sidebar();
+  sidebar_reset.session_entry_count = 9;
+  ava::tui::reset_session_sidebar(sidebar_reset);
+  bool const sidebar_count_reset = !sidebar_reset.session_entry_count;
+  expect(sidebar_count_reset, "session sidebar reset retires a populated entry count");
+  presentation.publish_local_output("/read", {"old local output"});
+  presentation.publish_local_status("old local status");
+  // Real index eviction seeds all three retirement invariants through admission.
+  for (std::size_t index = 0; index <= ava::tui::kMaxTuiToolIndexItems; ++index)
+    presentation.publish_tool({.status = ava::tui::ToolTimelineStatus::Success, .name = "read", .call_id = "old-local-tool-" + std::to_string(index)},
+                              ava::tui::TuiToolIndexOrigin::LocalCommand);
+  bool const tool_history_seeded = !presentation.screen().tool_index.empty() && !presentation.screen().evicted_tool_index_identities.empty() &&
+                                   presentation.screen().next_tool_index_sequence > 0;
+  expect(tool_history_seeded, "session transition fixture has live and evicted tool identities");
   attachments.stage(ava::session::ImageAttachmentRef{}, ava::tui::PendingAttachmentItem{});
 
   ava::tui::Composer draft_state;
   draft_state.record_submission("old session prompt");
-  draft_state.replace_draft(presentation.screen().input, 0);
-  draft_state.extend_selection_to(3, presentation.screen());
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
+  draft_state.replace_draft("old composer draft", 0);
+  presentation.publish_composer(draft_state);
+  draft_state.extend_selection_to(3);
+  presentation.publish_composer(draft_state);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
+  ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_select_list);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
 
   navigation.scroll_up(3);
   auto const detached_update = renderer.begin_transcript_update();
   auto const search_opened = transcript_search.open("OLD-TRANSCRIPT-MARKER");
-  presentation.screen().transcript.push_back({.label = "ava", .text = "pending output one"});
-  presentation.screen().transcript.push_back({.label = "ava", .text = "pending output two"});
-  ++presentation.screen().transcript_generation;
-  renderer.transcript().complete_transcript_update(detached_update, 0, 2);
+  static_cast<void>(presentation.append_transcript({.label = "ava", .text = "pending output one"}));
+  static_cast<void>(presentation.append_transcript({.label = "ava", .text = "pending output two"}));
+  presentation.invalidate_transcript_layout();
+  renderer.complete_transcript_update(detached_update, 0, 2);
   bool const detached_state_seeded = renderer.transcript().scroll_offset() == 3 && renderer.transcript().new_output_count() == 2 &&
                                      renderer.transcript().frozen_sidebar() && renderer.transcript().has_deferred_update() &&
                                      renderer.prepared_transcript_layout().valid;
@@ -342,10 +350,10 @@ bool test_changed_session_snapshot_resets_presentation()
       !renderer.transcript().frozen_sidebar() && !renderer.transcript().has_deferred_update() && !renderer.prepared_transcript_layout().valid &&
       !transcript_search.is_open() && active_select_list.kind() == ava::tui::ActiveSelectList::None;
 
-  presentation.screen().transcript = {{.label = "ava", .text = "new receipt only"}};
-  ++presentation.screen().transcript_generation;
-  presentation.screen().queued_messages = {{.id = "queued-new", .kind = "follow-up", .text = "new queued message"}};
-  presentation.sidebar().activity = {{.id = "activity-new", .label = "tool", .detail = "new activity"}};
+  presentation.publish_transcript({{.label = "ava", .text = "new receipt only"}});
+  presentation.invalidate_transcript_layout();
+  presentation.publish_queued_messages({{.id = "queued-new", .kind = "follow-up", .text = "new queued message"}});
+  presentation.publish_run_activity({{.id = "activity-new", .label = "tool", .detail = "new activity"}});
   auto const unchanged_generation = presentation.screen().transcript_generation;
   frontend.seed_committed_todos({{.id = "todo-same", .content = "same-session todo"}});
   auto unchanged = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
@@ -363,9 +371,9 @@ bool test_changed_session_snapshot_resets_presentation()
   draft_state.replace_draft("history scratch");
   bool const history_browsing_started = draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.saved_draft() == "history scratch";
   // The drawer hides the transcript, so exercise its reset outside the detached-view probe.
-  presentation.screen().sidebar_drawer_visible = true;
-  presentation.screen().sidebar_drawer_scroll_offset = 4;
-  presentation.screen().input = "draft from previous session";
+  presentation.publish_sidebar_drawer(true, 4);
+  draft_state.replace_draft("draft from previous session");
+  presentation.publish_composer(draft_state);
   attachments.stage(ava::session::ImageAttachmentRef{}, ava::tui::PendingAttachmentItem{});
   auto const before_replacements = presentation.screen().transcript_generation;
   auto const first_replaced = frontend.replace_session_identity();
@@ -385,7 +393,8 @@ bool test_changed_session_snapshot_resets_presentation()
 
   // The control seam compares committed identities, not unobservable backend
   // generations. A -> B -> A between boundaries leaves an A-bound view intact.
-  presentation.screen().input = "same-identity draft";
+  draft_state.replace_draft("same-identity draft");
+  presentation.publish_composer(draft_state);
   auto const before_round_trip = presentation.screen().transcript_generation;
   frontend.set_session_identity_metadata("intermediate-session");
   frontend.set_session_identity_metadata(final_identity);
@@ -409,8 +418,33 @@ bool test_changed_session_snapshot_resets_presentation()
                                      draft_state.jump_mode() == ava::tui::ComposerJumpMode::None && draft_state.scroll_offset() == 0;
   expect(jump_and_scroll_reset, "session transition resets active jump mode and a scrolled composer draft");
 
+  presentation.publish_transcript({{.label = "ava", .text = "selection before session transition"}});
+  presentation.publish_command_output(std::nullopt);
+  active_select_list.close();
+  draft_state.reset_draft();
+  bool const selection_frame = renderer.render();
+  auto const selection_geometry = ava::tui::detail::transcript_body_screen_geometry(presentation.screen());
+  auto const& selection_layout = renderer.prepared_transcript_layout().layout;
+  auto const selection_row = selection_layout.content_starts.empty() ? std::size_t{1} : selection_layout.content_starts.front() + 1;
+  auto never_toggle = [](std::size_t) { return false; };
+  static_cast<void>(renderer.handle_transcript_selection_mouse(
+      {.key = ava::tui::terminal::Key::MouseLeftPress, .mouse_column = selection_geometry.canvas_left + 1, .mouse_row = selection_row}, never_toggle,
+      never_toggle));
+  static_cast<void>(renderer.handle_transcript_selection_mouse(
+      {.key = ava::tui::terminal::Key::MouseLeftDrag, .mouse_column = selection_geometry.canvas_left + 4, .mouse_row = selection_row}, never_toggle,
+      never_toggle));
+  static_cast<void>(renderer.handle_transcript_selection_mouse(
+      {.key = ava::tui::terminal::Key::MouseLeftRelease, .mouse_column = selection_geometry.canvas_left + 4, .mouse_row = selection_row}, never_toggle,
+      never_toggle));
+  bool const transcript_selected = renderer.transcript().has_selection();
+  auto const selection_session_replaced = frontend.replace_session_identity();
+  auto const selection_transitioned = session_transition.apply(frontend.frontend()->read_committed_session_id());
+  bool const selection_reset =
+      selection_frame && transcript_selected && selection_session_replaced && selection_transitioned && !renderer.transcript().has_selection();
+  expect(selection_reset, "session transition retires actual transcript selection authority");
+
   return changed_state_ok && unchanged_state_ok && jobs_still_available && rapid_replacements_ok && identity_round_trip_ok && history_browsing_reset &&
-         jump_and_scroll_reset;
+         jump_and_scroll_reset && sidebar_count_reset && tool_history_seeded && selection_reset;
 }
 
 bool test_active_run_session_transition_discards_prior_session_events()
@@ -512,30 +546,30 @@ bool test_active_run_session_transition_discards_prior_session_events()
   frontend_fixture = &frontend;
   frontend.seed_committed_todos({{.id = "old-todo", .content = "OLD TODO", .status = ava::agent::TodoStatus::InProgress}});
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().sidebar = presentation.sidebar();
-  presentation.screen().queued_messages = {{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}};
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  presentation.publish_visible_sidebar(presentation.sidebar());
+  presentation.publish_queued_messages({{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}});
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
-  presentation.sidebar().activity = {{.id = "old-activity", .label = "tool", .detail = "OLD ACTIVITY"}};
-  presentation.sidebar().modified_files = {{.path = "old-preloaded.cpp"}};
+  presentation.publish_run_activity({{.id = "old-activity", .label = "tool", .detail = "OLD ACTIVITY"}});
+  presentation.publish_modified_files({{.path = "old-preloaded.cpp"}});
   ava::tui::Composer draft_state;
   draft_state.record_submission("OLD HISTORY PROMPT");
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
+  ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.screen(), grants, renderer, event_loop.loop());
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.screen());
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_select_list);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
-  ava::tui::RuntimeMermaidPresentationController mermaid(presentation.screen(), renderer, transcript_search, {});
+  ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
   ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
 
@@ -629,25 +663,25 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
         return ava::tui::TuiSubmitResult{};
       };
       ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-      ava::tui::PendingAttachments attachments(presentation.screen());
+      ava::tui::PendingAttachments attachments(presentation);
       ava::tui::TuiSessionGrantRegistry grants;
       ava::tui::Composer draft_state;
-      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
-      ava::tui::SelectorHost active_select_list(presentation.screen());
+      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
+      ava::tui::SelectorHost active_select_list(presentation);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
       ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                                  ava::core::Application::instance().terminal_context());
-      ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.screen(), grants, renderer, event_loop.loop());
+      ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
       ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                           attachments);
-      ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.screen());
+      ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
       ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                           attachments);
-      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_select_list);
+      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                                 attachments, grants);
-      ava::tui::RuntimeMermaidPresentationController mermaid(presentation.screen(), renderer, transcript_search, {});
+      ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
       ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                      navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
 
@@ -734,13 +768,13 @@ bool test_attached_prompt_render_failure_returns_io()
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
   tui_test_support::TuiFrontEndFixture frontend;
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::SidebarSnapshot sidebar;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, composer);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
   renderer.attach_loop(event_loop.loop());
   ava::tui::TuiSessionGrantRegistry grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, grants, renderer, event_loop.loop());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   bool passed = true;
   for (bool permission : {false, true})
   {
@@ -780,13 +814,12 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
 {
   EventLoopFixture event_loop;
   tui_test_support::TuiFrontEndFixture frontend;
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::SidebarSnapshot sidebar;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, composer);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
   renderer.attach_loop(event_loop.loop());
   ava::tui::TuiSessionGrantRegistry grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, grants, renderer, event_loop.loop());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   bool passed = true;
   for (bool throws : {false, true})
   {
@@ -832,15 +865,13 @@ bool test_atomic_search_input_prompt_precedence()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 80));
 
   ava::tui::TuiRuntimeOptions options;
-  ava::tui::ComposerSnapshot snapshot;
-  snapshot.session_id = "search_prompt_race";
-  snapshot.width = 80;
-  snapshot.height = 12;
-  ava::tui::SidebarSnapshot sidebar;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  presentation.finish_session_transition("search_prompt_race");
+  presentation.publish_dimensions(80, 12);
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, draft_state);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
   ava::tui::TuiSessionGrantRegistry session_grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, session_grants, renderer, event_loop.loop());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, session_grants, renderer, event_loop.loop());
   coordinator.open_admission();
   auto resolver = coordinator.question_resolver();
 
@@ -1013,13 +1044,12 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().sidebar = presentation.sidebar();
-  presentation.screen().input = "NAV-DRAFT-KEEP";
-  presentation.screen().input_cursor = presentation.screen().input.size();
+  presentation.publish_visible_sidebar(presentation.sidebar());
   ava::tui::Composer draft_state;
-  draft_state.replace_draft(presentation.screen().input, presentation.screen().input_cursor);
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
+  draft_state.replace_draft("NAV-DRAFT-KEEP");
+  presentation.publish_composer(draft_state);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
 
   navigation.jump_to_bottom("live tail");
   auto const live_before_wheel = renderer.transcript().scroll_offset();
@@ -1092,8 +1122,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   // consumes terminal rows, while ordinary three-row scrolling remains draft-sovereign.
   static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 40));
   draft_state.replace_draft(std::string(180, 'x'), 73);
-  presentation.screen().input = draft_state.draft().text;
-  presentation.screen().input_cursor = draft_state.draft().cursor;
+  presentation.publish_composer(draft_state);
   auto const wrapped_draft_before = draft_state.draft().text;
   auto const wrapped_cursor_before = draft_state.draft().cursor;
   auto const page = navigation.transcript_page_size();
@@ -1176,28 +1205,25 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().sidebar = presentation.sidebar();
-  presentation.screen().processing = true;
-  presentation.screen().input = "STREAM-DRAFT-KEEP";
-  presentation.screen().input_cursor = presentation.screen().input.size();
-  presentation.screen().active_run_hint = ava::tui::runtime_views::active_run_hint_for(frontend.frontend()->key_bindings());
+  presentation.publish_visible_sidebar(presentation.sidebar());
+  presentation.publish_processing(true);
   ava::tui::Composer draft_state;
-  draft_state.replace_draft(presentation.screen().input, presentation.screen().input_cursor);
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
+  draft_state.replace_draft("STREAM-DRAFT-KEEP");
+  presentation.publish_composer(draft_state);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
 
   if (!renderer.render())
     return false;
 
   auto const [width, height] = ava::tui::terminal_size();
-  presentation.screen().width = width;
-  presentation.screen().height = height;
+  presentation.publish_dimensions(width, height);
   auto const max_scroll = renderer.prepare_transcript_layout();
   if (max_scroll == 0)
     return false;
   // Detach while the active-run contextual row is already reserved (processing=true, count=0).
-  renderer.transcript().scroll_up(3, max_scroll);
-  presentation.screen().transcript_scroll_offset = renderer.transcript().scroll_offset();
-  presentation.screen().transcript_new_output_count = 0;
+  renderer.navigate_transcript(std::min(max_scroll, renderer.transcript().scroll_offset() + 3));
+  presentation.publish_transcript_scroll(renderer.transcript().scroll_offset());
+  presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
   if (!renderer.render())
     return false;
 
@@ -1209,11 +1235,12 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
   // Stream continues while detached without publishing count into the snapshot (UpdatedNoRender path).
   constexpr int kNewOutputCount = 35;
-  presentation.screen().transcript.back().text += "\n" + build_stream_text(30, 30 + kNewOutputCount - 1);
-  ++presentation.screen().transcript_generation;
-  renderer.transcript().complete_transcript_update(detached_update, 0, static_cast<std::size_t>(kNewOutputCount));
-  presentation.screen().transcript_new_output_count = 0;
-  presentation.screen().processing = false;
+  auto continued_transcript = presentation.screen().transcript;
+  continued_transcript.back().text += "\n" + build_stream_text(30, 30 + kNewOutputCount - 1);
+  presentation.publish_transcript(std::move(continued_transcript));
+  renderer.complete_transcript_update(detached_update, 0, static_cast<std::size_t>(kNewOutputCount));
+  presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
+  presentation.publish_processing(false);
 
   auto const rendered = renderer.render();
   auto const after_numbers = numbered_window(renderer.painted_frame().surfaces);
@@ -1228,9 +1255,9 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
   renderer.attach_loop(event_loop.loop());
   auto const before_attached_paint = renderer.painted_frame().surfaces;
-  renderer.transcript().return_to_live_tail();
-  presentation.screen().transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"});
-  ++presentation.screen().transcript_generation;
+  renderer.show_live_tail(ava::tui::LiveTailReason::Navigation);
+  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"}));
+  presentation.invalidate_transcript_layout();
   bool const footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
   bool const full_queued = renderer.render();
   bool const later_footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
@@ -1239,8 +1266,8 @@ bool test_detached_completion_publish_preserves_numbered_window()
   bool const full_dominated_footer = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("ATTACHED-FULL-FRAME") != std::string::npos;
 
   auto const before_handoff = renderer.painted_frame().surfaces;
-  presentation.screen().transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "HANDOFF-FULL-FRAME"});
-  ++presentation.screen().transcript_generation;
+  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "HANDOFF-FULL-FRAME"}));
+  presentation.invalidate_transcript_layout();
   bool const handoff_queued = renderer.render();
   bool const handoff_still_deferred = renderer.painted_frame().surfaces == before_handoff;
   bool const handoff_painted = renderer.paint_for_handoff();
@@ -1249,8 +1276,8 @@ bool test_detached_completion_publish_preserves_numbered_window()
                                  handoff_queued && handoff_still_deferred && handoff_painted && handoff_visible;
   expect(attached_contract, "attached renderer defers urgent painting to the batch, retains Full over Footer, and paints synchronously for a handoff");
   // Crossing a frame deadline during input must paint without another service_due pass.
-  presentation.screen().transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "DEADLINE-CROSSED-DURING-INPUT"});
-  ++presentation.screen().transcript_generation;
+  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "DEADLINE-CROSSED-DURING-INPUT"}));
+  presentation.invalidate_transcript_layout();
   bool const scheduled = renderer.request_render();
   std::this_thread::sleep_until(std::chrono::steady_clock::now() + ava::tui::FrameScheduler::kFrameInterval);
   bool const painted_without_timer_dispatch = renderer.paint_ready_frame();
@@ -1275,13 +1302,12 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
 
     tui_test_support::TuiFrontEndFixture frontend(options);
     ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-    presentation.screen().sidebar = presentation.sidebar();
-    presentation.screen().input = "FIT-DRAFT-KEEP";
-    presentation.screen().input_cursor = presentation.screen().input.size();
+    presentation.publish_visible_sidebar(presentation.sidebar());
     ava::tui::Composer draft_state;
-    draft_state.replace_draft(presentation.screen().input, presentation.screen().input_cursor);
-    ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-    ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
+    draft_state.replace_draft("FIT-DRAFT-KEEP");
+    presentation.publish_composer(draft_state);
+    ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+    ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
 
     auto const draft_before = draft_state.draft().text;
     auto const cursor_before = draft_state.draft().cursor;
@@ -1518,8 +1544,10 @@ bool test_settings_close_restores_preview_and_selector_storage()
 {
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.screen().show_images = true;
-  ava::tui::SelectorHost selectors(presentation.screen());
+  auto display = frontend.frontend()->display_settings_snapshot();
+  display.show_images = true;
+  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  ava::tui::SelectorHost selectors(presentation);
   ava::tui::SettingsDialog settings(*frontend.frontend(), presentation, selectors, ava::core::Application::instance().terminal_context());
   settings.open();
   auto row_for = [&](std::string_view value) {
@@ -1591,9 +1619,9 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::SelectorHost active_select_list(presentation);
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
@@ -1610,11 +1638,11 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   preview.begin(DisplayPresentationBaseline{.show_images = true, .image_width_cells = 60});
   if (auto off = settings_preview_overlay_for_action("settings:images.off", presentation.screen()))
     preview.update(std::move(*off));
-  preview.apply_image_overlay(presentation.screen());
+  presentation.publish_display_preview(preview);
   // Stage sunrise so the applied custom-theme catalog refresh is visible before any final render.
   if (auto sunrise = settings_preview_overlay_for_action("theme:sunrise", presentation.screen()))
     preview.update(std::move(*sunrise));
-  preview.apply_image_overlay(presentation.screen());
+  presentation.publish_display_preview(preview);
 
   auto const outcome = action_controller.maybe_reload_display_settings();
   bool const applied_signal = outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
@@ -1625,7 +1653,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   bool const hydrate_kept_prior_overlay =
       ava::tui::tui_theme_preview_active() && ava::tui::active_tui_theme().name == "sunrise" && ava::tui::active_tui_theme().revision.find("sunrise-v1") == 0;
 
-  reapply_settings_preview_after_display_reload(preview, presentation.screen());
+  presentation.reapply_display_preview(preview);
   bool const staged_before_render = preview.authoritative.show_images == false && preview.active() && preview.overlay && preview.overlay->theme &&
                                     preview.overlay->theme->revision == "sunrise-v2" && ava::tui::active_tui_theme().revision.find("sunrise-v2") == 0 &&
                                     ava::tui::active_tui_theme().palette && ava::tui::active_tui_theme().palette->composer_bg == 237 &&
@@ -1635,7 +1663,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   bool const rendered = renderer.render();
 
   preview.cancel();
-  preview.apply_image_overlay(presentation.screen());
+  presentation.publish_display_preview(preview);
   bool const esc_restores_new_authority = !preview.active() && !presentation.screen().show_images && !ava::tui::tui_theme_preview_active();
 
   // Unchanged poll uses explicit nullopt signal.
@@ -1694,10 +1722,10 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.refresh_after_backend_action(*frontend.frontend());
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
@@ -1873,25 +1901,25 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
     return ava::tui::parse_key_bindings_json(R"({"mode_toggle":"Alt+Y","app.overview.toggle":"F6"})");
   };
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
-  ava::tui::SelectorHost active_select_list(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
+  ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.screen(), grants, renderer, event_loop.loop());
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.screen());
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_select_list);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
-  ava::tui::RuntimeMermaidPresentationController mermaid(presentation.screen(), renderer, transcript_search, {});
+  ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
   ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
   ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
@@ -4731,10 +4759,10 @@ void run_tui_composer_rendering_tests_part_4()
       //      options.provider = "fake";
       //      options.model = "m1";
       ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-      ava::tui::PendingAttachments attachments(presentation.screen());
+      ava::tui::PendingAttachments attachments(presentation);
       ava::tui::TuiSessionGrantRegistry grants;
-      presentation.screen().startup_overview = overview;
-      ava::tui::SelectorHost active(presentation.screen());
+      presentation.initialize_startup_overview(*frontend.frontend(), overview);
+      ava::tui::SelectorHost active(presentation);
       active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       active.update_selection(0, "mode");
 
@@ -4746,18 +4774,18 @@ void run_tui_composer_rendering_tests_part_4()
              "ordinary backend refreshes preserve an open popup-local overview and its query identity");
 
       // Competing authority / explicit close.
-      ava::tui::close_startup_overview_presentation(presentation.screen(), active);
+      ava::tui::close_startup_overview_presentation(presentation, active);
       expect(active.kind() == ava::tui::ActiveSelectList::None && !presentation.screen().select_list,
              "prompt/competing authority closes ActiveSelectList::Overview and clears the select-list");
 
       // Re-open then session transition must close overview.
-      presentation.screen().startup_overview = overview;
+      presentation.initialize_startup_overview(*frontend.frontend(), overview);
       active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       ava::tui::Composer draft_state;
-      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
+      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
-      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active);
+      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active);
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active, attachments,
                                                                 grants);
       auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), "session_overview_other");

@@ -16,6 +16,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 class RuntimeRenderer;
 class TranscriptSearchController;
 class TuiEventLoop;
@@ -34,7 +36,7 @@ class RuntimeMermaidPresentationController final
  public:
   // Snapshot, renderer and transcript search outlive this TUI-thread owner.
   // The bridge remains the external authority for asynchronous rendering work.
-  RuntimeMermaidPresentationController(ComposerSnapshot& snapshot, RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
+  RuntimeMermaidPresentationController(RuntimePresentationState& presentation, RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
                                        TuiMermaidRenderBridge bridge);
   RuntimeMermaidPresentationController(RuntimeMermaidPresentationController const&) = delete;
   RuntimeMermaidPresentationController& operator=(RuntimeMermaidPresentationController const&) = delete;
@@ -83,7 +85,7 @@ class RuntimeMermaidPresentationController final
   // Timer callback publishes readiness only; bridge calls wait for application servicing.
   void mark_retry_due(TuiTimer::Clock::time_point now);
 
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   RuntimeRenderer& renderer_;
   TranscriptSearchController& transcript_search_;
   TuiMermaidRenderBridge bridge_;

@@ -14,6 +14,7 @@
 #include "debug.h"
 
 namespace ava::tui {
+class RuntimePresentationState;
 
 class SelectorHost;
 
@@ -43,8 +44,8 @@ struct TuiActiveNonblockingCommandDispatchResult
 // Clears a selector and paints truthful pending authority state before invoking
 // a synchronous model/session callback. The callback remains authoritative;
 // this boundary never applies or claims its result.
-[[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, SelectorHost& selectors, std::string pending_status,
-                                                                             std::function<bool()> const& render,
+[[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(RuntimePresentationState& presentation, SelectorHost& selectors,
+                                                                             std::string pending_status, std::function<bool()> const& render,
                                                                              std::function<ava::core::Result<std::string>()> const& callback);
 
 // Presentation-only state transitions used by the interactive reasoning-cycle path.

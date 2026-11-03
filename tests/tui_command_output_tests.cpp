@@ -293,7 +293,8 @@ void test_unauthorized_command_event_tool_merge()
   };
 
   ava::tui::ActiveRunEvents events(true, "/compact", "request-compact", {}, {});
-  ava::tui::ComposerSnapshot snapshot;
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   auto running_tool = ava::event::ToolPayload{};
   running_tool.call_id = "running-call";
   running_tool.tool = "bash";
@@ -304,7 +305,7 @@ void test_unauthorized_command_event_tool_merge()
       ava::tui::QueuedRuntimeEvent(ava::event::RuntimeEvent{{}, ava::event::ToolProgressEvent{.payload = std::move(running_tool)}}, {}),
       completed_tool("request-unauthorized", "error-call", "write_file", "tool failed", "error"),
       completed_tool("request-authorized", "authorized-call", "grep", "must stay provider-only", "success")};
-  events.apply_batch(queued, snapshot);
+  events.apply_batch(queued, presentation);
   events.authorize_receipts({"request-authorized"});
 
   auto backend_duplicate = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,

@@ -1,5 +1,8 @@
 #include "sys.h"
 #include "SelectorHost.h"
+#include "SelectorInputController.h"
+#include "SessionSelector.h"
+#include "SettingsDialog.h"
 
 #include <algorithm>
 #include <iterator>
@@ -7,9 +10,9 @@
 
 namespace ava::tui {
 
-SelectorHost::SelectorHost(ComposerSnapshot& snapshot) : snapshot_(snapshot)
+SelectorHost::SelectorHost(RuntimePresentationState& presentation) : presentation_(presentation)
 {
-  snapshot_.select_list.reset();
+  presentation_.publish_selector(std::nullopt);
 }
 
 ActiveSelectList SelectorHost::kind() const noexcept
@@ -19,20 +22,21 @@ ActiveSelectList SelectorHost::kind() const noexcept
 
 std::optional<SelectListView> const& SelectorHost::view() const noexcept
 {
-  return snapshot_.select_list;
+  return presentation_.screen().select_list;
 }
 
 SelectListItemView const* SelectorHost::selected_item(std::size_t index) const noexcept
 {
-  return snapshot_.select_list && index < snapshot_.select_list->items.size() ? &snapshot_.select_list->items[index] : nullptr;
+  return presentation_.screen().select_list && index < presentation_.screen().select_list->items.size() ? &presentation_.screen().select_list->items[index]
+                                                                                                        : nullptr;
 }
 
 std::vector<std::string> SelectorHost::visible_values(std::string const& query) const
 {
   std::vector<std::string> values;
-  if (!snapshot_.select_list)
+  if (!presentation_.screen().select_list)
     return values;
-  auto filtered = *snapshot_.select_list;
+  auto filtered = *presentation_.screen().select_list;
   filtered.query = query;
   for (auto const index : filter_select_list_items(filtered))
   {
@@ -47,14 +51,14 @@ void SelectorHost::open(ActiveSelectList kind, SelectListView view)
   // A visible selector needs a concrete kind; use close() to remove it.
   ASSERT(kind != ActiveSelectList::None);
   kind_ = kind;
-  snapshot_.select_list = std::move(view);
+  presentation_.publish_selector(std::move(view));
 }
 
 void SelectorHost::replace(SelectListView view)
 {
   // Open a selector with its kind before replacing its view.
   ASSERT(kind_ != ActiveSelectList::None);
-  snapshot_.select_list = std::move(view);
+  presentation_.publish_selector(std::move(view));
 }
 
 void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t selected_index, std::string query)
@@ -78,34 +82,146 @@ void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t
 void SelectorHost::close()
 {
   kind_ = ActiveSelectList::None;
-  snapshot_.select_list.reset();
+  presentation_.publish_selector(std::nullopt);
 }
 
 void SelectorHost::update_selection(std::size_t index, std::string query)
 {
   // Selection input must target an open selector; open() supplies its initial state.
-  ASSERT(snapshot_.select_list);
-  snapshot_.select_list->selected_item_index = index;
-  snapshot_.select_list->query = std::move(query);
+  ASSERT(presentation_.screen().select_list);
+  presentation_.publish_selector_selection(index, std::move(query));
 }
 
 void SelectorHost::set_subtitle(std::string subtitle)
 {
-  if (!snapshot_.select_list)
+  if (!presentation_.screen().select_list)
     return;
-  snapshot_.select_list->subtitle = std::move(subtitle);
+  presentation_.publish_selector_subtitle(std::move(subtitle));
 }
 
 void SelectorHost::replace_rows(std::size_t first_changed, std::vector<SelectListItemView> rows, std::size_t selected, std::string query, std::string subtitle)
 {
   // Open the selector before replacing rows; its title and layout must already exist.
-  ASSERT(snapshot_.select_list);
-  auto& view = *snapshot_.select_list;
-  view.items.resize(std::min(first_changed, view.items.size()));
-  view.items.insert(view.items.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
-  view.selected_item_index = selected;
-  view.query = std::move(query);
-  view.subtitle = std::move(subtitle);
+  ASSERT(presentation_.screen().select_list);
+  presentation_.publish_selector_rows(first_changed, std::move(rows), selected, std::move(query), std::move(subtitle));
+}
+
+SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const& input, SelectorInputController& classifier, SettingsDialog& settings,
+                                              SessionSelector& sessions)
+{
+  settings.synchronize_selector();
+  if (kind() != ActiveSelectList::Session)
+    sessions.cancel_confirmation();
+  auto classified = classifier.classify(input);
+  using Action = SelectListInputAction;
+  using Request = SelectorDispatchRequest;
+  if (classified.action == Action::Redraw && view())
+  {
+    sessions.cancel_confirmation();
+    if (kind() == ActiveSelectList::Settings)
+      settings.highlight(classified.selected_item_index, std::move(classified.query));
+    else
+      update_selection(classified.selected_item_index, std::move(classified.query));
+  }
+  else if (classified.action == Action::Cancel && kind() == ActiveSelectList::Settings)
+    settings.cancel();
+  else if (classified.action == Action::Resolve && kind() == ActiveSelectList::Settings)
+  {
+    auto result = settings.resolve(classified);
+    if (auto* draft = std::get_if<DraftCommand>(&result))
+      return {.request = Request::DraftCompletion, .text = std::move(draft->command), .status = std::move(draft->status)};
+    switch (std::get<SettingsDialogRequest>(result))
+    {
+      case SettingsDialogRequest::None:
+        return {};
+      case SettingsDialogRequest::Models:
+        return {.request = Request::Models};
+      case SettingsDialogRequest::ScopedModels:
+        return {.request = Request::ScopedModels};
+      case SettingsDialogRequest::Reasoning:
+        return {.request = Request::Reasoning};
+      case SettingsDialogRequest::Hotkeys:
+        return {.request = Request::Hotkeys};
+    }
+  }
+  else if (classified.action == Action::SummarizeParent && kind() == ActiveSelectList::Session && view())
+  {
+    sessions.cancel_confirmation();
+    auto const* item = selected_item(classified.selected_item_index);
+    if (!item || !item->enabled || item->value.empty())
+    {
+      presentation_.publish_status("parent summary is unavailable from this row");
+      return {.request = Request::Beep};
+    }
+    // Copy only when transferring this selector into the summary operation. Ordinary
+    // selection changes keep the host's single row allocation in place.
+    auto prior = *view();
+    prior.query = std::move(classified.query);
+    prior.selected_item_index = classified.selected_item_index;
+    auto identity = item->value;
+    return {
+        .request = Request::SummarizeParent, .text = std::move(identity), .previous_view = std::move(prior), .selected_index = classified.selected_item_index};
+  }
+  else if (kind() == ActiveSelectList::Session &&
+           (classified.action == Action::CycleSort || classified.action == Action::ToggleNamedFilter || classified.action == Action::TogglePathDisplay ||
+            classified.action == Action::ToggleArchivedFilter || classified.action == Action::ToggleLabelTimestamp))
+    sessions.browse(classified);
+  else if (kind() == ActiveSelectList::Session && (classified.action == Action::Rename || classified.action == Action::Label))
+  {
+    if (auto command = sessions.draft_command(classified))
+      return {.request = Request::DraftCommand, .text = std::move(*command)};
+  }
+  else if (kind() == ActiveSelectList::Session && (classified.action == Action::BranchParent || classified.action == Action::BranchChild))
+  {
+    if (auto result = sessions.navigate_branch(classified))
+      return *result ? SelectorDispatchResult{.request = Request::OpenedSession, .text = std::move(**result)}
+                     : SelectorDispatchResult{.request = Request::SessionError, .text = result->error().format()};
+  }
+  else if (classified.action == Action::Archive || classified.action == Action::ArchiveNoninvasive)
+  {
+    // Closing nested Settings must retire its temporary preview before another
+    // surface can observe local display settings.
+    if (kind() == ActiveSelectList::Settings)
+    {
+      settings.close();
+      presentation_.publish_status("view canceled");
+    }
+    else
+      sessions.archive(classified);
+  }
+  else if (classified.action == Action::Resolve && kind() == ActiveSelectList::Session)
+  {
+    auto result = sessions.resolve(classified);
+    return result ? SelectorDispatchResult{.request = Request::OpenedSession, .text = std::move(*result)}
+                  : SelectorDispatchResult{.request = Request::SessionError, .text = result.error().format()};
+  }
+  else
+  {
+    if (classified.action == Action::Resolve || classified.action == Action::Cancel)
+      sessions.cancel_confirmation();
+    auto result = classifier.handle(classified);
+    if (auto const* request = std::get_if<SelectorInputRequest>(&result))
+    {
+      if (*request == SelectorInputRequest::RenderFailed)
+        return {.request = Request::RenderFailed};
+      if (*request == SelectorInputRequest::OpenReasoning)
+        return {.request = Request::CurrentReasoning};
+    }
+    else
+    {
+      auto& [kind, text] = std::get<std::pair<SelectorInputTextKind, std::string>>(result);
+      switch (kind)
+      {
+        case SelectorInputTextKind::DraftCommand:
+          return {.request = Request::DraftCompletion, .text = std::move(text), .status = "keybinding edit command drafted"};
+        case SelectorInputTextKind::OpenedSession:
+          return {.request = Request::OpenedSession, .text = std::move(text)};
+        case SelectorInputTextKind::ReconcileSessionError:
+          return {.request = Request::SessionError, .text = std::move(text)};
+      }
+    }
+  }
+  return {};
 }
 
 } // namespace ava::tui

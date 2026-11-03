@@ -145,15 +145,15 @@ void test_prompt_stash_runtime_controller()
     return ava::tui::TuiSubmitResult{};
   };
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  ava::tui::PendingAttachments attachments(presentation.screen());
+  ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
-  ava::tui::SelectorHost active_list(presentation.screen());
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::SelectorHost active_list(presentation);
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings, attachments);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_list);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list,
                                                             attachments, grants);
   auto const transcript_unchanged = [&]() {
@@ -207,7 +207,7 @@ void test_prompt_stash_runtime_controller()
 
   // Selecting text ends history browsing, so check selection cleanup independently.
   draft_state.replace_draft("selected draft", 0);
-  draft_state.extend_selection_to(4, presentation.screen());
+  draft_state.extend_selection_to(4);
   expect(draft_state.selection_bounds() && controller.trigger() && !draft_state.selection_bounds() && draft_state.draft().text.empty() &&
              controller.stash().size() == 1 && presentation.screen().status == "prompt stashed",
          "prompt stash clears an active composer selection when storing the draft");

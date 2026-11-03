@@ -3,6 +3,7 @@
 #include "TuiWakeup.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_render_internal.h"
+#include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 
 #include <algorithm>
@@ -63,9 +64,9 @@ bool same_block(Record const& record, detail::MermaidFenceBlock const& block)
 
 }  // namespace
 
-RuntimeMermaidPresentationController::RuntimeMermaidPresentationController(ComposerSnapshot& snapshot, RuntimeRenderer& renderer,
+RuntimeMermaidPresentationController::RuntimeMermaidPresentationController(RuntimePresentationState& presentation, RuntimeRenderer& renderer,
                                                                            TranscriptSearchController& transcript_search, TuiMermaidRenderBridge bridge)
-    : snapshot_(snapshot),
+    : presentation_(presentation),
       renderer_(renderer),
       transcript_search_(transcript_search),
       bridge_(std::move(bridge)),
@@ -120,8 +121,9 @@ MermaidServiceOutcome RuntimeMermaidPresentationController::service_if_changed()
 {
   auto const completion_ready = completion_ready_->exchange(false, std::memory_order_acq_rel);
   auto const retry_due = std::exchange(retry_due_, false);
-  if (shutdown_ || (!completion_ready && !retry_due && observed_snapshot_ && observed_transcript_generation_ == snapshot_.transcript_generation &&
-                    session_id_ == snapshot_.session_id && config_epoch_ == snapshot_.mermaid_config_epoch && enabled_ == snapshot_.mermaid_enabled))
+  if (shutdown_ || (!completion_ready && !retry_due && observed_snapshot_ && observed_transcript_generation_ == presentation_.screen().transcript_generation &&
+                    session_id_ == presentation_.screen().session_id && config_epoch_ == presentation_.screen().mermaid_config_epoch &&
+                    enabled_ == presentation_.screen().mermaid_enabled))
     return MermaidServiceOutcome::Unchanged;
   return service();
 }
@@ -348,18 +350,15 @@ std::vector<detail::MermaidAcceptedPresentation> RuntimeMermaidPresentationContr
 
 MermaidServiceOutcome RuntimeMermaidPresentationController::service()
 {
-  auto old_anchor = detail::TranscriptViewportAnchor{};
-  auto const preserve_viewport = renderer_.transcript().scroll_offset() > 0;
-  if (preserve_viewport && !renderer_.transcript().has_deferred_update())
-    old_anchor = renderer_.capture_transcript_viewport();
+  auto const update = renderer_.begin_transcript_update();
   auto const changed_item = service_projection();
   synchronize_retry_timer();
   if (!changed_item)
     return MermaidServiceOutcome::Unchanged;
   transcript_search_.refresh_after_transcript_mutation(0, *changed_item);
-  if (preserve_viewport)
+  if (update.detached())
   {
-    renderer_.transcript().defer_update(old_anchor, 0);
+    renderer_.complete_transcript_update(update, 0, 0);
     renderer_.synchronize_detached_transcript_layout();
   }
   return renderer_.request_render(FrameRenderKind::Full) ? MermaidServiceOutcome::Changed : MermaidServiceOutcome::RenderFailed;
@@ -367,7 +366,7 @@ MermaidServiceOutcome RuntimeMermaidPresentationController::service()
 
 std::optional<std::size_t> RuntimeMermaidPresentationController::service_projection()
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   if (shutdown_)
     return std::nullopt;
   auto const before = accepted_identities(records_);
@@ -421,9 +420,8 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     auto accepted = accepted_presentations();
     // Immutable snapshot copies share these bounded accepted results; helper
     // process ownership remains with the external bridge.
-    snapshot.mermaid_projection = accepted.empty() ? std::shared_ptr<detail::MermaidTranscriptProjection const>{}
-                                                   : std::make_shared<detail::MermaidTranscriptProjection const>(config_epoch_, std::move(accepted));
-    ++snapshot.transcript_generation;
+    presentation_.publish_mermaid(accepted.empty() ? std::shared_ptr<detail::MermaidTranscriptProjection const>{}
+                                                   : std::make_shared<detail::MermaidTranscriptProjection const>(config_epoch_, std::move(accepted)));
   }
   observed_transcript_generation_ = snapshot.transcript_generation;
   observed_snapshot_ = true;

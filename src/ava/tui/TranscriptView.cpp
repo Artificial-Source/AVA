@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "TranscriptView.h"
+#include "runtime_state_internal.h"
 
 #include <algorithm>
 
@@ -29,8 +30,7 @@ std::optional<TranscriptPositionIndicatorState::Clock::time_point> TranscriptPos
   return expires_at_;
 }
 
-TranscriptView::TranscriptView(ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& composer)
-    : snapshot_(snapshot), sidebar_(sidebar), composer_(composer)
+TranscriptView::TranscriptView(RuntimePresentationState& presentation, Composer& composer) : presentation_(presentation), composer_(composer)
 {
 }
 std::size_t TranscriptView::scroll_offset() const noexcept
@@ -67,7 +67,7 @@ void TranscriptView::return_to_live_tail()
 void TranscriptView::freeze_sidebar()
 {
   if (scroll_offset_ > 0 && !frozen_sidebar_)
-    frozen_sidebar_ = sidebar_;
+    frozen_sidebar_ = presentation_.sidebar();
 }
 void TranscriptView::settle_scroll_change()
 {
@@ -125,7 +125,7 @@ void TranscriptView::complete_transcript_update(TranscriptUpdate const& update, 
     new_output_count_ += event_count;
     // Keep new-output projection lag until the existing paint/synchronization
     // boundary; UpdatedNoRender relies on the last painted chrome authority.
-    snapshot_.transcript_scroll_offset = scroll_offset_;
+    presentation_.publish_transcript_scroll(scroll_offset_);
   }
   else
   {
@@ -140,8 +140,7 @@ void TranscriptView::discard_deferred_update()
 }
 void TranscriptView::publish_chrome()
 {
-  snapshot_.transcript_scroll_offset = scroll_offset_;
-  snapshot_.transcript_new_output_count = scroll_offset_ > 0 ? new_output_count_ : 0;
+  presentation_.publish_transcript_chrome(scroll_offset_, scroll_offset_ > 0 ? new_output_count_ : 0);
 }
 void TranscriptView::synchronize_deferred(detail::TranscriptLayoutCache const& layout, std::size_t maximum)
 {
@@ -151,7 +150,7 @@ void TranscriptView::synchronize_deferred(detail::TranscriptLayoutCache const& l
   {
     deferred_viewport_.reset();
     new_output_count_ = 0;
-    snapshot_.transcript_new_output_count = 0;
+    presentation_.publish_transcript_chrome(presentation_.screen().transcript_scroll_offset, 0);
     return;
   }
   auto const deferred = *deferred_viewport_;
@@ -160,7 +159,7 @@ void TranscriptView::synchronize_deferred(detail::TranscriptLayoutCache const& l
     new_output_count_ = 0;
   publish_chrome();
   selection_.apply_item_index_shift(deferred.item_index_shift, layout.layout);
-  static_cast<void>(selection_.ensure_authority(layout, &snapshot_));
+  static_cast<void>(selection_.ensure_authority(layout, &presentation_.screen()));
   deferred_viewport_.reset();
 }
 void TranscriptView::begin_frame()
@@ -168,7 +167,7 @@ void TranscriptView::begin_frame()
   if (scroll_offset_ == 0)
     return_to_live_tail();
   publish_chrome();
-  snapshot_.sidebar = scroll_offset_ > 0 && frozen_sidebar_ ? *frozen_sidebar_ : sidebar_;
+  presentation_.publish_visible_sidebar(scroll_offset_ > 0 && frozen_sidebar_ ? *frozen_sidebar_ : presentation_.sidebar());
 }
 void TranscriptView::clamp_for_frame(std::size_t maximum)
 {
@@ -180,7 +179,7 @@ void TranscriptView::finish_frame_viewport()
   {
     new_output_count_ = 0;
     frozen_sidebar_.reset();
-    snapshot_.sidebar = sidebar_;
+    presentation_.publish_visible_sidebar(presentation_.sidebar());
   }
   publish_chrome();
 }
@@ -188,13 +187,13 @@ void TranscriptView::clear_selection()
 {
   selection_.clear();
   pending_live_selection_item_index_shift_ = 0;
-  selection_.publish(snapshot_);
+  presentation_.publish_selection(selection_);
 }
 void TranscriptView::cancel_pointer_interaction()
 {
   selection_.cancel_pointer_interaction();
   composer_.end_pointer_selection();
-  selection_.publish(snapshot_);
+  presentation_.publish_selection(selection_);
 }
 void TranscriptView::note_live_selection_item_shift(std::ptrdiff_t item_index_shift) noexcept
 {
@@ -221,7 +220,7 @@ bool TranscriptView::prepare_selection_authority(detail::TranscriptLayoutCache c
     selection_.apply_item_index_shift(pending_live_selection_item_index_shift_, layout.layout);
     pending_live_selection_item_index_shift_ = 0;
   }
-  return selection_.ensure_authority(layout, &snapshot_);
+  return selection_.ensure_authority(layout, &presentation_.screen());
 }
 void TranscriptView::publish_selection(detail::TranscriptLayoutCache const& layout, TranscriptSelectionProjection projection)
 {
@@ -237,9 +236,9 @@ void TranscriptView::publish_selection(detail::TranscriptLayoutCache const& layo
       selection_.apply_item_index_shift(pending_live_selection_item_index_shift_, layout.layout);
       pending_live_selection_item_index_shift_ = 0;
     }
-    static_cast<void>(selection_.ensure_authority(layout, &snapshot_));
+    static_cast<void>(selection_.ensure_authority(layout, &presentation_.screen()));
   }
-  selection_.publish(snapshot_);
+  presentation_.publish_selection(selection_);
 }
 TranscriptSelectionMouseResult TranscriptView::handle_mouse(InputEvent const& event, detail::TranscriptLayoutCache const& layout,
                                                             std::function<bool(std::size_t)> const& toggle_tool,
@@ -253,7 +252,7 @@ TranscriptSelectionMouseResult TranscriptView::handle_mouse(InputEvent const& ev
   }
   auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift : std::ptrdiff_t{0};
   auto const before = scroll_offset_;
-  auto const result = selection_.handle_mouse(event, snapshot_, layout, &composer_, scroll_offset_, shift, toggle_tool, toggle_thinking);
+  auto const result = selection_.handle_mouse(event, presentation_, layout, &composer_, scroll_offset_, shift, toggle_tool, toggle_thinking);
   if (scroll_offset_ != before)
   {
     show_position_indicator(Clock::now());
@@ -263,7 +262,7 @@ TranscriptSelectionMouseResult TranscriptView::handle_mouse(InputEvent const& ev
 }
 bool TranscriptView::copy_selection(detail::TranscriptLayoutCache const& layout)
 {
-  return selection_.copy_selection(snapshot_, layout);
+  return selection_.copy_selection(presentation_, layout);
 }
 bool TranscriptView::service_autoscroll(detail::TranscriptLayoutCache const& layout, bool authority_ready, Clock::time_point now)
 {
@@ -272,7 +271,7 @@ bool TranscriptView::service_autoscroll(detail::TranscriptLayoutCache const& lay
   if (authority_ready)
   {
     auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift : std::ptrdiff_t{0};
-    result = selection_.tick_edge_autoscroll(snapshot_, layout, scroll_offset_, shift, now);
+    result = selection_.tick_edge_autoscroll(presentation_, layout, scroll_offset_, shift, now);
   }
   if (scroll_offset_ != before)
   {
@@ -284,7 +283,7 @@ bool TranscriptView::service_autoscroll(detail::TranscriptLayoutCache const& lay
 void TranscriptView::show_position_indicator(Clock::time_point now)
 {
   position_indicator_.show(now);
-  snapshot_.transcript_position_indicator_visible = true;
+  presentation_.publish_position_indicator(true);
 }
 bool TranscriptView::position_indicator_visible() const noexcept
 {
@@ -294,7 +293,7 @@ bool TranscriptView::expire_position_indicator(Clock::time_point now)
 {
   if (!position_indicator_.expire_if_due(now))
     return false;
-  snapshot_.transcript_position_indicator_visible = false;
+  presentation_.publish_position_indicator(false);
   return true;
 }
 std::optional<TranscriptView::Clock::time_point> TranscriptView::indicator_deadline() const noexcept
@@ -310,9 +309,8 @@ void TranscriptView::reset_for_session_transition()
   clear_selection();
   return_to_live_tail();
   position_indicator_.hide();
-  snapshot_.transcript_scroll_offset = 0;
-  snapshot_.transcript_new_output_count = 0;
-  snapshot_.transcript_position_indicator_visible = false;
+  presentation_.publish_transcript_chrome(0, 0);
+  presentation_.publish_position_indicator(false);
 }
 
 } // namespace ava::tui

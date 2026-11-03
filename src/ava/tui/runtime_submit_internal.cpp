@@ -68,7 +68,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
 
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
   draft_state_.cancel_escape();
   std::optional<std::string> immediate_slash_submission;
@@ -91,7 +91,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (auto const disabled_reason =
               slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()))
       {
-        snapshot.status = "command disabled: " + *disabled_reason;
+        presentation_state_.publish_status("command disabled: " + *disabled_reason);
         ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
@@ -108,8 +108,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       else
       {
         draft_state_.accept_completion(std::move(selection_text.text), selection_text.cursor);
-        snapshot.status = "command selected - press Enter to run";
-        snapshot.selected_slash_command_index = draft_state_.completion_index();
+        presentation_state_.publish_status("command selected - press Enter to run");
+        presentation_state_.publish_completion(draft_state_);
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -117,7 +117,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
       draft_state_.reset_completion();
-      snapshot.selected_slash_command_index = draft_state_.completion_index();
+      presentation_state_.publish_completion(draft_state_);
     }
   }
   if (navigation_.file_reference_palette_active())
@@ -125,14 +125,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
-      snapshot.status = "reference disabled: " + *disabled_reason;
+      presentation_state_.publish_status("reference disabled: " + *disabled_reason);
       ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
     draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    snapshot.status = "file reference selected";
-    snapshot.selected_slash_command_index = draft_state_.completion_index();
+    presentation_state_.publish_status("file reference selected");
+    presentation_state_.publish_completion(draft_state_);
     if (!renderer_.render())
     {
       return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -144,14 +144,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
-      snapshot.status = "path disabled: " + *disabled_reason;
+      presentation_state_.publish_status("path disabled: " + *disabled_reason);
       ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
     draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    snapshot.status = "path selected";
-    snapshot.selected_slash_command_index = draft_state_.completion_index();
+    presentation_state_.publish_status("path selected");
+    presentation_state_.publish_completion(draft_state_);
     if (!renderer_.render())
     {
       return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -175,7 +175,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         success = prompt_stash_.clear();
       else
       {
-        snapshot.status = "invalid_argument: usage: /stash [pop|clear]";
+        presentation_state_.publish_status("invalid_argument: usage: /stash [pop|clear]");
         ava::core::Application::instance().terminal_context().beep();
         success = renderer_.request_render();
       }
@@ -252,22 +252,22 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
           {
             auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
             presentation_state_.apply_local_display_settings(frontend_, std::move(reloaded->settings));
-            settle_local_command_status(snapshot, std::move(status));
+            presentation_state_.publish_local_status(std::move(status));
           }
           else
           {
-            open_command_error(snapshot, submitted, reloaded.error().format());
+            presentation_state_.publish_local_error(submitted, reloaded.error().format());
             ava::core::Application::instance().terminal_context().beep();
           }
         }
         else if (auto reloaded = frontend_.on_reload_key_bindings())
         {
           presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
-          settle_local_command_status(snapshot, "keybindings reloaded");
+          presentation_state_.publish_local_status("keybindings reloaded");
         }
         else
         {
-          open_command_error(snapshot, submitted, reloaded.error().format());
+          presentation_state_.publish_local_error(submitted, reloaded.error().format());
           ava::core::Application::instance().terminal_context().beep();
         }
         if (!renderer_.render())
@@ -283,13 +283,13 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       auto applied = frontend_.on_local_display_settings_action(submitted);
       if (!applied)
       {
-        open_command_error(snapshot, submitted, applied.error().format());
+        presentation_state_.publish_local_error(submitted, applied.error().format());
         ava::core::Application::instance().terminal_context().beep();
       }
       else
       {
         presentation_state_.apply_local_display_settings(frontend_, std::move(applied->settings));
-        settle_local_command_completion(snapshot, submitted, std::move(applied->output));
+        presentation_state_.publish_local_completion(submitted, std::move(applied->output));
       }
       if (!renderer_.render())
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -299,8 +299,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     {
       draft_state_.record_submission(submitted);
       selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
-      snapshot.status = "keybindings opened";
-      renderer_.transcript().request_live_tail();
+      presentation_state_.publish_status("keybindings opened");
+      renderer_.show_live_tail(LiveTailReason::Requested);
       if (!renderer_.request_render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -310,10 +310,9 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/sidebar")
     {
       draft_state_.record_submission(submitted);
-      snapshot.sidebar_drawer_visible = true;
-      snapshot.sidebar_drawer_scroll_offset = 0;
-      renderer_.transcript().reset_for_local_command();
-      snapshot.status = "session overview opened";
+      presentation_state_.publish_sidebar_drawer(true, 0);
+      renderer_.show_live_tail(LiveTailReason::LocalCommand);
+      presentation_state_.publish_status("session overview opened");
       if (!renderer_.request_render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -324,7 +323,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     {
       draft_state_.record_submission(submitted);
       settings_dialog_.open();
-      renderer_.transcript().request_live_tail();
+      renderer_.show_live_tail(LiveTailReason::Requested);
       if (!renderer_.request_render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -345,7 +344,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       draft_state_.record_submission(submitted);
       if (attach_target->empty())
       {
-        open_command_error(snapshot, submitted, "invalid_argument: usage: /attach <image-path>");
+        presentation_state_.publish_local_error(submitted, "invalid_argument: usage: /attach <image-path>");
         ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
@@ -356,7 +355,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       auto imported = frontend_.on_attach_image(*attach_target);
       if (!imported)
       {
-        open_command_error(snapshot, submitted, imported.error().format());
+        presentation_state_.publish_local_error(submitted, imported.error().format());
         ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
@@ -379,17 +378,17 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (transcript_index && navigation_.toggle_tool_details_at(*transcript_index))
       {
         auto const& tool = *snapshot.transcript[*transcript_index].tool;
-        snapshot.status = (tool_query->empty() ? "latest tool details " : "matching tool details ") +
-                          std::string(to_string(detail::tool_card_presentation(tool, snapshot.tool_presentation)));
+        presentation_state_.publish_status((tool_query->empty() ? "latest tool details " : "matching tool details ") +
+                                           std::string(to_string(detail::tool_card_presentation(tool, snapshot.tool_presentation))));
       }
       else if (indexed_tool)
       {
-        open_command_output(snapshot, submitted, {}, {indexed_tool->tool});
+        presentation_state_.publish_local_output(submitted, {}, {indexed_tool->tool});
       }
       else
       {
         auto const status = tool_query->empty() ? std::string("no tool details to show") : std::string("no matching tool details to show");
-        open_command_error(snapshot, submitted, status);
+        presentation_state_.publish_local_error(submitted, status);
         ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
@@ -405,11 +404,11 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (diff_text)
       {
         auto const title = diff_query->empty() ? std::string_view("Latest tool diff:") : std::string_view("Matching tool diff:");
-        open_command_output(snapshot, submitted, {diff_transcript_text(title, *diff_text)});
+        presentation_state_.publish_local_output(submitted, {diff_transcript_text(title, *diff_text)});
       }
       else
       {
-        open_command_error(snapshot, submitted, diff_query->empty() ? "no tool diff to show" : "no matching tool diff to show");
+        presentation_state_.publish_local_error(submitted, diff_query->empty() ? "no tool diff to show" : "no matching tool diff to show");
         ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
@@ -442,7 +441,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       {
         auto const result = runtime_transcript::copy_latest_assistant_message(snapshot.transcript);
         copied = result == runtime_transcript::LatestAssistantCopyResult::RequestSent;
-        snapshot.status = runtime_transcript::latest_assistant_copy_status(result);
+        presentation_state_.publish_status(runtime_transcript::latest_assistant_copy_status(result));
         handled_latest_assistant = true;
       }
       else if (target.name == "tool" || target.name == "tools")
@@ -466,13 +465,13 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       else if (target.name == "user")
       {
         valid_target = false;
-        snapshot.status = "copy user-turn selector unavailable";
+        presentation_state_.publish_status("copy user-turn selector unavailable");
       }
       else
       {
         valid_target = false;
-        snapshot.status = "invalid_argument: unsupported copy target\n  target: " + target.name +
-                          "\n  supported: user [query], tool [query], diff [query], permission [query]";
+        presentation_state_.publish_status("invalid_argument: unsupported copy target\n  target: " + target.name +
+                                           "\n  supported: user [query], tool [query], diff [query], permission [query]");
       }
 
       if (valid_target && !handled_latest_assistant)
@@ -480,20 +479,20 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         copied = copy_text && copy_text_to_terminal_clipboard(*copy_text);
         if (copied)
         {
-          snapshot.status = std::move(copied_status);
+          presentation_state_.publish_status(std::move(copied_status));
         }
         else
         {
-          snapshot.status = copy_text ? "clipboard copy failed" : std::move(missing_status);
+          presentation_state_.publish_status(copy_text ? "clipboard copy failed" : std::move(missing_status));
         }
       }
       if (copied)
       {
-        settle_local_command_status(snapshot, snapshot.status);
+        presentation_state_.publish_local_status(snapshot.status);
       }
       else
       {
-        open_command_error(snapshot, submitted, snapshot.status);
+        presentation_state_.publish_local_error(submitted, snapshot.status);
         ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
@@ -506,14 +505,15 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     {
       draft_state_.record_submission(submitted);
       if (submitted == "/details compact")
-        snapshot.tool_presentation = ToolPresentation::Compact;
+        presentation_state_.publish_tool_presentation(ToolPresentation::Compact);
       else if (submitted == "/details rich")
-        snapshot.tool_presentation = ToolPresentation::Rich;
+        presentation_state_.publish_tool_presentation(ToolPresentation::Rich);
       else if (submitted == "/details expanded")
-        snapshot.tool_presentation = ToolPresentation::Expanded;
+        presentation_state_.publish_tool_presentation(ToolPresentation::Expanded);
       else
-        snapshot.tool_presentation = snapshot.tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich : ToolPresentation::Expanded;
-      settle_local_command_status(snapshot, "tool details " + std::string(to_string(snapshot.tool_presentation)));
+        presentation_state_.publish_tool_presentation(snapshot.tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich
+                                                                                                               : ToolPresentation::Expanded);
+      presentation_state_.publish_local_status("tool details " + std::string(to_string(snapshot.tool_presentation)));
       if (!renderer_.render())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -528,19 +528,19 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         auto const item_index = navigation_.toggle_latest_thinking_details();
         if (item_index && *item_index < snapshot.transcript.size())
         {
-          settle_local_command_status(
-              snapshot, snapshot.transcript[*item_index].thinking_expanded ? "latest thinking details expanded" : "latest thinking details collapsed");
+          presentation_state_.publish_local_status(snapshot.transcript[*item_index].thinking_expanded ? "latest thinking details expanded"
+                                                                                                      : "latest thinking details collapsed");
         }
         else
         {
-          snapshot.status = "no completed long thinking block to expand";
+          presentation_state_.publish_status("no completed long thinking block to expand");
           ava::core::Application::instance().terminal_context().beep();
         }
       }
       else
       {
         action_controller_.toggle_thinking_visibility();
-        settle_local_command_status(snapshot, snapshot.status);
+        presentation_state_.publish_local_status(snapshot.status);
       }
       if (!renderer_.render())
       {

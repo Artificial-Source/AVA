@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "runtime_state_internal.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
@@ -1036,8 +1037,8 @@ bool RuntimeTranscriptSelectionState::finish_header_click(ComposerSnapshot const
   return false;
 }
 
-bool RuntimeTranscriptSelectionState::autoscroll_for_row(ComposerSnapshot& snapshot, TranscriptSelectionViewport const& viewport, std::size_t screen_row,
-                                                         std::size_t& transcript_scroll_offset)
+bool RuntimeTranscriptSelectionState::autoscroll_for_row(RuntimePresentationState& presentation, TranscriptSelectionViewport const& viewport,
+                                                         std::size_t screen_row, std::size_t& transcript_scroll_offset)
 {
   if (viewport.transcript_height == 0 || screen_row == 0)
     return false;
@@ -1056,7 +1057,7 @@ bool RuntimeTranscriptSelectionState::autoscroll_for_row(ComposerSnapshot& snaps
     changed = true;
   }
   if (changed)
-    snapshot.transcript_scroll_offset = transcript_scroll_offset;
+    presentation.publish_transcript_scroll(transcript_scroll_offset);
   return changed;
 }
 
@@ -1089,11 +1090,12 @@ std::optional<RuntimeTranscriptSelectionState::Clock::time_point> RuntimeTranscr
   return edge_autoscroll_due_;
 }
 
-TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autoscroll(ComposerSnapshot& snapshot,
+TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autoscroll(RuntimePresentationState& presentation,
                                                                                      detail::TranscriptLayoutCache const& layout_cache,
                                                                                      std::size_t& transcript_scroll_offset,
                                                                                      std::ptrdiff_t frozen_to_live_item_index_shift, Clock::time_point now)
 {
+  auto const& snapshot = presentation.screen();
   if (!edge_autoscroll_due_ || now < *edge_autoscroll_due_)
     return TranscriptSelectionMouseResult::Ignored;
   if (drag_ != DragKind::Selecting || snapshot.permission_prompt || snapshot.question_prompt || snapshot.plugin_ui_modal || snapshot.select_list ||
@@ -1108,7 +1110,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
     cancel_pointer_interaction();
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
-  auto const changed = autoscroll_for_row(snapshot, *viewport, edge_mouse_row_, transcript_scroll_offset);
+  auto const changed = autoscroll_for_row(presentation, *viewport, edge_mouse_row_, transcript_scroll_offset);
   if (!changed)
   {
     edge_autoscroll_due_.reset();
@@ -1140,17 +1142,18 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
     edge_autoscroll_due_ = now + kEdgeAutoscrollInterval;
   else
     edge_autoscroll_due_.reset();
-  snapshot.status = "selection active";
+  presentation.publish_status("selection active");
   return TranscriptSelectionMouseResult::HandledNeedsRender;
 }
 
-TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(InputEvent const& event, ComposerSnapshot& snapshot,
+TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(InputEvent const& event, RuntimePresentationState& presentation,
                                                                              detail::TranscriptLayoutCache const& layout_cache, Composer* draft_state,
                                                                              std::size_t& transcript_scroll_offset,
                                                                              std::ptrdiff_t frozen_to_live_item_index_shift,
                                                                              std::function<bool(std::size_t)> const& toggle_tool,
                                                                              std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now)
 {
+  auto const& snapshot = presentation.screen();
   using Key = terminal::Key;
   auto const key = event.key;
   if (key == Key::MousePointerCancel)
@@ -1202,7 +1205,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
       pending_click_count_ = 1;
       arm_header(hit->endpoint, hit->tool_header, hit->thinking_header, snapshot, frozen_to_live_item_index_shift);
       // Do not start a selection yet; drag converts the arm into selection.
-      snapshot.status = "selection started";
+      presentation.publish_status("selection started");
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
     pending_click_word_ = *word;
@@ -1210,7 +1213,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     if (pending_click_count_ == 2)
     {
       begin_granular_selection(*word, SelectionGranularity::Word, snapshot, draft_state, frozen_to_live_item_index_shift);
-      snapshot.status = "selection active";
+      presentation.publish_status("selection active");
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
     if (pending_click_count_ == 3)
@@ -1222,11 +1225,11 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
         return TranscriptSelectionMouseResult::Ignored;
       }
       begin_granular_selection(*line, SelectionGranularity::Line, snapshot, draft_state, frozen_to_live_item_index_shift);
-      snapshot.status = "selection active";
+      presentation.publish_status("selection active");
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
     begin_selection(hit->endpoint, snapshot, draft_state, frozen_to_live_item_index_shift);
-    snapshot.status = "selection active";
+    presentation.publish_status("selection active");
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
 
@@ -1239,7 +1242,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
 
     auto viewport = viewport_for(snapshot, layout_cache);
     if (viewport)
-      static_cast<void>(autoscroll_for_row(snapshot, *viewport, event.mouse_row, transcript_scroll_offset));
+      static_cast<void>(autoscroll_for_row(presentation, *viewport, event.mouse_row, transcript_scroll_offset));
 
     // Re-hit after possible autoscroll against the same frozen authority.
     auto drag_hit = hit_test(snapshot, layout_cache, event.mouse_row, event.mouse_column, frozen_to_live_item_index_shift);
@@ -1285,7 +1288,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     viewport = viewport_for(snapshot, layout_cache);
     if (viewport)
       update_edge_autoscroll(*viewport, event, transcript_scroll_offset, now);
-    snapshot.status = "selection active";
+    presentation.publish_status("selection active");
     return TranscriptSelectionMouseResult::HandledNeedsRender;
   }
 
@@ -1307,7 +1310,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
         extend_selection(hit->endpoint, snapshot, frozen_to_live_item_index_shift);
         drag_ = DragKind::None;
         reset_click_chain();
-        snapshot.status = "selection active";
+        presentation.publish_status("selection active");
         return TranscriptSelectionMouseResult::HandledNeedsRender;
       }
       // Map the frozen armed item through the exact accumulated deferred shift and
@@ -1342,11 +1345,11 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
           range_.reset();
           anchor_source_authority_.reset();
           focus_source_authority_.reset();
-          snapshot.status.clear();
+          presentation.publish_status({});
         }
         else if (range_)
         {
-          snapshot.status = "selection active";
+          presentation.publish_status("selection active");
         }
         commit_click(completed_word, completed_count, snapshot, frozen_to_live_item_index_shift, now);
       }
@@ -1384,7 +1387,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
       granular_anchor_.reset();
       granularity_ = SelectionGranularity::Character;
       commit_click(*word, count, snapshot, frozen_to_live_item_index_shift, now);
-      snapshot.status = "selection active";
+      presentation.publish_status("selection active");
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
     if (count == 3)
@@ -1400,7 +1403,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
       granular_anchor_.reset();
       granularity_ = SelectionGranularity::Character;
       commit_click(*word, count, snapshot, frozen_to_live_item_index_shift, now);
-      snapshot.status = "selection active";
+      presentation.publish_status("selection active");
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
 
@@ -1415,35 +1418,35 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
   return TranscriptSelectionMouseResult::Ignored;
 }
 
-bool RuntimeTranscriptSelectionState::copy_selection(ComposerSnapshot& snapshot, detail::TranscriptLayoutCache const& layout_cache)
+bool RuntimeTranscriptSelectionState::copy_selection(RuntimePresentationState& presentation, detail::TranscriptLayoutCache const& layout_cache)
 {
   if (!range_)
   {
-    snapshot.status = "no selection to copy";
+    presentation.publish_status("no selection to copy");
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   if (!has_compatible_authority(layout_cache))
   {
-    snapshot.status = "selection unavailable in current view";
+    presentation.publish_status("selection unavailable in current view");
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   auto extracted = extract_transcript_selection_text(layout_cache.layout, *range_, kSelectionCopySoftCeiling);
   if (extracted.oversize)
   {
-    snapshot.status = "selection too large to copy";
+    presentation.publish_status("selection too large to copy");
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   if (extracted.text.empty())
   {
-    snapshot.status = "no selection to copy";
+    presentation.publish_status("no selection to copy");
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   auto const copied = runtime_transcript::copy_text_to_terminal_clipboard(extracted.text);
-  snapshot.status = copied ? "selection copy request sent" : "clipboard copy failed";
+  presentation.publish_status(copied ? "selection copy request sent" : "clipboard copy failed");
   if (!copied)
     ava::core::Application::instance().terminal_context().beep();
   // Keep selection after success.

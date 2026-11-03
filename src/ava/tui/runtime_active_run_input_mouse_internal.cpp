@@ -23,7 +23,7 @@ namespace ava::tui {
 ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   using Key = terminal::Key;
@@ -39,14 +39,14 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
         draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, *clicked))
         {
-          snapshot.status = "command disabled: " + *disabled_reason;
+          presentation_state_.publish_status("command disabled: " + *disabled_reason);
           ava::core::Application::instance().terminal_context().beep();
         }
         else
         {
           auto selection = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, *clicked);
           draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Pointer);
-          snapshot.status = "command selected - press Enter to queue";
+          presentation_state_.publish_status("command selected - press Enter to queue");
         }
         return to_input_handling(renderer_.request_render());
       }
@@ -56,14 +56,14 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
         draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
-          snapshot.status = "reference disabled: " + *disabled_reason;
+          presentation_state_.publish_status("reference disabled: " + *disabled_reason);
           ava::core::Application::instance().terminal_context().beep();
         }
         else
         {
           auto selection = navigation_.selected_completion_text(*clicked);
           draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Pointer);
-          snapshot.status = "file reference selected";
+          presentation_state_.publish_status("file reference selected");
         }
         return to_input_handling(renderer_.request_render());
       }
@@ -73,14 +73,14 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
         draft_state_.select_completion(*clicked);
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
-          snapshot.status = "path disabled: " + *disabled_reason;
+          presentation_state_.publish_status("path disabled: " + *disabled_reason);
           ava::core::Application::instance().terminal_context().beep();
         }
         else
         {
           auto selection = navigation_.selected_completion_text(*clicked);
           draft_state_.accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::PointerPath);
-          snapshot.status = "path selected";
+          presentation_state_.publish_status("path selected");
         }
         return to_input_handling(renderer_.request_render());
       }
@@ -98,7 +98,7 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
       {
         renderer_.clear_transcript_selection();
         draft_state_.begin_pointer_selection(*cursor, active_event.key == Key::MouseLeftPress, ComposerEditContext::ActiveRun);
-        snapshot.status = "cursor moved";
+        presentation_state_.publish_status("cursor moved");
         return to_input_handling(renderer_.request_render());
       }
     }
@@ -107,7 +107,7 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
       if (auto const cursor = composer_input_cursor_for_screen_position(snapshot, active_event.mouse_row, active_event.mouse_column))
       {
         draft_state_.extend_pointer_selection(*cursor, ComposerEditContext::ActiveRun);
-        snapshot.status = draft_state_.selection_bounds() ? "selection active" : "cursor moved";
+        presentation_state_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
       }
       if (active_event.key == Key::MouseLeftRelease)
         draft_state_.end_pointer_selection();
@@ -131,13 +131,14 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
 ActiveRun::InputHandling ActiveRun::handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
 
   if (is_action(active_event, TuiAction::DetailsToggle))
   {
     renderer_.synchronize_detached_transcript_layout();
-    snapshot.tool_presentation = snapshot.tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich : ToolPresentation::Expanded;
-    snapshot.status = "tool details " + std::string(to_string(snapshot.tool_presentation));
+    presentation_state_.publish_tool_presentation(snapshot.tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich
+                                                                                                           : ToolPresentation::Expanded);
+    presentation_state_.publish_status("tool details " + std::string(to_string(snapshot.tool_presentation)));
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::OverviewToggle))
@@ -146,12 +147,12 @@ ActiveRun::InputHandling ActiveRun::handle_restricted_toggle_input(runtime_input
   }
   if (is_action(active_event, TuiAction::VariantCycle))
   {
-    snapshot.status = "reasoning can be changed between turns";
+    presentation_state_.publish_status("reasoning can be changed between turns");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::ReasoningSelect))
   {
-    snapshot.status = "thinking mode can be changed between turns";
+    presentation_state_.publish_status("thinking mode can be changed between turns");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::ThinkingToggle))
@@ -161,22 +162,23 @@ ActiveRun::InputHandling ActiveRun::handle_restricted_toggle_input(runtime_input
   }
   if (is_action(active_event, TuiAction::ModelSelect))
   {
-    snapshot.status = "model selection is available between turns";
+    presentation_state_.publish_status("model selection is available between turns");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::ModelCycleForward) || is_action(active_event, TuiAction::ModelCycleBackward))
   {
-    snapshot.status = "model cycling is available between turns";
+    presentation_state_.publish_status("model cycling is available between turns");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::MessageDequeue))
   {
-    snapshot.status = "queued-message restore is available during active runs";
+    presentation_state_.publish_status("queued-message restore is available during active runs");
     return to_input_handling(renderer_.request_render());
   }
   if (active_event.key == terminal::Key::Space)
   {
-    draft_state_.insert_input(active_input, snapshot, ComposerEditContext::ActiveRun);
+    presentation_state_.clear_local_feedback();
+    static_cast<void>(apply_composer_result(draft_state_.insert_input(active_input, ComposerEditContext::ActiveRun)));
     return to_input_handling(renderer_.request_render());
   }
   return InputHandling::Unhandled;

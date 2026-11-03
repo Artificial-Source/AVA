@@ -4,6 +4,7 @@
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
+#include "ava/tui/runtime_state_internal.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -344,8 +345,8 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(ComposerSnapshot& snapshot)
-    : snapshot_(snapshot), state_(std::make_shared<RuntimePluginUiCoordinatorState>()), runtime_token_(std::make_shared<int const>(1))
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(RuntimePresentationState& presentation)
+    : presentation_(presentation), state_(std::make_shared<RuntimePluginUiCoordinatorState>()), runtime_token_(std::make_shared<int const>(1))
 {
 }
 
@@ -427,22 +428,22 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
 bool RuntimePluginUiCoordinator::clear_surface(std::optional<TuiPluginUiBinding> const& binding)
 {
   bool changed = false;
-  if (!binding || (snapshot_.plugin_ui_dock && snapshot_.plugin_ui_dock->binding == *binding))
+  if (!binding || (presentation_.screen().plugin_ui_dock && presentation_.screen().plugin_ui_dock->binding == *binding))
   {
-    changed = changed || snapshot_.plugin_ui_dock.has_value();
-    snapshot_.plugin_ui_dock.reset();
+    changed = changed || presentation_.screen().plugin_ui_dock.has_value();
+    presentation_.publish_plugin_dock(std::nullopt);
   }
-  if (!binding || (snapshot_.plugin_ui_modal && snapshot_.plugin_ui_modal->binding == *binding))
+  if (!binding || (presentation_.screen().plugin_ui_modal && presentation_.screen().plugin_ui_modal->binding == *binding))
   {
-    changed = changed || snapshot_.plugin_ui_modal.has_value();
-    snapshot_.plugin_ui_modal.reset();
+    changed = changed || presentation_.screen().plugin_ui_modal.has_value();
+    presentation_.publish_plugin_modal(std::nullopt);
   }
   return changed;
 }
 
 bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   bool fits = true;
   if (snapshot.plugin_ui_dock)
   {
@@ -460,14 +461,14 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
 
   cancel_active();
   deadline_timer_.cancel();
-  snapshot.plugin_ui_dock.reset();
-  snapshot.plugin_ui_modal.reset();
+  presentation_.publish_plugin_dock(std::nullopt);
+  presentation_.publish_plugin_modal(std::nullopt);
   return true;
 }
 
 TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now)
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   TuiPluginUiPollResult result;
   result.changed = cancel_unfittable_surfaces();
   std::deque<PluginUiQueueRecord> records;
@@ -501,7 +502,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
         state_->outstanding_modal.reset();
     }
     complete_modal(modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    snapshot.plugin_ui_modal.reset();
+    presentation_.publish_plugin_modal(std::nullopt);
     result.changed = true;
   }
 
@@ -545,7 +546,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
         continue;
       }
 
-      snapshot.plugin_ui_dock = std::move(candidate);
+      presentation_.publish_plugin_dock(std::move(candidate));
       result.changed = true;
       complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Ack, .option_id = {}});
       continue;
@@ -581,7 +582,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
       continue;
     }
 
-    snapshot.plugin_ui_modal = std::move(candidate);
+    presentation_.publish_plugin_modal(std::move(candidate));
     state_->visible_modal = record.modal;
     result.changed = true;
   }
@@ -603,7 +604,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict,
 
 TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const& event)
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   if (!snapshot.plugin_ui_modal)
     return TuiPluginUiInputResult::Unhandled;
 
@@ -611,8 +612,8 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
   if (event.key == Key::CtrlC)
   {
     cancel_active();
-    snapshot.plugin_ui_modal.reset();
-    snapshot.plugin_ui_dock.reset();
+    presentation_.publish_plugin_modal(std::nullopt);
+    presentation_.publish_plugin_dock(std::nullopt);
     return TuiPluginUiInputResult::RequestStop;
   }
 
@@ -621,7 +622,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
   if (cancel_unfittable_surfaces())
     return TuiPluginUiInputResult::Redraw;
 
-  auto& view = *snapshot.plugin_ui_modal;
+  auto const& view = *snapshot.plugin_ui_modal;
   auto const option_count = view.kind == TuiPluginUiKind::Confirm ? std::size_t{2} : view.options.size();
   if (event.key == Key::ArrowUp || event.key == Key::ArrowDown || event.key == Key::PageUp || event.key == Key::PageDown || event.key == Key::Home ||
       event.key == Key::End)
@@ -637,7 +638,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
       selected = 0;
     else
       selected = option_count - 1;
-    view.selected_option = selected;
+    presentation_.publish_plugin_selection(selected);
     return TuiPluginUiInputResult::Redraw;
   }
 
@@ -646,7 +647,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
     auto const option = plugin_ui_modal_option_for_screen_position(snapshot, event.mouse_row, event.mouse_column);
     if (!option || *option >= option_count)
       return TuiPluginUiInputResult::Handled;
-    view.selected_option = *option;
+    presentation_.publish_plugin_selection(*option);
   }
   else if (event.key == Key::MouseLeftDrag || event.key == Key::MouseLeftRelease || event.key == Key::MousePointerCancel || event.key == Key::MouseWheelUp ||
            event.key == Key::MouseWheelDown)
@@ -683,7 +684,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(InputEvent const
       state_->outstanding_modal.reset();
   }
   complete_modal(modal, std::move(reply));
-  snapshot.plugin_ui_modal.reset();
+  presentation_.publish_plugin_modal(std::nullopt);
   return TuiPluginUiInputResult::Redraw;
 }
 

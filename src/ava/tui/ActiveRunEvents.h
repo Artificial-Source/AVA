@@ -30,7 +30,7 @@ class ActiveRunEvents final
   ActiveRunEvents(bool command, std::string submitted, std::string initial_request_id, std::vector<TranscriptItem> baseline,
                   std::vector<ava::agent::TodoItem> todos);
 
-  void apply_batch(std::span<QueuedTuiEvent const> events, ComposerSnapshot& snapshot);
+  void apply_batch(std::span<QueuedTuiEvent const> events, RuntimePresentationState& presentation);
   void authorize_receipts(std::vector<std::string> request_ids);
   [[nodiscard]] std::optional<std::vector<TranscriptItem>> take_transcript_projection();
   [[nodiscard]] CappedTranscriptSnapshotUpdate apply_transcript_projection(std::vector<TranscriptItem>& destination, std::vector<TranscriptItem> turn);
@@ -49,9 +49,9 @@ class ActiveRunEvents final
  private:
   [[nodiscard]] TuiEventState& command_state(std::optional<std::string> const& request_id);
   [[nodiscard]] std::vector<TranscriptItem> authorized_transcript() const;
-  void apply_runtime(QueuedRuntimeEvent const& event, ComposerSnapshot& snapshot);
-  void apply_envelope(ava::event::EventEnvelope const& envelope, ComposerSnapshot& snapshot);
-  void apply_subagent_launch(ava::agent::SubagentLaunchNotification const& notification, ComposerSnapshot& snapshot);
+  void apply_runtime(QueuedRuntimeEvent const& event, RuntimePresentationState& presentation);
+  void apply_envelope(ava::event::EventEnvelope const& envelope, RuntimePresentationState& presentation);
+  void apply_subagent_launch(ava::agent::SubagentLaunchNotification const& notification, RuntimePresentationState& presentation);
 
   bool command_;
   ava::core::NoLogString submitted_;

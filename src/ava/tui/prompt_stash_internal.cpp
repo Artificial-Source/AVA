@@ -179,12 +179,11 @@ RuntimePromptStashController::RuntimePromptStashController(RuntimePresentationSt
 
 bool RuntimePromptStashController::trigger()
 {
-  auto& snapshot = presentation_state_.screen();
   if (draft_state_.draft().text.empty())
     return open_selector();
   if (attachments_.has_pending())
   {
-    snapshot.status = "cannot stash a prompt while image attachments are pending";
+    presentation_state_.publish_status("cannot stash a prompt while image attachments are pending");
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
@@ -194,18 +193,18 @@ bool RuntimePromptStashController::trigger()
     case PromptStashPushResult::Stored:
       draft_state_.reset_draft();
       draft_state_.reset_interaction();
-      snapshot.status = "prompt stashed";
+      presentation_state_.publish_status("prompt stashed");
       return renderer_.request_render();
     case PromptStashPushResult::EmptyDraft:
       return open_selector();
     case PromptStashPushResult::EntryTooLarge:
-      snapshot.status = "prompt stash entry exceeds 64 KiB expanded-text limit";
+      presentation_state_.publish_status("prompt stash entry exceeds 64 KiB expanded-text limit");
       break;
     case PromptStashPushResult::EntryLimitReached:
-      snapshot.status = "prompt stash is full (16 entries)";
+      presentation_state_.publish_status("prompt stash is full (16 entries)");
       break;
     case PromptStashPushResult::AggregateLimitReached:
-      snapshot.status = "prompt stash exceeds 256 KiB aggregate limit";
+      presentation_state_.publish_status("prompt stash exceeds 256 KiB aggregate limit");
       break;
   }
   ava::core::Application::instance().terminal_context().beep();
@@ -214,27 +213,25 @@ bool RuntimePromptStashController::trigger()
 
 bool RuntimePromptStashController::open_selector()
 {
-  auto& snapshot = presentation_state_.screen();
   selectors_.open(ActiveSelectList::PromptStash, stash_.select_list_view());
-  snapshot.status = stash_.empty() ? "prompt stash is empty" : "prompt stash opened";
+  presentation_state_.publish_status(stash_.empty() ? "prompt stash is empty" : "prompt stash opened");
   return renderer_.request_render();
 }
 
 bool RuntimePromptStashController::restore(std::uint64_t id)
 {
-  auto& snapshot = presentation_state_.screen();
   switch (draft_state_.restore_stashed(stash_, id))
   {
     case PromptStashRestoreResult::Restored:
       draft_state_.reset_interaction();
       selectors_.close();
-      snapshot.status = "stashed prompt restored";
+      presentation_state_.publish_status("stashed prompt restored");
       return renderer_.request_render();
     case PromptStashRestoreResult::NonemptyDraft:
-      snapshot.status = "cannot restore a stashed prompt over a nonempty draft";
+      presentation_state_.publish_status("cannot restore a stashed prompt over a nonempty draft");
       break;
     case PromptStashRestoreResult::NotFound:
-      snapshot.status = "stashed prompt is no longer available";
+      presentation_state_.publish_status("stashed prompt is no longer available");
       break;
   }
   ava::core::Application::instance().terminal_context().beep();
@@ -243,17 +240,16 @@ bool RuntimePromptStashController::restore(std::uint64_t id)
 
 bool RuntimePromptStashController::pop_latest()
 {
-  auto& snapshot = presentation_state_.screen();
   if (!draft_state_.draft().text.empty())
   {
-    snapshot.status = "cannot restore a stashed prompt over a nonempty draft";
+    presentation_state_.publish_status("cannot restore a stashed prompt over a nonempty draft");
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   auto const ids = stash_.ids_newest_first();
   if (ids.empty())
   {
-    snapshot.status = "prompt stash is empty";
+    presentation_state_.publish_status("prompt stash is empty");
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
@@ -262,20 +258,19 @@ bool RuntimePromptStashController::pop_latest()
 
 bool RuntimePromptStashController::clear()
 {
-  auto& snapshot = presentation_state_.screen();
   auto const count = stash_.size();
   stash_.clear();
   if (selectors_.kind() == ActiveSelectList::PromptStash)
   {
     selectors_.close();
   }
-  snapshot.status = count == 0 ? "prompt stash already empty" : "prompt stash cleared";
+  presentation_state_.publish_status(count == 0 ? "prompt stash already empty" : "prompt stash cleared");
   return renderer_.request_render();
 }
 
 std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEvent const& event)
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   if (selectors_.kind() != ActiveSelectList::PromptStash || !selectors_.view())
     return std::nullopt;
 
@@ -301,21 +296,21 @@ std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEve
   if (result.action == SelectListInputAction::Cancel)
   {
     selectors_.close();
-    snapshot.status = "view canceled";
+    presentation_state_.publish_status("view canceled");
     return renderer_.request_render();
   }
   if (result.action != SelectListInputAction::Resolve)
     return true;
   if (result.selected_item_index >= selectors_.view()->items.size())
   {
-    snapshot.status = "prompt stash is empty";
+    presentation_state_.publish_status("prompt stash is empty");
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   auto const id = stash_id_from_value(selectors_.view()->items[result.selected_item_index].value);
   if (!id)
   {
-    snapshot.status = "stashed prompt selection is invalid";
+    presentation_state_.publish_status("stashed prompt selection is invalid");
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }

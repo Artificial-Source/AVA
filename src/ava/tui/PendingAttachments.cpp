@@ -1,12 +1,12 @@
 #include "sys.h"
 #include "PendingAttachments.h"
-#include "ava/tui/composer.h"
+#include "ava/tui/runtime_state_internal.h"
 
 #include <utility>
 
 namespace ava::tui {
 
-PendingAttachments::PendingAttachments(ComposerSnapshot& screen) : screen_(screen)
+PendingAttachments::PendingAttachments(RuntimePresentationState& presentation) : presentation_(presentation)
 {
 }
 
@@ -15,7 +15,7 @@ void PendingAttachments::stage(ava::session::ImageAttachmentRef reference, Pendi
   references_.push_back(std::move(reference));
   try
   {
-    screen_.pending_attachments.push_back(std::move(badge));
+    presentation_.publish_attachment(std::move(badge));
   }
   catch (...)
   {
@@ -27,14 +27,14 @@ void PendingAttachments::stage(ava::session::ImageAttachmentRef reference, Pendi
 std::vector<ava::session::ImageAttachmentRef> PendingAttachments::take()
 {
   auto references = std::exchange(references_, {});
-  screen_.pending_attachments.clear();
+  presentation_.clear_attachment_badges();
   return references;
 }
 
 void PendingAttachments::clear() noexcept
 {
   references_.clear();
-  screen_.pending_attachments.clear();
+  presentation_.clear_attachment_badges();
 }
 
 } // namespace ava::tui

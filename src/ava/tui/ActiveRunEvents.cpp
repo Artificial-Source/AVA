@@ -103,7 +103,7 @@ TuiEventState& ActiveRunEvents::command_state(std::optional<std::string> const& 
   return request_states_.back().second;
 }
 
-void ActiveRunEvents::apply_runtime(QueuedRuntimeEvent const& event, ComposerSnapshot& snapshot)
+void ActiveRunEvents::apply_runtime(QueuedRuntimeEvent const& event, RuntimePresentationState& presentation)
 {
   apply_runtime_event(aggregate_, event.event, event.context);
   if (command_)
@@ -113,13 +113,13 @@ void ActiveRunEvents::apply_runtime(QueuedRuntimeEvent const& event, ComposerSna
   else
   {
     if (auto tool = runtime_event_tool_projection(aggregate_, event.event, event.context))
-      record_tui_tool(snapshot, std::move(*tool), TuiToolIndexOrigin::Provider);
+      presentation.publish_tool(std::move(*tool), TuiToolIndexOrigin::Provider);
     for (auto const& pending : aggregate_.pending_tools)
-      update_indexed_tui_tool(snapshot, pending.item);
+      presentation.publish_tool_update(pending.item);
   }
 }
 
-void ActiveRunEvents::apply_envelope(ava::event::EventEnvelope const& envelope, ComposerSnapshot& snapshot)
+void ActiveRunEvents::apply_envelope(ava::event::EventEnvelope const& envelope, RuntimePresentationState& presentation)
 {
   apply_control_event_envelope(aggregate_, envelope);
   if (command_ && !envelope_has_prompt_only_authority(envelope))
@@ -127,11 +127,11 @@ void ActiveRunEvents::apply_envelope(ava::event::EventEnvelope const& envelope, 
   if (!command_)
   {
     for (auto const& pending : aggregate_.pending_tools)
-      update_indexed_tui_tool(snapshot, pending.item);
+      presentation.publish_tool_update(pending.item);
   }
 }
 
-void ActiveRunEvents::apply_subagent_launch(ava::agent::SubagentLaunchNotification const& notification, ComposerSnapshot& snapshot)
+void ActiveRunEvents::apply_subagent_launch(ava::agent::SubagentLaunchNotification const& notification, RuntimePresentationState& presentation)
 {
   apply_subagent_launch_notification(aggregate_, notification);
   if (command_)
@@ -142,20 +142,20 @@ void ActiveRunEvents::apply_subagent_launch(ava::agent::SubagentLaunchNotificati
   else
   {
     for (auto const& pending : aggregate_.pending_tools)
-      update_indexed_tui_tool(snapshot, pending.item);
+      presentation.publish_tool_update(pending.item);
   }
 }
 
-void ActiveRunEvents::apply_batch(std::span<QueuedTuiEvent const> events, ComposerSnapshot& snapshot)
+void ActiveRunEvents::apply_batch(std::span<QueuedTuiEvent const> events, RuntimePresentationState& presentation)
 {
   for (auto const& event : events)
   {
     if (auto runtime = std::get_if<QueuedRuntimeEvent>(&event))
-      apply_runtime(*runtime, snapshot);
+      apply_runtime(*runtime, presentation);
     else if (auto envelope = std::get_if<ava::event::EventEnvelope>(&event))
-      apply_envelope(*envelope, snapshot);
+      apply_envelope(*envelope, presentation);
     else
-      apply_subagent_launch(std::get<ava::agent::SubagentLaunchNotification>(event), snapshot);
+      apply_subagent_launch(std::get<ava::agent::SubagentLaunchNotification>(event), presentation);
   }
   if (!events.empty())
   {

@@ -13,6 +13,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 struct ComposerSnapshot;
 struct RuntimePluginUiCoordinatorState;
 class TuiEventLoop;
@@ -39,7 +41,7 @@ class RuntimePluginUiCoordinator final
 {
  public:
   // TUI-thread owner; the borrowed projection outlives this coordinator.
-  explicit RuntimePluginUiCoordinator(ComposerSnapshot& snapshot);
+  explicit RuntimePluginUiCoordinator(RuntimePresentationState& presentation);
   ~RuntimePluginUiCoordinator();
 
   RuntimePluginUiCoordinator(RuntimePluginUiCoordinator const&) = delete;
@@ -79,7 +81,7 @@ class RuntimePluginUiCoordinator final
   [[nodiscard]] bool clear_surface(std::optional<TuiPluginUiBinding> const& binding = std::nullopt);
   void expire_submission(std::chrono::steady_clock::time_point now);
 
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   // Worker endpoint calls retain shared synchronized state until their modal wait
   // ends. Endpoints themselves hold weak references and cannot extend admission.
   std::shared_ptr<RuntimePluginUiCoordinatorState> state_;

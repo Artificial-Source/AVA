@@ -56,6 +56,7 @@ add_library(ava_tui
   "tool_cards.cpp"
   "TuiFrontEnd.cpp"
   "TuiSession.cpp"
+  "CommandOutput.cpp"
   "TuiInputDispatcher.cpp"
   "TuiEventLoop.cpp"
   "TuiTimer.cpp"

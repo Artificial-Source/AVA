@@ -45,8 +45,7 @@ ActiveRun::InputHandling ActiveRun::handle_composer_edit(runtime_input::RuntimeI
 ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
-  auto const& draft = draft_state_.draft();
+  auto const& snapshot = presentation_state_.screen();
 
   if (is_action(active_event, TuiAction::TranscriptHalfPageUp))
   {
@@ -83,56 +82,13 @@ ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::Runti
     navigation_.jump_to_bottom("live tail");
     return to_input_handling(renderer_.request_render());
   }
-  if (is_action(active_event, TuiAction::PalettePrev) && navigation_.slash_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = filter_slash_commands(draft.text, draft.cursor, snapshot.slash_commands).size();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching slash commands";
-    }
-    else
-    {
-      draft_state_.select_completion(previous_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()));
-      snapshot.status = "command " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
+  if (is_action(active_event, TuiAction::PalettePrev) && apply_composer_result(draft_state_.step_completion(CompletionStep::Previous, navigation_, snapshot)))
     return to_input_handling(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::PalettePrev) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching file references";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.previous_completion(draft_state_.completion_index()));
-      snapshot.status = "reference " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-    return to_input_handling(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::PalettePrev) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching paths";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.previous_completion(draft_state_.completion_index()));
-      snapshot.status = "path " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-    return to_input_handling(renderer_.request_render());
-  }
   if (is_action(active_event, TuiAction::HistoryPrev))
   {
     if (draft_state_.browse_history(true))
     {
-      snapshot.status = "history previous";
+      presentation_state_.publish_status("history previous");
     }
     else
     {
@@ -154,59 +110,15 @@ ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::Runti
 ActiveRun::InputHandling ActiveRun::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
-  auto const& draft = draft_state_.draft();
+  auto const& snapshot = presentation_state_.screen();
 
-  if (is_action(active_event, TuiAction::PaletteNext) && navigation_.slash_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = filter_slash_commands(draft.text, draft.cursor, snapshot.slash_commands).size();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching slash commands";
-    }
-    else
-    {
-      draft_state_.select_completion(next_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()));
-      snapshot.status = "command " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
+  if (is_action(active_event, TuiAction::PaletteNext) && apply_composer_result(draft_state_.step_completion(CompletionStep::Next, navigation_, snapshot)))
     return to_input_handling(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::PaletteNext) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching file references";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.next_completion(draft_state_.completion_index()));
-      snapshot.status = "reference " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-    return to_input_handling(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::PaletteNext) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      snapshot.status = "no matching paths";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.next_completion(draft_state_.completion_index()));
-      snapshot.status = "path " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-    return to_input_handling(renderer_.request_render());
-  }
   if (is_action(active_event, TuiAction::HistoryNext))
   {
     if (draft_state_.browse_history(false))
     {
-      snapshot.status = draft_state_.history_index() ? "history next" : "history draft";
+      presentation_state_.publish_status(draft_state_.history_index() ? "history next" : "history draft");
     }
     else
     {

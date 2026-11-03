@@ -34,7 +34,6 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (auto handled = navigation_.handle_sidebar_drawer_input(active_event))
@@ -44,13 +43,14 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
     if (is_action(active_event, TuiAction::JumpForward) || is_action(active_event, TuiAction::JumpBackward))
     {
       draft_state_.cancel_jump();
-      snapshot.status = "jump cancelled";
+      presentation_state_.publish_status("jump cancelled");
       return to_input_handling(renderer_.request_render());
     }
     if (auto const target = printable_jump_target(active_input))
     {
       bool const forward = draft_state_.jump_mode() == ComposerJumpMode::Forward;
-      snapshot.status = draft_state_.jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward") : "jump character not found";
+      presentation_state_.publish_status(draft_state_.jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward")
+                                                                                 : "jump character not found");
       return to_input_handling(renderer_.request_render());
     }
     draft_state_.cancel_jump();
@@ -65,11 +65,11 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
     {
       case detail::ActiveRunCancelDisposition::ClearDraftSelection:
         draft_state_.clear_selection();
-        snapshot.status.clear();
+        presentation_state_.publish_status({});
         return to_input_handling(renderer_.request_render());
       case detail::ActiveRunCancelDisposition::ClearTranscriptSelection:
         renderer_.clear_transcript_selection();
-        snapshot.status.clear();
+        presentation_state_.publish_status({});
         return to_input_handling(renderer_.request_render());
       case detail::ActiveRunCancelDisposition::RequestStop:
         return to_input_handling(request_stop());
@@ -78,7 +78,7 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
   if (is_action(active_event, TuiAction::CopySelection) && draft_state_.selection_bounds())
   {
     draft_state_.cancel_escape();
-    static_cast<void>(draft_state_.copy_selection(snapshot));
+    static_cast<void>(apply_composer_result(draft_state_.copy_selection()));
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::CopySelection) && renderer_.transcript().has_selection())
@@ -92,7 +92,7 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
     if (!draft.text.empty())
     {
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      snapshot.selected_slash_command_index = draft_state_.completion_index();
+      presentation_state_.publish_completion(draft_state_);
       return to_input_handling(renderer_.render());
     }
     request_close_after_submit();
@@ -106,10 +106,11 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
   }
   if (active_event.key == Key::Character)
   {
-    draft_state_.insert_input(active_input, snapshot, ComposerEditContext::ActiveRun);
+    presentation_state_.clear_local_feedback();
+    static_cast<void>(apply_composer_result(draft_state_.insert_input(active_input, ComposerEditContext::ActiveRun)));
     return to_input_handling(renderer_.request_render());
   }
-  if (draft_state_.extend_selection_for_key(active_event.key, snapshot))
+  if (apply_composer_result(draft_state_.extend_selection_for_key(active_event.key)))
   {
     renderer_.clear_transcript_selection();
     return to_input_handling(renderer_.request_render());
@@ -126,7 +127,7 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
 ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.slash_palette_active())
@@ -135,14 +136,14 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
     if (auto const disabled_reason =
             slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()))
     {
-      snapshot.status = "command disabled: " + *disabled_reason;
+      presentation_state_.publish_status("command disabled: " + *disabled_reason);
       ava::core::Application::instance().terminal_context().beep();
     }
     else
     {
       auto selection = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index());
       draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-      snapshot.status = "command selected - press Enter to queue";
+      presentation_state_.publish_status("command selected - press Enter to queue");
     }
     return to_input_handling(renderer_.request_render());
   }
@@ -151,13 +152,13 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
     draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
-      snapshot.status = "reference disabled: " + *disabled_reason;
+      presentation_state_.publish_status("reference disabled: " + *disabled_reason);
       ava::core::Application::instance().terminal_context().beep();
       return to_input_handling(renderer_.request_render());
     }
     auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
     draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    snapshot.status = "file reference selected";
+    presentation_state_.publish_status("file reference selected");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.path_completion_palette_active())
@@ -165,17 +166,17 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
     draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
     {
-      snapshot.status = "path disabled: " + *disabled_reason;
+      presentation_state_.publish_status("path disabled: " + *disabled_reason);
       ava::core::Application::instance().terminal_context().beep();
       return to_input_handling(renderer_.request_render());
     }
     auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
     draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    snapshot.status = "path selected";
+    presentation_state_.publish_status("path selected");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::AutocompleteAccept) &&
-      draft_state_.force_path_completion(navigation_, snapshot, ava::core::Application::instance().terminal_context(), ComposerEditContext::ActiveRun))
+      apply_composer_result(draft_state_.force_path_completion(navigation_, ComposerEditContext::ActiveRun)))
     return to_input_handling(renderer_.request_render());
   return InputHandling::Unhandled;
 }
@@ -185,7 +186,6 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
 ActiveRun::InputHandling ActiveRun::handle_active_command_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.screen();
 
   if (is_action(active_event, TuiAction::NewLine))
   {
@@ -211,7 +211,7 @@ ActiveRun::InputHandling ActiveRun::handle_active_command_input(runtime_input::R
   if (is_action(active_event, TuiAction::JumpForward) || is_action(active_event, TuiAction::JumpBackward))
   {
     draft_state_.begin_jump(is_action(active_event, TuiAction::JumpForward) ? ComposerJumpMode::Forward : ComposerJumpMode::Backward);
-    snapshot.status = is_action(active_event, TuiAction::JumpForward) ? "jump forward: type character" : "jump backward: type character";
+    presentation_state_.publish_status(is_action(active_event, TuiAction::JumpForward) ? "jump forward: type character" : "jump backward: type character");
     return to_input_handling(renderer_.request_render());
   }
   if (is_action(active_event, TuiAction::MessageFollowUp))
@@ -223,7 +223,7 @@ ActiveRun::InputHandling ActiveRun::handle_active_command_input(runtime_input::R
   {
     if (auto handled = reject_disabled_visible_completion())
       return to_input_handling(*handled);
-    if (active_event.key == terminal::Key::Enter && draft_state_.convert_backslash_enter_to_newline(snapshot))
+    if (active_event.key == terminal::Key::Enter && apply_composer_result(draft_state_.convert_backslash_enter_to_newline()))
       return to_input_handling(renderer_.request_render());
     renderer_.clear_transcript_selection();
     if (auto handled = run_active_command())

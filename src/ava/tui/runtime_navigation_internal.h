@@ -8,6 +8,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 struct ComposerSnapshot;
 struct FileReferenceSelectionText;
 struct InputEvent;
@@ -22,7 +24,7 @@ struct CompletionMatchModel;
 class RuntimeNavigationController final
 {
  public:
-  RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, Composer& draft_state, RuntimeRenderer& renderer);
+  RuntimeNavigationController(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, Composer& draft_state, RuntimeRenderer& renderer);
   RuntimeNavigationController(RuntimeNavigationController const&) = delete;
   RuntimeNavigationController& operator=(RuntimeNavigationController const&) = delete;
 
@@ -59,7 +61,7 @@ class RuntimeNavigationController final
  private:
   void project_completion_input();
   TuiFrontEnd const& frontend_;
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   Composer& draft_state_;
   RuntimeRenderer& renderer_;
 };

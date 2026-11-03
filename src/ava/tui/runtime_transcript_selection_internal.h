@@ -18,6 +18,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 // Content-relative transcript selection endpoints.
 //
 // Origin contract:
@@ -163,17 +165,17 @@ class RuntimeTranscriptSelectionState final
   // the live transcript (accumulated deferred cap shift). Geometry/hit-testing keep
   // the frozen authority; only snapshot lookups and header toggles apply the shift.
   // Pass 0 when the layout authority is already live. Fail closed on overflow/eviction.
-  [[nodiscard]] TranscriptSelectionMouseResult handle_mouse(InputEvent const& event, ComposerSnapshot& snapshot,
+  [[nodiscard]] TranscriptSelectionMouseResult handle_mouse(InputEvent const& event, RuntimePresentationState& presentation,
                                                             detail::TranscriptLayoutCache const& layout_cache, Composer* draft_state,
                                                             std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                             std::function<bool(std::size_t)> const& toggle_tool,
                                                             std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now = Clock::now());
   [[nodiscard]] std::optional<Clock::time_point> edge_autoscroll_deadline() const noexcept;
-  [[nodiscard]] TranscriptSelectionMouseResult tick_edge_autoscroll(ComposerSnapshot& snapshot, detail::TranscriptLayoutCache const& layout_cache,
+  [[nodiscard]] TranscriptSelectionMouseResult tick_edge_autoscroll(RuntimePresentationState& presentation, detail::TranscriptLayoutCache const& layout_cache,
                                                                     std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                                     Clock::time_point now = Clock::now());
 
-  [[nodiscard]] bool copy_selection(ComposerSnapshot& snapshot, detail::TranscriptLayoutCache const& layout_cache);
+  [[nodiscard]] bool copy_selection(RuntimePresentationState& presentation, detail::TranscriptLayoutCache const& layout_cache);
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
@@ -249,7 +251,7 @@ class RuntimeTranscriptSelectionState final
   [[nodiscard]] bool toggle_header_at_frozen_item(ComposerSnapshot const& snapshot, std::size_t frozen_item_index, bool tool_header, bool thinking_header,
                                                   std::ptrdiff_t frozen_to_live_item_index_shift, std::function<bool(std::size_t)> const& toggle_tool,
                                                   std::function<bool(std::size_t)> const& toggle_thinking) const;
-  [[nodiscard]] bool autoscroll_for_row(ComposerSnapshot& snapshot, TranscriptSelectionViewport const& viewport, std::size_t screen_row,
+  [[nodiscard]] bool autoscroll_for_row(RuntimePresentationState& presentation, TranscriptSelectionViewport const& viewport, std::size_t screen_row,
                                         std::size_t& transcript_scroll_offset);
   [[nodiscard]] bool can_autoscroll_for_row(TranscriptSelectionViewport const& viewport, std::size_t screen_row, std::size_t transcript_scroll_offset) const;
   void update_edge_autoscroll(TranscriptSelectionViewport const& viewport, InputEvent const& event, std::size_t transcript_scroll_offset,

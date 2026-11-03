@@ -38,10 +38,10 @@ bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std:
   return (key == Key::MouseWheelUp || key == Key::MouseWheelDown) && deadline && now < *deadline;
 }
 
-RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants,
+RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
                                                    RuntimeRenderer& renderer, TuiEventLoop& loop, SelectorHost* selectors)
     : frontend_(frontend),
-      snapshot_(snapshot),
+      presentation_(presentation),
       session_grants_(session_grants),
       renderer_(renderer),
       selectors_(selectors),
@@ -115,7 +115,7 @@ void RuntimePromptCoordinator::emit_prompt_audit(std::string status, std::string
 
 std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinator::start_permission_prompt(ava::permissions::PermissionPrompt const& prompt)
 {
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   auto& command_session_grants = session_grants_;
   auto permission_label = std::string("permission requested");
   if (!prompt.tool_name.empty())
@@ -137,7 +137,7 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
                       prompt.reason, "reused tui session grant");
     {
       auto lock = renderer_.lock_ui();
-      snapshot.status = "permission allowed for this session";
+      presentation_.publish_status("permission allowed for this session");
     }
     static_cast<void>(renderer_.render());
     ava::permissions::PermissionResolutionDecision decision{ava::permissions::PermissionResolution::AllowSessionGrant};
@@ -148,14 +148,15 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
     auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
     close_competing_selector();
-    snapshot.permission_prompt = permission_prompt_view(prompt);
-    snapshot.permission_prompt->selected_choice = PermissionPromptChoice::Deny;
-    snapshot.permission_prompt->allow_session_available = allow_session_available_;
-    snapshot.permission_prompt->allow_remember_available = allow_remember_available_;
-    snapshot.permission_prompt->deny_remember_available = deny_remember_available_;
-    snapshot.status = allow_session_available_ || allow_remember_available_ || deny_remember_available_
-                          ? permission_prompt_status(allow_session_available_, allow_remember_available_, deny_remember_available_)
-                          : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject";
+    auto view = permission_prompt_view(prompt);
+    view.selected_choice = PermissionPromptChoice::Deny;
+    view.allow_session_available = allow_session_available_;
+    view.allow_remember_available = allow_remember_available_;
+    view.deny_remember_available = deny_remember_available_;
+    presentation_.publish_permission_prompt(std::move(view));
+    presentation_.publish_status(allow_session_available_ || allow_remember_available_ || deny_remember_available_
+                                     ? permission_prompt_status(allow_session_available_, allow_remember_available_, deny_remember_available_)
+                                     : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject");
   }
   ava::core::Application::instance().terminal_context().beep();
   if (!renderer_.render())
@@ -169,7 +170,7 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
 RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_permission_choice(PermissionPromptChoice selected, std::string user_guidance)
 {
   auto const& prompt = std::get<std::shared_ptr<PendingPermissionRequest>>(active_request_)->prompt();
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   auto& command_session_grants = session_grants_;
   auto const allow =
       selected == PermissionPromptChoice::Allow || selected == PermissionPromptChoice::AllowSession || selected == PermissionPromptChoice::AllowRemember;
@@ -183,8 +184,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
                         "remember unavailable");
       {
         auto lock = renderer_.lock_ui();
-        snapshot.permission_prompt.reset();
-        snapshot.status = "permission rule unavailable; denied";
+        presentation_.publish_permission_prompt(std::nullopt);
+        presentation_.publish_status("permission rule unavailable; denied");
       }
       if (!renderer_.render())
       {
@@ -201,8 +202,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
       emit_prompt_audit("tui:permission_deny", "permission denied: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason, reason);
       {
         auto lock = renderer_.lock_ui();
-        snapshot.permission_prompt.reset();
-        snapshot.status = "permission rule failed; denied";
+        presentation_.publish_permission_prompt(std::nullopt);
+        presentation_.publish_status("permission rule failed; denied");
       }
       if (!renderer_.render())
       {
@@ -225,8 +226,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
                         cap_reached ? "session grant cap reached" : "session grant no longer eligible");
       {
         auto lock = renderer_.lock_ui();
-        snapshot.permission_prompt.reset();
-        snapshot.status = cap_reached ? "permission session grant cap reached; denied" : "permission session grant no longer eligible; denied";
+        presentation_.publish_permission_prompt(std::nullopt);
+        presentation_.publish_status(cap_reached ? "permission session grant cap reached; denied" : "permission session grant no longer eligible; denied");
       }
       if (!renderer_.render())
       {
@@ -240,8 +241,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
                       prompt.reason, grant_result == TuiSessionGrantInsertResult::Added ? "selected allow session" : "reused tui session grant");
     {
       auto lock = renderer_.lock_ui();
-      snapshot.permission_prompt.reset();
-      snapshot.status = "permission allowed for this session";
+      presentation_.publish_permission_prompt(std::nullopt);
+      presentation_.publish_status("permission allowed for this session");
     }
     if (!renderer_.render())
     {
@@ -258,8 +259,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
                       remember ? "selected allow and remember" : "selected allow");
     {
       auto lock = renderer_.lock_ui();
-      snapshot.permission_prompt.reset();
-      snapshot.status = remember ? "permission allow rule saved" : "permission allowed once";
+      presentation_.publish_permission_prompt(std::nullopt);
+      presentation_.publish_status(remember ? "permission allow rule saved" : "permission allowed once");
     }
     if (!renderer_.render())
     {
@@ -278,8 +279,8 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
                     remember ? "selected deny and remember" : "selected deny");
   {
     auto lock = renderer_.lock_ui();
-    snapshot.permission_prompt.reset();
-    snapshot.status = remember ? "permission deny rule saved" : "permission denied";
+    presentation_.publish_permission_prompt(std::nullopt);
+    presentation_.publish_status(remember ? "permission deny rule saved" : "permission denied");
   }
   if (!renderer_.render())
   {
@@ -302,15 +303,14 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
 
 std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator::start_question_prompt(ava::agent::QuestionPrompt const& prompt)
 {
-  auto& snapshot = snapshot_;
   emit_prompt_audit("tui:question_request", prompt.question.empty() ? std::string("question requested") : "question requested: " + prompt.question);
   {
     auto lock = renderer_.lock_ui();
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
     close_competing_selector();
-    snapshot.question_prompt = question_prompt_view(prompt);
-    snapshot.status =
-        prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels" : "question required: Enter sends, numbers choose, Esc cancels";
+    presentation_.publish_question_prompt(question_prompt_view(prompt));
+    presentation_.publish_status(prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels"
+                                                 : "question required: Enter sends, numbers choose, Esc cancels");
   }
   ava::core::Application::instance().terminal_context().beep();
   if (!renderer_.render())
@@ -329,12 +329,11 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
 RuntimePromptCoordinator::QuestionResult RuntimePromptCoordinator::cancel_question()
 {
   auto const& prompt = std::get<std::shared_ptr<PendingQuestionRequest>>(active_request_)->prompt();
-  auto& snapshot = snapshot_;
   emit_prompt_audit("tui:question_cancel", prompt.question.empty() ? std::string("question canceled") : "question canceled: " + prompt.question);
   {
     auto lock = renderer_.lock_ui();
-    snapshot.question_prompt.reset();
-    snapshot.status = "question canceled";
+    presentation_.publish_question_prompt(std::nullopt);
+    presentation_.publish_status("question canceled");
   }
   static_cast<void>(renderer_.render());
   return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt canceled"));
@@ -347,14 +346,13 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
   if (!request)
     return std::nullopt;
   auto const& prompt = (*request)->prompt();
-  auto& snapshot = snapshot_;
   if (!prompt.auto_resolve || !prompt.auto_resolve())
     return std::nullopt;
   ava::agent::QuestionAnswer answer{.selected_options = {"done"}, .custom_text = ""};
   {
     auto lock = renderer_.lock_ui();
-    snapshot.question_prompt.reset();
-    snapshot.status = "question answered";
+    presentation_.publish_question_prompt(std::nullopt);
+    presentation_.publish_status("question answered");
   }
   if (!renderer_.render())
   {
@@ -367,7 +365,7 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
 PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInput const& input)
 {
   using Key = terminal::Key;
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   bool const wheel_input = input.event.key == Key::MouseWheelUp || input.event.key == Key::MouseWheelDown;
   auto input_result = [&]() {
     if (!snapshot.question_prompt)
@@ -388,9 +386,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
     auto lock = renderer_.lock_ui();
     if (snapshot.question_prompt)
     {
-      snapshot.question_prompt->selected_option_index = input_result.selected_option_index;
-      snapshot.question_prompt->options = std::move(input_result.options);
-      snapshot.question_prompt->custom_text = std::move(input_result.custom_text);
+      presentation_.publish_question_input(input_result.selected_option_index, std::move(input_result.options), std::move(input_result.custom_text));
     }
   }
 
@@ -398,7 +394,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
   {
     {
       auto lock = renderer_.lock_ui();
-      snapshot.status = copy_text_to_terminal_clipboard(input_result.copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
+      presentation_.publish_status(copy_text_to_terminal_clipboard(input_result.copy_text) ? "clipboard copy request sent" : "clipboard copy failed");
     }
     emit_prompt_audit("tui:question_copy", "question copy");
     if (!renderer_.render())
@@ -416,8 +412,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
       auto lock = renderer_.lock_ui();
       if (snapshot.question_prompt)
         answer = question_answer_from_view(*snapshot.question_prompt);
-      snapshot.question_prompt.reset();
-      snapshot.status = answer ? "question answered" : "question canceled";
+      presentation_.publish_question_prompt(std::nullopt);
+      presentation_.publish_status(answer ? "question answered" : "question canceled");
     }
     if (!renderer_.render())
     {
@@ -429,7 +425,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
       {
         {
           auto lock = renderer_.lock_ui();
-          snapshot.status = copy_text_to_terminal_clipboard(*copy_text) ? "clipboard copy request sent" : "clipboard copy failed";
+          presentation_.publish_status(copy_text_to_terminal_clipboard(*copy_text) ? "clipboard copy request sent" : "clipboard copy failed");
         }
         static_cast<void>(renderer_.render());
       }
@@ -463,7 +459,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
 PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeInput const& input)
 {
   using Key = terminal::Key;
-  auto& snapshot = snapshot_;
+  auto const& snapshot = presentation_.screen();
   if (input.event.key == Key::Escape)
   {
     // Keep the claim held until the caller publishes run stop, then calls
@@ -491,9 +487,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeIn
   {
     {
       auto lock = renderer_.lock_ui();
-      snapshot.permission_prompt->selected_choice = input_result.selected_choice;
-      snapshot.permission_prompt->guidance_mode = input_result.guidance_mode;
-      snapshot.permission_prompt->guidance_text = std::move(input_result.guidance_text);
+      presentation_.publish_permission_input(input_result.selected_choice, input_result.guidance_mode, std::move(input_result.guidance_text));
     }
     if (!renderer_.render())
       return complete_permission(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt")));
@@ -508,12 +502,12 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeIn
         snapshot.permission_prompt && (snapshot.permission_prompt->allow_session_available || snapshot.permission_prompt->allow_remember_available ||
                                        snapshot.permission_prompt->deny_remember_available);
     if (guidance_active)
-      snapshot.status = "permission guidance: type optional reason Enter reject Esc reject";
+      presentation_.publish_status("permission guidance: type optional reason Enter reject Esc reject");
     else
-      snapshot.status =
+      presentation_.publish_status(
           has_extended ? permission_prompt_status(snapshot.permission_prompt->allow_session_available, snapshot.permission_prompt->allow_remember_available,
                                                   snapshot.permission_prompt->deny_remember_available)
-                       : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject";
+                       : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject");
   }
   if (!renderer_.render())
     return complete_permission(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt")));
@@ -562,8 +556,8 @@ RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::retire_
 void RuntimePromptCoordinator::clear_prompt_projection()
 {
   auto lock = renderer_.lock_ui();
-  snapshot_.permission_prompt.reset();
-  snapshot_.question_prompt.reset();
+  presentation_.publish_permission_prompt(std::nullopt);
+  presentation_.publish_question_prompt(std::nullopt);
 }
 
 PromptServiceOutcome RuntimePromptCoordinator::complete_permission(PermissionResult result)
@@ -726,8 +720,8 @@ PromptServiceOutcome RuntimePromptCoordinator::cancel_active_after_auto(PromptCa
     emit_prompt_audit("tui:permission_deny", "permission denied: interrupted", prompt.permission_request_id, prompt.tool_name, prompt.reason, "interrupted");
     {
       auto lock = renderer_.lock_ui();
-      snapshot_.permission_prompt.reset();
-      snapshot_.status = "interrupted";
+      presentation_.publish_permission_prompt(std::nullopt);
+      presentation_.publish_status("interrupted");
     }
     static_cast<void>(renderer_.render());
     return complete_permission(ava::permissions::PermissionResolution::Deny);
@@ -737,8 +731,8 @@ PromptServiceOutcome RuntimePromptCoordinator::cancel_active_after_auto(PromptCa
   emit_prompt_audit("tui:question_cancel", "question canceled: interrupted");
   {
     auto lock = renderer_.lock_ui();
-    snapshot_.question_prompt.reset();
-    snapshot_.status = "interrupted";
+    presentation_.publish_question_prompt(std::nullopt);
+    presentation_.publish_status("interrupted");
   }
   static_cast<void>(renderer_.render());
   return complete_question(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted")));

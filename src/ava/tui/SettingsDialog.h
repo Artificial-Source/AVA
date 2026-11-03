@@ -24,9 +24,20 @@ enum class SettingsDialogRequest
   Hotkeys
 };
 
-// A string requests drafting that command; selector requests are coordinated by
-// the session after the dialog has retired its preview and closed its view.
-using SettingsDialogResult = std::variant<SettingsDialogRequest, std::string>;
+// TUI-thread handoff after a selector closes. The command and its display feedback
+// travel together so Session never infers behavior by comparing command text.
+struct DraftCommand
+{
+  // Owned draft text transferred to Composer; no view into a retired selector survives.
+  std::string command;
+  // Feedback chosen by the feature that requested the draft.
+  std::string status;
+  // Commands may contain user content, which must stay out of generated logging.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+// Session coordinates selector requests after the dialog retires its preview.
+using SettingsDialogResult = std::variant<SettingsDialogRequest, DraftCommand>;
 
 class SettingsDialog final
 {

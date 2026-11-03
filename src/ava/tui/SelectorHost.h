@@ -5,15 +5,63 @@
 
 namespace ava::tui {
 
+class SettingsDialog;
+class SessionSelector;
+class SelectorInputController;
+namespace runtime_input {
+struct RuntimeInput;
+}
+
+// Call-scoped requests from selector policy to Session's cross-owner coordination.
+enum class SelectorDispatchRequest
+{
+  None, // The owning selector completed the action.
+  Models, // Open model selection after Settings has retired.
+  ScopedModels, // Open scoped model selection after Settings has retired.
+  Reasoning, // Open reasoning choices from Settings.
+  CurrentReasoning, // Open reasoning choices for the just-selected model.
+  Hotkeys, // Replace Settings with the keybinding selector.
+  DraftCompletion, // Replace editor text using completion semantics.
+  DraftCommand, // Replace editor text and reset its command-drafting interaction.
+  OpenedSession, // Reconcile committed identity before publishing success feedback.
+  SessionError, // Reconcile committed identity before publishing error feedback.
+  SummarizeParent, // Start a separately owned branch-summary operation.
+  RenderFailed, // A synchronous selector authority handoff could not paint.
+  Beep, // The feature already published the reason; Session emits the bell.
+};
+
+// Owned handoff values survive selector replacement; no row or string view escapes.
+struct SelectorDispatchResult
+{
+  // Session performs only the requested cross-owner transition.
+  SelectorDispatchRequest request = SelectorDispatchRequest::None;
+  // Draft, committed-session feedback, or selected summary identity, according to request.
+  std::string text = {};
+  // Feature-selected feedback accompanies DraftCompletion, avoiding command-string tests.
+  std::string status = {};
+  // A parent summary retains the previous selector to restore it when finished.
+  std::optional<SelectListView> previous_view = std::nullopt;
+  // Selection identity within previous_view; meaningful only for SummarizeParent.
+  std::size_t selected_index = 0;
+  // Selector text may contain paths or prompt excerpts and must not be debug streamed.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 // Owns selector changes on the TUI thread. The session snapshot supplies the
 // single view storage and outlives this host; readers borrow that view as const.
 // No second row vector is copied into the renderer when selection changes.
 class SelectorHost final
 {
  public:
-  explicit SelectorHost(ComposerSnapshot& snapshot);
+  explicit SelectorHost(RuntimePresentationState& presentation);
   SelectorHost(SelectorHost const&) = delete;
   SelectorHost& operator=(SelectorHost const&) = delete;
+
+  // TUI thread: synchronize feature policy, classify one input, and route it to
+  // the active owner. Collaborators are borrowed only for this call. Session acts
+  // on the owned result after any old selector/preview has been retired.
+  [[nodiscard]] SelectorDispatchResult dispatch(runtime_input::RuntimeInput const& input, SelectorInputController& classifier, SettingsDialog& settings,
+                                                SessionSelector& sessions);
 
   [[nodiscard]] ActiveSelectList kind() const noexcept;
   [[nodiscard]] std::optional<SelectListView> const& view() const noexcept;
@@ -37,7 +85,7 @@ class SelectorHost final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   ActiveSelectList kind_ = ActiveSelectList::None;
 };
 

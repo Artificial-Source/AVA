@@ -96,6 +96,8 @@ class ActiveRun final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // TUI thread: consume editor feedback at its dispatch stage before rendering.
+  [[nodiscard]] bool apply_composer_result(ComposerInputResult result);
   enum class Phase
   {
     Idle,

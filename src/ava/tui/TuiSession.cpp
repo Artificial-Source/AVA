@@ -27,6 +27,19 @@
 #include <utility>
 
 namespace ava::tui {
+bool TuiSession::is_action(TuiAction action, InputEvent const& event) const
+{
+  return key_matches_action(frontend_.key_bindings(), action, event.key);
+}
+
+bool TuiSession::apply_composer_result(ComposerInputResult result)
+{
+  presentation_state_.publish_composer_feedback(result);
+  if (result.beep)
+    terminal_context_.beep();
+  return result.handled;
+}
+
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
 constexpr std::size_t kInputBatchLimit = 32;
@@ -42,37 +55,42 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       terminal_context_(terminal_context),
       loop_(::fileno(terminal_context.input_stream())),
       presentation_state_(&frontend, initial_status_line),
-      attachments_(presentation_state_.screen()),
-      plugin_ui_(presentation_state_.screen()),
-      renderer_(&frontend, presentation_state_.screen(), presentation_state_.sidebar(), draft_state_, &terminal_context),
-      navigation_(frontend, presentation_state_.screen(), draft_state_, renderer_),
-      selectors_(presentation_state_.screen()),
+      command_output_(presentation_state_),
+      attachments_(presentation_state_),
+      plugin_ui_(presentation_state_),
+      renderer_(&frontend, presentation_state_, draft_state_, &terminal_context),
+      navigation_(frontend, presentation_state_, draft_state_, renderer_),
+      selectors_(presentation_state_),
       selector_input_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       settings_(frontend, presentation_state_, selectors_, terminal_context),
       session_selector_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       branch_summary_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings(), attachments_),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
-      prompt_coordinator_(frontend, presentation_state_.screen(), command_session_grants_, renderer_, loop_, &selectors_),
-      mermaid_presentation_(presentation_state_.screen(), renderer_, transcript_search_, frontend.mermaid_bridge()),
+      prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, loop_, &selectors_),
+      mermaid_presentation_(presentation_state_, renderer_, transcript_search_, frontend.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_, attachments_),
-      subagent_workspace_(frontend, presentation_state_.screen(), selectors_),
+      subagent_workspace_(frontend, presentation_state_, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_, attachments_,
                            command_session_grants_),
       active_run_controller_(loop_, frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
                              action_controller_, transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_, attachments_),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
                          transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_),
-      input_dispatcher_({std::bind_front(&TuiSession::handle_resize_input, this), std::bind_front(&TuiSession::handle_wheel_input, this),
-                         std::bind_front(&TuiSession::handle_command_output_input, this), std::bind_front(&TuiSession::handle_workspace_input, this),
-                         std::bind_front(&TuiSession::handle_branch_summary_input, this), std::bind_front(&TuiSession::handle_search_input, this),
-                         TuiInputDispatcher::event_handler(std::bind_front(&RuntimePromptStashController::handle_selector_input, &prompt_stash_)),
-                         std::bind_front(&TuiSession::handle_selector_input, this),
-                         TuiInputDispatcher::event_handler(std::bind_front(&RuntimeNavigationController::handle_sidebar_drawer_input, &navigation_)),
-                         std::bind_front(&TuiSession::handle_jump_input, this), std::bind_front(&TuiSession::handle_primary_input, this),
-                         std::bind_front(&TuiSession::handle_editor_input, this), std::bind_front(&TuiSession::handle_session_input, this),
-                         std::bind_front(&TuiSession::handle_transcript_input, this), std::bind_front(&TuiSession::handle_composer_navigation_input, this),
-                         std::bind_front(&TuiSession::handle_tail_input, this)}),
+      // Host modals precede jump/text input. Editor clearing precedes session
+      // Interrupt; transcript bindings precede cursor/history; Tail keeps Submit
+      // ahead of Space. Keep these positions when adding a configurable binding.
+      input_dispatcher_(
+          {std::bind_front(&TuiSession::handle_resize_input, this), std::bind_front(&TuiSession::handle_wheel_input, this),
+           std::bind_front(&TuiSession::handle_command_output_input, this), std::bind_front(&TuiSession::handle_workspace_input, this),
+           std::bind_front(&TuiSession::handle_branch_summary_input, this), std::bind_front(&TuiSession::handle_search_input, this),
+           TuiInputDispatcher::event_handler(std::bind_front(&RuntimePromptStashController::handle_selector_input, &prompt_stash_)),
+           std::bind_front(&TuiSession::handle_selector_input, this),
+           TuiInputDispatcher::event_handler(std::bind_front(&RuntimeNavigationController::handle_sidebar_drawer_input, &navigation_)),
+           std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Jump), std::bind_front(&TuiSession::handle_primary_input, this),
+           std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Editor), std::bind_front(&TuiSession::handle_session_input, this),
+           std::bind_front(&TuiSession::handle_transcript_input, this),
+           std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Navigation), std::bind_front(&TuiSession::handle_tail_input, this)}),
       control_timer_(loop_.member_timer(*this, &TuiSession::wake_for_control))
 {
   renderer_.attach_loop(loop_);
@@ -135,7 +153,7 @@ void TuiSession::settle_opened_session(std::string status)
   auto committed_session_id = frontend_.read_committed_session_id();
   static_cast<void>(session_transitions_.apply_and_refresh(frontend_, std::move(committed_session_id)));
   if (!status.empty())
-    settle_local_command_status(presentation_state_.screen(), std::move(status));
+    presentation_state_.publish_local_status(std::move(status));
 }
 
 bool TuiSession::synchronize_committed_session()
@@ -193,7 +211,7 @@ TuiInputOutcome TuiSession::handle_signals()
       }
       // and nonempty draft. Clear draft and continue if successful.
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
+      presentation_state_.publish_completion(draft_state_);
       if (!renderer_.render())
       {
         return TuiInputOutcome::Failure;
@@ -229,41 +247,14 @@ TuiInputOutcome TuiSession::handle_wheel_input(runtime_input::RuntimeInput const
 
 TuiInputOutcome TuiSession::handle_command_output_input(runtime_input::RuntimeInput const& input)
 {
-  if (presentation_state_.screen().command_output && !presentation_state_.screen().permission_prompt && !presentation_state_.screen().question_prompt)
+  switch (command_output_.handle_input(input.event))
   {
-    auto const geometry = command_output_geometry(presentation_state_.screen().width, presentation_state_.screen().height);
-    auto const output_input = ava::tui::handle_command_output_input(*presentation_state_.screen().command_output, input.event, geometry.width, geometry.height,
-                                                                    presentation_state_.screen().tool_presentation);
-    if (output_input.action == CommandOutputInputAction::Dismiss)
-    {
-      presentation_state_.screen().command_output.reset();
-      presentation_state_.screen().status = "command output closed";
-      if (!renderer_.request_render())
-      {
-        return TuiInputOutcome::Failure;
-      }
+    case CommandOutputDisposition::Pass:
+      return TuiInputOutcome::Pass;
+    case CommandOutputDisposition::Consumed:
       return TuiInputOutcome::Handled;
-    }
-    if (output_input.action == CommandOutputInputAction::Redraw)
-    {
-      presentation_state_.screen().command_output->scroll_offset = output_input.scroll_offset;
-      if (!renderer_.request_render())
-      {
-        return TuiInputOutcome::Failure;
-      }
-      return TuiInputOutcome::Handled;
-    }
-    // Typing or clearing starts the next draft directly; pointer input remains
-    // captured by the modal so transcript/composer hit targets stay suppressed.
-    if (input.event.key == Key::Character || input.event.key == Key::Space || input.event.key == Key::CtrlU)
-    {
-      presentation_state_.screen().command_output.reset();
-      presentation_state_.screen().status.clear();
-    }
-    else
-    {
-      return TuiInputOutcome::Handled;
-    }
+    case CommandOutputDisposition::Redraw:
+      return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
   }
   return TuiInputOutcome::Pass;
 }
@@ -297,7 +288,7 @@ TuiInputOutcome TuiSession::handle_branch_summary_input(runtime_input::RuntimeIn
 
 TuiInputOutcome TuiSession::handle_search_input(runtime_input::RuntimeInput const& input)
 {
-  clear_reasoning_feedback_for_user_input(presentation_state_.screen());
+  presentation_state_.clear_input_feedback();
   if (auto handled = transcript_search_.handle_input(input.event))
   {
     if (!*handled)
@@ -311,210 +302,66 @@ TuiInputOutcome TuiSession::handle_search_input(runtime_input::RuntimeInput cons
 
 TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput const& input)
 {
-  if (selectors_.view())
+  if (!selectors_.view())
+    return TuiInputOutcome::Pass;
+  auto result = selectors_.dispatch(input, selector_input_, settings_, session_selector_);
+  using Request = SelectorDispatchRequest;
+  switch (result.request)
   {
-    settings_.synchronize_selector();
-    if (selectors_.kind() != ActiveSelectList::Session)
-      session_selector_.cancel_confirmation();
-
-    auto input_result = selector_input_.classify(input);
-    if (input_result.action == SelectListInputAction::Redraw && selectors_.view())
-    {
-      session_selector_.cancel_confirmation();
-      if (selectors_.kind() == ActiveSelectList::Settings)
-        settings_.highlight(input_result.selected_item_index, std::move(input_result.query));
-      else
-        selectors_.update_selection(input_result.selected_item_index, std::move(input_result.query));
-    }
-    else if (input_result.action == SelectListInputAction::Cancel && selectors_.kind() == ActiveSelectList::Settings)
-    {
-      settings_.cancel();
-    }
-    else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Settings)
-    {
-      auto result = settings_.resolve(input_result);
-      if (auto* command = std::get_if<std::string>(&result))
-      {
-        bool const edits_keybindings = *command == "/keybindings set ";
-        draft_state_.accept_completion(std::move(*command), std::string::npos);
-        presentation_state_.screen().status = edits_keybindings ? "keybinding edit command drafted" : "command drafted";
-      }
-      else
-      {
-        switch (std::get<SettingsDialogRequest>(result))
-        {
-          case SettingsDialogRequest::Models:
-            static_cast<void>(action_controller_.open_model_selector());
-            break;
-          case SettingsDialogRequest::ScopedModels:
-            static_cast<void>(action_controller_.open_scoped_model_selector());
-            break;
-          case SettingsDialogRequest::Reasoning:
-            static_cast<void>(action_controller_.open_reasoning_selector(false));
-            break;
-          case SettingsDialogRequest::Hotkeys:
-            selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
-            presentation_state_.screen().status = "keybindings opened";
-            renderer_.transcript().request_live_tail();
-            break;
-          case SettingsDialogRequest::None:
-            break;
-        }
-      }
-    }
-    else if (input_result.action == SelectListInputAction::SummarizeParent && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-    {
-      session_selector_.cancel_confirmation();
-      if (input_result.selected_item_index >= selectors_.view()->items.size() || !selectors_.view()->items[input_result.selected_item_index].enabled ||
-          selectors_.view()->items[input_result.selected_item_index].value.empty())
-      {
-        presentation_state_.screen().status = "parent summary is unavailable from this row";
-        terminal_context_.beep();
-      }
-      else
-      {
-        auto prior_view = *selectors_.view();
-        prior_view.query = input_result.query;
-        prior_view.selected_item_index = input_result.selected_item_index;
-        auto const selected_value = prior_view.items[input_result.selected_item_index].value;
-        if (stop_for_branch_summary(branch_summary_.start(std::move(prior_view), input_result.selected_item_index, selected_value)))
-          return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
-      }
-    }
-    else if (selectors_.kind() == ActiveSelectList::Session &&
-             (input_result.action == SelectListInputAction::CycleSort || input_result.action == SelectListInputAction::ToggleNamedFilter ||
-              input_result.action == SelectListInputAction::TogglePathDisplay || input_result.action == SelectListInputAction::ToggleArchivedFilter ||
-              input_result.action == SelectListInputAction::ToggleLabelTimestamp))
-    {
-      session_selector_.browse(input_result);
-    }
-    else if (selectors_.kind() == ActiveSelectList::Session &&
-             (input_result.action == SelectListInputAction::Rename || input_result.action == SelectListInputAction::Label))
-    {
-      if (auto command = session_selector_.draft_command(input_result))
-      {
-        draft_state_.draft_command(std::move(*command));
-      }
-    }
-    else if ((input_result.action == SelectListInputAction::BranchParent || input_result.action == SelectListInputAction::BranchChild) &&
-             selectors_.kind() == ActiveSelectList::Session)
-    {
-      if (auto opened = session_selector_.navigate_branch(input_result))
-      {
-        if (*opened)
-          settle_opened_session(std::move(**opened));
-        else
-        {
-          static_cast<void>(synchronize_committed_session());
-          presentation_state_.screen().status = opened->error().format();
-          terminal_context_.beep();
-        }
-      }
-    }
-    else if (input_result.action == SelectListInputAction::Archive || input_result.action == SelectListInputAction::ArchiveNoninvasive)
-    {
-      // Settings owns its temporary display preview. Retire it before the
-      // whole dialog closes, including Ctrl+D from a nested settings page.
-      if (selectors_.kind() == ActiveSelectList::Settings)
-      {
-        settings_.close();
-        presentation_state_.screen().status = "view canceled";
-      }
-      else
-        session_selector_.archive(input_result);
-    }
-    else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Session)
-    {
-      auto opened = session_selector_.resolve(input_result);
-      if (opened)
-        settle_opened_session(std::move(*opened));
-      else
-      {
-        static_cast<void>(synchronize_committed_session());
-        presentation_state_.screen().status = opened.error().format();
-        terminal_context_.beep();
-      }
-    }
-    else
-    {
-      if (input_result.action == SelectListInputAction::Resolve || input_result.action == SelectListInputAction::Cancel)
-        session_selector_.cancel_confirmation();
-      auto outcome = selector_input_.handle(input_result);
-      if (auto const* request = std::get_if<SelectorInputRequest>(&outcome))
-      {
-        if (*request == SelectorInputRequest::RenderFailed)
-          return TuiInputOutcome::Failure;
-        if (*request == SelectorInputRequest::OpenReasoning && !action_controller_.open_reasoning_selector(true))
-          return TuiInputOutcome::Failure;
-      }
-      else
-      {
-        auto& [kind, text] = std::get<std::pair<SelectorInputTextKind, std::string>>(outcome);
-        switch (kind)
-        {
-          case SelectorInputTextKind::DraftCommand:
-            draft_state_.accept_completion(std::move(text), std::string::npos);
-            presentation_state_.screen().status = "keybinding edit command drafted";
-            break;
-          case SelectorInputTextKind::OpenedSession:
-            settle_opened_session(std::move(text));
-            break;
-          case SelectorInputTextKind::ReconcileSessionError:
-            static_cast<void>(synchronize_committed_session());
-            presentation_state_.screen().status = std::move(text);
-            terminal_context_.beep();
-            break;
-        }
-      }
-    }
-    if (!renderer_.request_render())
-    {
-      return TuiInputOutcome::Failure;
-    }
-    return TuiInputOutcome::Handled;
-  }
-  return TuiInputOutcome::Pass;
-}
-
-TuiInputOutcome TuiSession::handle_jump_input(runtime_input::RuntimeInput const& input)
-{
-  auto const& event = input.event;
-  if (draft_state_.jump_mode() != ComposerJumpMode::None)
-  {
-    if (key_matches_action(frontend_.key_bindings(), TuiAction::JumpForward, event.key) ||
-        key_matches_action(frontend_.key_bindings(), TuiAction::JumpBackward, event.key))
-    {
-      draft_state_.cancel_jump();
-      presentation_state_.screen().status = "jump cancelled";
-    }
-    else if (auto const target = printable_jump_target(input))
-    {
-      bool const forward = draft_state_.jump_mode() == ComposerJumpMode::Forward;
-      presentation_state_.screen().status =
-          draft_state_.jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward") : "jump character not found";
-    }
-    else
-    {
-      draft_state_.cancel_jump();
-    }
-    if (event.key == Key::Character || event.key == Key::Space || key_matches_action(frontend_.key_bindings(), TuiAction::JumpForward, event.key) ||
-        key_matches_action(frontend_.key_bindings(), TuiAction::JumpBackward, event.key))
-    {
-      presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
-      if (!renderer_.request_render())
-      {
+    case Request::None:
+      break;
+    case Request::Models:
+      static_cast<void>(action_controller_.open_model_selector());
+      break;
+    case Request::ScopedModels:
+      static_cast<void>(action_controller_.open_scoped_model_selector());
+      break;
+    case Request::Reasoning:
+      static_cast<void>(action_controller_.open_reasoning_selector(false));
+      break;
+    case Request::CurrentReasoning:
+      if (!action_controller_.open_reasoning_selector(true))
         return TuiInputOutcome::Failure;
-      }
-      return TuiInputOutcome::Handled;
-    }
+      break;
+    case Request::Hotkeys:
+      selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
+      presentation_state_.publish_status("keybindings opened");
+      renderer_.show_live_tail(LiveTailReason::Requested);
+      break;
+    case Request::DraftCompletion:
+      draft_state_.accept_completion(std::move(result.text), std::string::npos);
+      presentation_state_.publish_status(std::move(result.status));
+      break;
+    case Request::DraftCommand:
+      draft_state_.draft_command(std::move(result.text));
+      break;
+    case Request::OpenedSession:
+      settle_opened_session(std::move(result.text));
+      break;
+    case Request::SessionError:
+      static_cast<void>(synchronize_committed_session());
+      presentation_state_.publish_status(std::move(result.text));
+      terminal_context_.beep();
+      break;
+    case Request::SummarizeParent:
+      // Host returns an owned prior view only for this request, after validating its row.
+      ASSERT(result.previous_view);
+      if (stop_for_branch_summary(branch_summary_.start(std::move(*result.previous_view), result.selected_index, result.text)))
+        return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
+      break;
+    case Request::RenderFailed:
+      return TuiInputOutcome::Failure;
+    case Request::Beep:
+      terminal_context_.beep();
+      break;
   }
-  return TuiInputOutcome::Pass;
+  return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
 }
 
 TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
-  if (key_matches_action(frontend_.key_bindings(), TuiAction::CopyLatestAssistant, event.key))
+  if (is_action(TuiAction::CopyLatestAssistant, event))
   {
     if (!action_controller_.copy_latest_assistant_message())
     {
@@ -522,7 +369,7 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
     }
     return TuiInputOutcome::Handled;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PromptStash, event.key))
+  else if (is_action(TuiAction::PromptStash, event))
   {
     if (!prompt_stash_.trigger())
     {
@@ -530,23 +377,11 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
     }
     return TuiInputOutcome::Handled;
   }
-  else if (event.key == Key::Character)
+  else if (auto const outcome = handle_composer_input(ComposerInputPhase::Primary, input); outcome != TuiInputOutcome::Pass)
   {
-    draft_state_.insert_input(input, presentation_state_.screen());
+    return outcome;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::MessageFollowUp, event.key))
-  {
-    auto const action = handle_submit();
-    if (action == RuntimeSubmitDisposition::BreakLoop)
-      return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
-    if (action == RuntimeSubmitDisposition::ContinueLoop)
-      return TuiInputOutcome::Handled;
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::NewLine, event.key))
-  {
-    draft_state_.insert_newline();
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ExternalEditor, event.key))
+  else if (is_action(TuiAction::ExternalEditor, event))
   {
     if (!action_controller_.open_external_editor())
     {
@@ -554,7 +389,7 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
     }
     return TuiInputOutcome::Handled;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Suspend, event.key))
+  else if (is_action(TuiAction::Suspend, event))
   {
     if (!action_controller_.suspend_to_background())
     {
@@ -562,7 +397,7 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
     }
     return TuiInputOutcome::Handled;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ClipboardPasteImage, event.key))
+  else if (is_action(TuiAction::ClipboardPasteImage, event))
   {
     if (!action_controller_.paste_clipboard_image())
     {
@@ -575,111 +410,30 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
   return render_input();
 }
 
-TuiInputOutcome TuiSession::handle_editor_input(runtime_input::RuntimeInput const& input)
-{
-  auto const& event = input.event;
-  bool const ctrl_d_delete_forward =
-      event.key == Key::CtrlD && key_matches_action(frontend_.key_bindings(), TuiAction::DeleteForward, event.key) && !draft_state_.draft().text.empty();
-  bool const delete_forward_action =
-      key_matches_action(frontend_.key_bindings(), TuiAction::DeleteForward, event.key) && (event.key != Key::CtrlD || ctrl_d_delete_forward);
-  if (key_matches_action(frontend_.key_bindings(), TuiAction::JumpForward, event.key) ||
-      key_matches_action(frontend_.key_bindings(), TuiAction::JumpBackward, event.key))
-  {
-    draft_state_.begin_jump(key_matches_action(frontend_.key_bindings(), TuiAction::JumpForward, event.key) ? ComposerJumpMode::Forward
-                                                                                                            : ComposerJumpMode::Backward);
-    presentation_state_.screen().status =
-        key_matches_action(frontend_.key_bindings(), TuiAction::JumpForward, event.key) ? "jump forward: type character" : "jump backward: type character";
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::DeleteBackward, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteBackward));
-  }
-  else if (delete_forward_action)
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteForward));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::DeleteWordBackward, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteWordBackward));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::DeleteWordForward, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteWordForward));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::DeleteToLineStart, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteToLineStart));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::DeleteToLineEnd, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::DeleteToLineEnd));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CopySelection, event.key) && draft_state_.selection_bounds())
-  {
-    draft_state_.cancel_escape();
-    draft_state_.cancel_path_completion();
-    static_cast<void>(draft_state_.copy_selection(presentation_state_.screen()));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CopySelection, event.key) && renderer_.transcript().has_selection())
-  {
-    draft_state_.cancel_escape();
-    draft_state_.cancel_path_completion();
-    static_cast<void>(renderer_.copy_transcript_selection());
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ClearInput, event.key) &&
-           (!draft_state_.draft().text.empty() || !key_matches_action(frontend_.key_bindings(), TuiAction::Interrupt, event.key)))
-  {
-    presentation_state_.screen().status = draft_state_.apply_edit(TuiAction::ClearInput) ? "input cleared" : "input already empty";
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::AutocompleteAccept, event.key) && navigation_.slash_palette_active())
-  {
-    draft_state_.cancel_escape();
-    draft_state_.select_slash_command(presentation_state_.screen(), terminal_context_);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::AutocompleteAccept, event.key) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.cancel_escape();
-    draft_state_.select_file_reference(navigation_, presentation_state_.screen(), terminal_context_);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::AutocompleteAccept, event.key) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.cancel_escape();
-    draft_state_.select_path_completion(navigation_, presentation_state_.screen(), terminal_context_);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::AutocompleteAccept, event.key) &&
-           draft_state_.force_path_completion(navigation_, presentation_state_.screen(), terminal_context_))
-  {
-    draft_state_.cancel_escape();
-  }
-  else
-    return TuiInputOutcome::Pass;
-  return render_input();
-}
-
 TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
-  if (key_matches_action(frontend_.key_bindings(), TuiAction::ModeToggle, event.key))
+  if (is_action(TuiAction::ModeToggle, event))
   {
     draft_state_.cancel_escape();
     draft_state_.cancel_path_completion();
     if (auto result = frontend_.on_toggle_mode(); !result)
     {
-      presentation_state_.screen().status = result.error().format();
+      presentation_state_.publish_status(result.error().format());
     }
     else
     {
       presentation_state_.refresh_prompt_metadata();
-      presentation_state_.screen().status = "mode switched to " + presentation_state_.screen().mode;
+      presentation_state_.publish_status("mode switched to " + presentation_state_.screen().mode);
     }
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Interrupt, event.key))
+  else if (is_action(TuiAction::Interrupt, event))
   {
     draft_state_.cancel_path_completion();
     if (!draft_state_.draft().text.empty())
     {
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
+      presentation_state_.publish_completion(draft_state_);
       if (!renderer_.render())
       {
         return TuiInputOutcome::Failure;
@@ -688,16 +442,16 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
     }
     return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Exit, event.key))
+  else if (is_action(TuiAction::Exit, event))
   {
     return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::VariantCycle, event.key))
+  else if (is_action(TuiAction::VariantCycle, event))
   {
     draft_state_.cancel_escape();
     action_controller_.cycle_reasoning();
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ReasoningSelect, event.key))
+  else if (is_action(TuiAction::ReasoningSelect, event))
   {
     draft_state_.cancel_escape();
     if (!action_controller_.open_reasoning_selector())
@@ -705,12 +459,12 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
       return TuiInputOutcome::Failure;
     }
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ThinkingToggle, event.key))
+  else if (is_action(TuiAction::ThinkingToggle, event))
   {
     draft_state_.cancel_escape();
     action_controller_.toggle_thinking_visibility();
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::OverviewToggle, event.key))
+  else if (is_action(TuiAction::OverviewToggle, event))
   {
     draft_state_.cancel_escape();
     if (!toggle_startup_overview())
@@ -718,25 +472,24 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
       return TuiInputOutcome::Failure;
     }
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ModelSelect, event.key))
+  else if (is_action(TuiAction::ModelSelect, event))
   {
     if (!action_controller_.open_model_selector())
     {
       return TuiInputOutcome::Failure;
     }
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ModelCycleForward, event.key))
+  else if (is_action(TuiAction::ModelCycleForward, event))
   {
     draft_state_.cancel_escape();
     action_controller_.cycle_model(true);
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::ModelCycleBackward, event.key))
+  else if (is_action(TuiAction::ModelCycleBackward, event))
   {
     draft_state_.cancel_escape();
     action_controller_.cycle_model(false);
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::SessionResume, event.key) ||
-           key_matches_action(frontend_.key_bindings(), TuiAction::SessionTree, event.key))
+  else if (is_action(TuiAction::SessionResume, event) || is_action(TuiAction::SessionTree, event))
   {
     draft_state_.cancel_escape();
     if (!session_selector_.open())
@@ -744,19 +497,18 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
       return TuiInputOutcome::Failure;
     }
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::SessionNew, event.key) ||
-           key_matches_action(frontend_.key_bindings(), TuiAction::SessionFork, event.key))
+  else if (is_action(TuiAction::SessionNew, event) || is_action(TuiAction::SessionFork, event))
   {
-    auto const action = handle_submit(key_matches_action(frontend_.key_bindings(), TuiAction::SessionNew, event.key) ? "/new" : "/fork");
+    auto const action = handle_submit(is_action(TuiAction::SessionNew, event) ? "/new" : "/fork");
     if (action == RuntimeSubmitDisposition::BreakLoop)
       return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
     if (action == RuntimeSubmitDisposition::ContinueLoop)
       return TuiInputOutcome::Handled;
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::MessageDequeue, event.key))
+  else if (is_action(TuiAction::MessageDequeue, event))
   {
     draft_state_.cancel_escape();
-    presentation_state_.screen().status = "queued-message restore is available during active runs";
+    presentation_state_.publish_status("queued-message restore is available during active runs");
   }
   else
     return TuiInputOutcome::Pass;
@@ -766,31 +518,31 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
 TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
-  if (key_matches_action(frontend_.key_bindings(), TuiAction::TranscriptHalfPageUp, event.key))
+  if (is_action(TuiAction::TranscriptHalfPageUp, event))
   {
     navigation_.scroll_up(navigation_.transcript_page_size());
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::TranscriptHalfPageDown, event.key))
+  else if (is_action(TuiAction::TranscriptHalfPageDown, event))
   {
     navigation_.scroll_down(navigation_.transcript_page_size());
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PageUp, event.key))
+  else if (is_action(TuiAction::PageUp, event))
   {
     navigation_.scroll_up(navigation_.transcript_page_size());
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PageDown, event.key))
+  else if (is_action(TuiAction::PageDown, event))
   {
     navigation_.scroll_down(navigation_.transcript_page_size());
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::MessagePrev, event.key))
+  else if (is_action(TuiAction::MessagePrev, event))
   {
     navigation_.scroll_to_message_boundary(true);
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::MessageNext, event.key))
+  else if (is_action(TuiAction::MessageNext, event))
   {
     navigation_.scroll_to_message_boundary(false);
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::JumpToBottom, event.key))
+  else if (is_action(TuiAction::JumpToBottom, event))
   {
     navigation_.jump_to_bottom("live tail");
   }
@@ -815,7 +567,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
         renderer_.clear_transcript_selection();
         draft_state_.clear_selection();
         draft_state_.select_completion(*clicked);
-        draft_state_.select_slash_command(presentation_state_.screen(), terminal_context_);
+        static_cast<void>(apply_composer_result(draft_state_.select_slash_command(presentation_state_.screen())));
         palette_claimed = true;
       }
       else if (auto const clicked = renderer_.file_reference_completion_at(event.mouse_row, event.mouse_column))
@@ -823,7 +575,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
         renderer_.clear_transcript_selection();
         draft_state_.clear_selection();
         draft_state_.select_completion(*clicked);
-        draft_state_.select_file_reference(navigation_, presentation_state_.screen(), terminal_context_);
+        static_cast<void>(apply_composer_result(draft_state_.select_file_reference(navigation_)));
         palette_claimed = true;
       }
       else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
@@ -831,7 +583,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
         renderer_.clear_transcript_selection();
         draft_state_.clear_selection();
         draft_state_.select_completion(*clicked);
-        draft_state_.select_path_completion(navigation_, presentation_state_.screen(), terminal_context_);
+        static_cast<void>(apply_composer_result(draft_state_.select_path_completion(navigation_)));
         palette_claimed = true;
       }
     }
@@ -848,7 +600,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
           {
             renderer_.clear_transcript_selection();
             draft_state_.begin_pointer_selection(*cursor, event.key == Key::MouseLeftPress);
-            presentation_state_.screen().status = "cursor moved";
+            presentation_state_.publish_status("cursor moved");
           }
         }
         else if (draft_state_.mouse_selecting())
@@ -856,7 +608,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
           if (auto const cursor = composer_input_cursor_for_screen_position(presentation_state_.screen(), event.mouse_row, event.mouse_column))
           {
             draft_state_.extend_pointer_selection(*cursor);
-            presentation_state_.screen().status = draft_state_.selection_bounds() ? "selection active" : "cursor moved";
+            presentation_state_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
           }
           if (event.key == Key::MouseLeftRelease)
             draft_state_.end_pointer_selection();
@@ -869,257 +621,71 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
   return render_input();
 }
 
-TuiInputOutcome TuiSession::handle_composer_navigation_input(runtime_input::RuntimeInput const& input)
+TuiInputOutcome TuiSession::handle_composer_input(ComposerInputPhase phase, runtime_input::RuntimeInput const& input)
 {
-  auto const& event = input.event;
-  if (draft_state_.extend_selection_for_key(event.key, presentation_state_.screen()))
-  {
-    renderer_.clear_transcript_selection();
-  }
-  else if (event.key == Key::CtrlHome)
-  {
-    draft_state_.move_document_boundary(false);
-  }
-  else if (event.key == Key::CtrlEnd)
-  {
-    draft_state_.move_document_boundary(true);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorLeft, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorLeft));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorRight, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorRight));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorLineStart, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorLineStart));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorLineEnd, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorLineEnd));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorWordLeft, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorWordLeft));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorWordRight, event.key))
-  {
-    static_cast<void>(draft_state_.apply_edit(TuiAction::CursorWordRight));
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PalettePrev, event.key) && navigation_.slash_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = filter_slash_commands(draft_state_.draft().text, draft_state_.draft().cursor, presentation_state_.screen().slash_commands).size();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching slash commands";
-    }
-    else
-    {
-      draft_state_.select_completion(previous_slash_palette_selection(draft_state_.draft().text, draft_state_.draft().cursor,
-                                                                      presentation_state_.screen().slash_commands, draft_state_.completion_index()));
-      presentation_state_.screen().status = "command " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PalettePrev, event.key) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching file references";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.previous_completion(draft_state_.completion_index()));
-      presentation_state_.screen().status = "reference " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PalettePrev, event.key) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching paths";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.previous_completion(draft_state_.completion_index()));
-      presentation_state_.screen().status = "path " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::HistoryPrev, event.key))
-  {
-    if (draft_state_.browse_history(true))
-    {
-      presentation_state_.screen().status = "history previous";
-    }
-    else
-    {
-      navigation_.scroll_up(kKeyboardScrollRows);
-    }
-  }
-  else if (event.key == Key::ArrowUp)
-  {
-    navigation_.scroll_up(kKeyboardScrollRows);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorUp, event.key) && draft_state_.move_vertical(TuiAction::CursorUp))
-  {
-    // Composer applied the movement and its successful-movement reset.
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PaletteNext, event.key) && navigation_.slash_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = filter_slash_commands(draft_state_.draft().text, draft_state_.draft().cursor, presentation_state_.screen().slash_commands).size();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching slash commands";
-    }
-    else
-    {
-      draft_state_.select_completion(next_slash_palette_selection(draft_state_.draft().text, draft_state_.draft().cursor,
-                                                                  presentation_state_.screen().slash_commands, draft_state_.completion_index()));
-      presentation_state_.screen().status = "command " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PaletteNext, event.key) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching file references";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.next_completion(draft_state_.completion_index()));
-      presentation_state_.screen().status = "reference " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PaletteNext, event.key) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.cancel_escape();
-    auto const match_count = navigation_.completion_match_count();
-    if (match_count == 0)
-    {
-      presentation_state_.screen().status = "no matching paths";
-    }
-    else
-    {
-      draft_state_.select_completion(navigation_.next_completion(draft_state_.completion_index()));
-      presentation_state_.screen().status = "path " + std::to_string(draft_state_.completion_index() + 1) + "/" + std::to_string(match_count);
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::HistoryNext, event.key))
-  {
-    if (draft_state_.browse_history(false))
-    {
-      presentation_state_.screen().status = draft_state_.history_index() ? "history next" : "history draft";
-    }
-    else
-    {
-      navigation_.scroll_down(kKeyboardScrollRows);
-    }
-  }
-  else if (event.key == Key::ArrowDown)
-  {
-    navigation_.scroll_down(kKeyboardScrollRows);
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::CursorDown, event.key) && draft_state_.move_vertical(TuiAction::CursorDown))
-  {
-    // Composer applied the movement and its successful-movement reset.
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Undo, event.key))
-  {
-    presentation_state_.screen().status = draft_state_.apply_edit(TuiAction::Undo) ? "undo" : "nothing to undo";
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Redo, event.key))
-  {
-    presentation_state_.screen().status = draft_state_.apply_edit(TuiAction::Redo) ? "redo" : "nothing to redo";
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Yank, event.key))
-  {
-    presentation_state_.screen().status = draft_state_.apply_edit(TuiAction::Yank) ? "yanked text" : "nothing to yank";
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::YankPop, event.key))
-  {
-    presentation_state_.screen().status = draft_state_.apply_edit(TuiAction::YankPop) ? "yank-pop" : "nothing to yank-pop";
-  }
-  else
+  auto result =
+      draft_state_.handle_key(input, frontend_.key_bindings(), presentation_state_.screen(), navigation_, renderer_.transcript().has_selection(), phase);
+  if (!result.handled)
     return TuiInputOutcome::Pass;
+  presentation_state_.publish_composer_feedback(result);
+  if (result.beep)
+    terminal_context_.beep();
+  switch (result.request)
+  {
+    case ComposerInputRequest::None:
+      break;
+    case ComposerInputRequest::CopyTranscript:
+      static_cast<void>(renderer_.copy_transcript_selection());
+      break;
+    case ComposerInputRequest::ClearTranscriptSelection:
+      renderer_.clear_transcript_selection();
+      break;
+    case ComposerInputRequest::ScrollUp:
+      navigation_.scroll_up(kKeyboardScrollRows);
+      break;
+    case ComposerInputRequest::ScrollDown:
+      navigation_.scroll_down(kKeyboardScrollRows);
+      break;
+    case ComposerInputRequest::Submit: {
+      auto const action = handle_submit();
+      if (action == RuntimeSubmitDisposition::BreakLoop)
+        return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
+      if (action == RuntimeSubmitDisposition::ContinueLoop)
+        return TuiInputOutcome::Handled;
+      break;
+    }
+  }
   return render_input();
 }
 
 TuiInputOutcome TuiSession::handle_tail_input(runtime_input::RuntimeInput const& input)
 {
   auto const& event = input.event;
-  if (key_matches_action(frontend_.key_bindings(), TuiAction::DetailsToggle, event.key))
+  if (is_action(TuiAction::DetailsToggle, event))
   {
     draft_state_.cancel_escape();
     renderer_.synchronize_detached_transcript_layout();
-    presentation_state_.screen().tool_presentation =
-        presentation_state_.screen().tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich : ToolPresentation::Expanded;
-    presentation_state_.screen().status = "tool details " + std::string(to_string(presentation_state_.screen().tool_presentation));
+    presentation_state_.publish_tool_presentation(presentation_state_.screen().tool_presentation == ToolPresentation::Expanded ? ToolPresentation::Rich
+                                                                                                                               : ToolPresentation::Expanded);
+    presentation_state_.publish_status("tool details " + std::string(to_string(presentation_state_.screen().tool_presentation)));
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::PromptAllow, event.key) ||
-           key_matches_action(frontend_.key_bindings(), TuiAction::PromptDeny, event.key))
+  else if (is_action(TuiAction::PromptAllow, event) || is_action(TuiAction::PromptDeny, event))
   {
     draft_state_.cancel_escape();
-    presentation_state_.screen().status = "prompt action is only available while a prompt is active";
+    presentation_state_.publish_status("prompt action is only available while a prompt is active");
   }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Cancel, event.key))
+  else
   {
-    if (draft_state_.selection_bounds())
-    {
-      draft_state_.clear_selection();
-      draft_state_.cancel_escape();
-      presentation_state_.screen().status.clear();
-    }
-    else if (renderer_.transcript().has_selection())
-    {
-      renderer_.clear_transcript_selection();
-      draft_state_.cancel_escape();
-      presentation_state_.screen().status.clear();
-    }
-    else if (navigation_.slash_palette_active() || navigation_.file_reference_palette_active() || navigation_.path_completion_palette_active())
-    {
-      draft_state_.dismiss_completion();
-      presentation_state_.screen().status.clear();
-    }
-    else
-    {
-      draft_state_.handle_escape(presentation_state_.screen());
-    }
-  }
-  else if (key_matches_action(frontend_.key_bindings(), TuiAction::Submit, event.key))
-  {
-    if (event.key == Key::Enter && draft_state_.convert_backslash_enter_to_newline(presentation_state_.screen()))
-    {
-      if (!renderer_.request_render())
-      {
-        return TuiInputOutcome::Failure;
-      }
-      return TuiInputOutcome::Handled;
-    }
-    auto const action = handle_submit();
-    if (action == RuntimeSubmitDisposition::BreakLoop)
-      return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
-    if (action == RuntimeSubmitDisposition::ContinueLoop)
-      return TuiInputOutcome::Handled;
-  }
-  else if (event.key == Key::Space)
-  {
-    draft_state_.insert_input(input, presentation_state_.screen());
+    auto const outcome = handle_composer_input(ComposerInputPhase::Tail, input);
+    if (outcome != TuiInputOutcome::Pass)
+      return outcome;
   }
   return render_input();
 }
 
 TuiInputOutcome TuiSession::render_input()
 {
-  presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
+  presentation_state_.publish_completion(draft_state_);
   return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
 }
 

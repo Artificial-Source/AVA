@@ -138,7 +138,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     static_cast<void>(core::Application::instance().terminal_context().beep());
     {
       auto lock = renderer_.lock_ui();
-      settle_local_command_status(presentation_state_.screen(), std::move(status));
+      presentation_state_.publish_local_status(std::move(status));
     }
     // Failure path keeps last-good presentation and still paints the status when possible.
     return renderer_.render() ? DisplaySettingsReloadPollOutcome::Unchanged : DisplaySettingsReloadPollOutcome::TerminalFailure;
@@ -152,8 +152,8 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   {
     auto lock = renderer_.lock_ui();
     presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
-    synchronize_startup_overview_presentation(presentation_state_.screen(), selectors_);
-    settle_local_command_status(presentation_state_.screen(), std::move(status));
+    synchronize_startup_overview_presentation(presentation_state_, selectors_);
+    presentation_state_.publish_local_status(std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;
 }
@@ -161,20 +161,19 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
 bool RuntimeActionController::clear_draft_for_interrupt()
 {
   draft_state_.reset_interaction();
-  presentation_state_.screen().status.clear();
+  presentation_state_.publish_status({});
   return draft_state_.apply_action(TuiAction::ClearInput);
 }
 
 bool RuntimeActionController::open_external_editor()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
-  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
   // Protocol handoff invalidates any incomplete press/drag/header arm while preserving
   // a committed transcript range.
   renderer_.cancel_pointer_interaction();
   terminal_reset_mouse_tracking();
-  snapshot.status = "opening external editor";
+  presentation_state_.publish_status("opening external editor");
   if (!renderer_.paint_for_handoff())
     return false;
 
@@ -187,23 +186,23 @@ bool RuntimeActionController::open_external_editor()
 
   if (!edited)
   {
-    snapshot.status = edited.error().format();
+    presentation_state_.publish_status(edited.error().format());
     static_cast<void>(terminal_context.beep());
     return renderer_.paint_for_handoff();
   }
   if (!*edited)
   {
-    snapshot.status = "external editor canceled";
+    presentation_state_.publish_status("external editor canceled");
     return renderer_.paint_for_handoff();
   }
-  snapshot.status = draft_state_.replace_draft(std::move(**edited)) ? "external editor updated draft" : "external editor closed without changes";
+  presentation_state_.publish_status(draft_state_.replace_draft(std::move(**edited)) ? "external editor updated draft"
+                                                                                     : "external editor closed without changes");
   return renderer_.paint_for_handoff();
 }
 
 bool RuntimeActionController::suspend_to_background()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
-  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
   // Suspend handoff cancels in-flight pointer interaction; committed ranges remain.
   renderer_.cancel_pointer_interaction();
@@ -220,7 +219,7 @@ bool RuntimeActionController::suspend_to_background()
       auto const saved_errno = errno;
       refresh_geometry_from_kernel();
       terminal_context.restore_terminal_after_handoff();
-      snapshot.status = std::string("failed to suspend: ") + std::strerror(saved_errno);
+      presentation_state_.publish_status(std::string("failed to suspend: ") + std::strerror(saved_errno));
       static_cast<void>(terminal_context.beep());
       return renderer_.paint_for_handoff();
     }
@@ -229,7 +228,7 @@ bool RuntimeActionController::suspend_to_background()
     terminal_context.restore_terminal_after_handoff();
   }
 
-  snapshot.status = "resumed from background";
+  presentation_state_.publish_status("resumed from background");
   return renderer_.paint_for_handoff();
 }
 
@@ -237,35 +236,34 @@ bool RuntimeActionController::queue_pending_image_attachment(ava::session::Image
 {
   if (label.empty())
     label = imported.id;
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const image_capabilities = active_terminal_image_capabilities();
   auto detail = attachment_detail(imported, image_capabilities);
   if (!snapshot.show_images)
     detail += " (hidden)";
   auto const preview = attachment_preview(frontend_, imported, image_capabilities, snapshot.show_images);
   attachments_.stage(imported, PendingAttachmentItem{.label = label, .detail = detail, .preview = preview});
-  settle_local_command_status(snapshot, std::move(status));
+  presentation_state_.publish_local_status(std::move(status));
   return renderer_.render();
 }
 
 bool RuntimeActionController::paste_clipboard_image()
 {
-  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
-  snapshot.status = "reading clipboard image";
+  presentation_state_.publish_status("reading clipboard image");
   if (!renderer_.paint_for_handoff())
     return false;
 
   auto imported = frontend_.on_paste_clipboard_image();
   if (!imported)
   {
-    snapshot.status = imported.error().format();
+    presentation_state_.publish_status(imported.error().format());
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.render();
   }
   if (!*imported)
   {
-    snapshot.status = "no clipboard image available";
+    presentation_state_.publish_status("no clipboard image available");
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.render();
   }
@@ -274,9 +272,9 @@ bool RuntimeActionController::paste_clipboard_image()
 
 bool RuntimeActionController::copy_latest_assistant_message()
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const result = runtime_transcript::copy_latest_assistant_message(snapshot.transcript);
-  snapshot.status = runtime_transcript::latest_assistant_copy_status(result);
+  presentation_state_.publish_status(runtime_transcript::latest_assistant_copy_status(result));
   if (result != runtime_transcript::LatestAssistantCopyResult::RequestSent)
     static_cast<void>(core::Application::instance().terminal_context().beep());
   return renderer_.request_render();
@@ -284,45 +282,42 @@ bool RuntimeActionController::copy_latest_assistant_message()
 
 void RuntimeActionController::cycle_reasoning()
 {
-  auto& snapshot = presentation_state_.screen();
-  clear_reasoning_feedback_for_user_input(snapshot);
+  presentation_state_.clear_input_feedback();
   auto result = frontend_.on_cycle_reasoning();
   if (!result)
   {
-    snapshot.status = result.error().format();
+    presentation_state_.publish_status(result.error().format());
     return;
   }
-  apply_reasoning_cycle_success(snapshot, std::move(*result));
+  presentation_state_.publish_reasoning_feedback(std::move(*result));
 }
 
 void RuntimeActionController::toggle_thinking_visibility()
 {
-  auto& snapshot = presentation_state_.screen();
-  snapshot.thinking_visible = !snapshot.thinking_visible;
-  snapshot.status = snapshot.thinking_visible ? "thinking visible" : "thinking hidden";
-  renderer_.transcript().request_live_tail();
+  auto const& snapshot = presentation_state_.screen();
+  presentation_state_.publish_thinking_visibility(!snapshot.thinking_visible);
+  presentation_state_.publish_status(snapshot.thinking_visible ? "thinking visible" : "thinking hidden");
+  renderer_.show_live_tail(LiveTailReason::Requested);
 }
 
 bool RuntimeActionController::open_model_selector()
 {
-  auto& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
-  snapshot.status = "model selector opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("model selector opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_selection)
 {
-  auto& snapshot = presentation_state_.screen();
   auto view = frontend_.reasoning_selector_view(chained_from_model_selection);
   if (!view)
   {
     if (!chained_from_model_selection)
     {
-      snapshot.status = "thinking mode unavailable for current model";
+      presentation_state_.publish_status("thinking mode unavailable for current model");
       static_cast<void>(core::Application::instance().terminal_context().beep());
     }
     return true;
@@ -330,95 +325,90 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Reasoning, std::move(*view));
-  snapshot.status = "thinking mode selector opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("thinking mode selector opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 bool RuntimeActionController::open_scoped_model_selector()
 {
-  auto& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
-  snapshot.status = "scoped model selector opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("scoped model selector opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 bool RuntimeActionController::toggle_startup_overview()
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   if (selectors_.kind() == ActiveSelectList::Overview && selectors_.view())
   {
     selectors_.close();
-    snapshot.startup_overview.reset();
-    snapshot.status = "overview closed";
+    presentation_state_.clear_startup_overview();
+    presentation_state_.publish_status("overview closed");
     return renderer_.request_render();
   }
   // Read current backend facts exactly once for this popup lifetime. The callback
   // returns an owning safe DTO; local display and keybinding hints are composed here.
   presentation_state_.initialize_startup_overview(frontend_, frontend_.read_startup_overview());
   // Replace any other modal with the read-only overview; Enter/Esc close without mutation.
-  snapshot.sidebar_drawer_visible = false;
-  snapshot.sidebar_drawer_scroll_offset = 0;
+  presentation_state_.publish_sidebar_drawer(false, 0);
   selectors_.open(ActiveSelectList::Overview, overview_select_list_view(*snapshot.startup_overview));
-  snapshot.status = "overview opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("overview opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 bool RuntimeActionController::open_fork_user_turn_selector(std::string_view initial_query)
 {
-  auto& snapshot = presentation_state_.screen();
   auto opened = frontend_.on_open_fork_user_turn_selector(initial_query);
   if (!opened)
   {
-    snapshot.status = opened.error().format();
+    presentation_state_.publish_status(opened.error().format());
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ForkUserTurn, std::move(*opened));
-  snapshot.status = "fork-from selector opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("fork-from selector opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 bool RuntimeActionController::open_copy_user_turn_selector(std::string_view initial_query)
 {
-  auto& snapshot = presentation_state_.screen();
   auto opened = frontend_.on_open_copy_user_turn_selector(initial_query);
   if (!opened)
   {
-    snapshot.status = opened.error().format();
+    presentation_state_.publish_status(opened.error().format());
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::CopyUserTurn, std::move(*opened));
-  snapshot.status = "copy user-turn selector opened";
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status("copy user-turn selector opened");
+  renderer_.show_live_tail(LiveTailReason::Requested);
   return renderer_.request_render();
 }
 
 void RuntimeActionController::cycle_model(bool forward)
 {
-  auto& snapshot = presentation_state_.screen();
   auto result = frontend_.on_cycle_model(forward);
   if (!result)
   {
-    snapshot.status = result.error().format();
+    presentation_state_.publish_status(result.error().format());
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return;
   }
   presentation_state_.refresh_after_backend_action(frontend_);
-  snapshot.status = std::move(*result);
-  renderer_.transcript().request_live_tail();
+  presentation_state_.publish_status(std::move(*result));
+  renderer_.show_live_tail(LiveTailReason::Requested);
 }
 
 }  // namespace ava::tui

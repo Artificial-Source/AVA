@@ -2,6 +2,7 @@
 
 #include "ActiveRun.h"
 #include "BranchSummaryOperation.h"
+#include "CommandOutput.h"
 #include "Composer.h"
 #include "PendingAttachments.h"
 #include "SelectorHost.h"
@@ -49,6 +50,12 @@ class TuiSession final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // Resolve configured bindings on the TUI thread without repeating lookup policy.
+  [[nodiscard]] bool is_action(TuiAction action, InputEvent const& event) const;
+  // TUI thread: consume editor feedback at its dispatch stage before rendering.
+  [[nodiscard]] bool apply_composer_result(ComposerInputResult result);
+  // Executes only the cross-owner request after Composer resolves key precedence.
+  TuiInputOutcome handle_composer_input(ComposerInputPhase phase, runtime_input::RuntimeInput const& input);
   bool stop_for_branch_summary(BranchSummaryOutcome outcome);
   bool maybe_reload_display_settings();
   bool toggle_startup_overview();
@@ -73,12 +80,9 @@ class TuiSession final
   TuiInputOutcome handle_branch_summary_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_search_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_selector_input(runtime_input::RuntimeInput const& input);
-  TuiInputOutcome handle_jump_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_primary_input(runtime_input::RuntimeInput const& input);
-  TuiInputOutcome handle_editor_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_session_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_transcript_input(runtime_input::RuntimeInput const& input);
-  TuiInputOutcome handle_composer_navigation_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_tail_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome render_input();
 
@@ -89,6 +93,8 @@ class TuiSession final
   // Every timer/notification client below retires before the loop resources.
   TuiEventLoop loop_;
   RuntimePresentationState presentation_state_;
+  // Modal input policy; presentation storage above outlives this owner.
+  CommandOutput command_output_;
   PendingAttachments attachments_;
   TuiSessionGrantRegistry command_session_grants_;
   RuntimePluginUiCoordinator plugin_ui_;

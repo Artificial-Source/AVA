@@ -12,48 +12,341 @@
 
 namespace ava::tui {
 
-void Composer::select_slash_command(ComposerSnapshot& snapshot, terminal::Context& context)
+ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
+                                         RuntimeNavigationController& navigation, bool transcript_selected, ComposerInputPhase phase)
 {
+  using Key = terminal::Key;
+  auto is_action = [&](TuiAction action) { return key_matches_action(bindings, action, input.event.key); };
+  ComposerInputResult result;
+  if (phase == ComposerInputPhase::Jump)
+  {
+    if (jump_mode() == ComposerJumpMode::None)
+      return {};
+    if (is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward))
+    {
+      cancel_jump();
+      result.status = "jump cancelled";
+    }
+    else if (auto const target = runtime_input::printable_jump_target(input))
+    {
+      bool const forward = jump_mode() == ComposerJumpMode::Forward;
+      result.status = jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward") : "jump character not found";
+    }
+    else
+      cancel_jump();
+    result.handled =
+        input.event.key == Key::Character || input.event.key == Key::Space || is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward);
+    return result;
+  }
+  if (phase == ComposerInputPhase::Primary)
+  {
+    if (input.event.key == Key::Character)
+      return insert_input(input);
+    if (is_action(TuiAction::MessageFollowUp))
+      return {.handled = true, .request = ComposerInputRequest::Submit};
+    if (!is_action(TuiAction::NewLine))
+      return {};
+    insert_newline();
+    return {.handled = true};
+  }
+  // Editor runs before session Interrupt, so ClearInput can consume a shared key.
+  // Navigation runs after transcript keys, preserving their existing precedence.
+  if (phase == ComposerInputPhase::Editor)
+  {
+    auto const& event = input.event;
+    bool const ctrl_d_delete_forward = event.key == Key::CtrlD && is_action(TuiAction::DeleteForward) && !draft().text.empty();
+    bool const delete_forward_action = is_action(TuiAction::DeleteForward) && (event.key != Key::CtrlD || ctrl_d_delete_forward);
+    if (is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward))
+    {
+      begin_jump(is_action(TuiAction::JumpForward) ? ComposerJumpMode::Forward : ComposerJumpMode::Backward);
+      result.status = is_action(TuiAction::JumpForward) ? "jump forward: type character" : "jump backward: type character";
+    }
+    else if (is_action(TuiAction::DeleteBackward))
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteBackward));
+    }
+    else if (delete_forward_action)
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteForward));
+    }
+    else if (is_action(TuiAction::DeleteWordBackward))
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteWordBackward));
+    }
+    else if (is_action(TuiAction::DeleteWordForward))
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteWordForward));
+    }
+    else if (is_action(TuiAction::DeleteToLineStart))
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteToLineStart));
+    }
+    else if (is_action(TuiAction::DeleteToLineEnd))
+    {
+      static_cast<void>(apply_edit(TuiAction::DeleteToLineEnd));
+    }
+    else if (is_action(TuiAction::CopySelection) && selection_bounds())
+    {
+      cancel_escape();
+      cancel_path_completion();
+      result = copy_selection();
+    }
+    else if (is_action(TuiAction::CopySelection) && transcript_selected)
+    {
+      cancel_escape();
+      cancel_path_completion();
+      result.request = ComposerInputRequest::CopyTranscript;
+    }
+    else if (is_action(TuiAction::ClearInput) && (!draft().text.empty() || !is_action(TuiAction::Interrupt)))
+    {
+      result.status = apply_edit(TuiAction::ClearInput) ? "input cleared" : "input already empty";
+    }
+    else if (is_action(TuiAction::AutocompleteAccept) && navigation.slash_palette_active())
+    {
+      cancel_escape();
+      result = select_slash_command(snapshot);
+    }
+    else if (is_action(TuiAction::AutocompleteAccept) && navigation.file_reference_palette_active())
+    {
+      cancel_escape();
+      result = select_file_reference(navigation);
+    }
+    else if (is_action(TuiAction::AutocompleteAccept) && navigation.path_completion_palette_active())
+    {
+      cancel_escape();
+      result = select_path_completion(navigation);
+    }
+    else if (is_action(TuiAction::AutocompleteAccept) && (result = force_path_completion(navigation)).handled)
+    {
+      cancel_escape();
+    }
+    else
+      return {};
+    result.handled = true;
+    return result;
+  }
+  if (phase == ComposerInputPhase::Navigation)
+  {
+    auto const& event = input.event;
+    if ((result = extend_selection_for_key(event.key)).handled)
+    {
+      result.request = ComposerInputRequest::ClearTranscriptSelection;
+    }
+    else if (event.key == Key::CtrlHome)
+    {
+      move_document_boundary(false);
+    }
+    else if (event.key == Key::CtrlEnd)
+    {
+      move_document_boundary(true);
+    }
+    else if (is_action(TuiAction::CursorLeft))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorLeft));
+    }
+    else if (is_action(TuiAction::CursorRight))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorRight));
+    }
+    else if (is_action(TuiAction::CursorLineStart))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorLineStart));
+    }
+    else if (is_action(TuiAction::CursorLineEnd))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorLineEnd));
+    }
+    else if (is_action(TuiAction::CursorWordLeft))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorWordLeft));
+    }
+    else if (is_action(TuiAction::CursorWordRight))
+    {
+      static_cast<void>(apply_edit(TuiAction::CursorWordRight));
+    }
+    else if (is_action(TuiAction::PalettePrev) && (result = step_completion(CompletionStep::Previous, navigation, snapshot)).handled)
+    {
+    // Composer selected the row and produced its status.
+    }
+    else if (is_action(TuiAction::HistoryPrev))
+    {
+      if (browse_history(true))
+      {
+        result.status = "history previous";
+      }
+      else
+      {
+        result.request = ComposerInputRequest::ScrollUp;
+      }
+    }
+    else if (event.key == Key::ArrowUp)
+    {
+      result.request = ComposerInputRequest::ScrollUp;
+    }
+    else if (is_action(TuiAction::CursorUp) && move_vertical(TuiAction::CursorUp))
+    {
+    // Composer applied the movement and its successful-movement reset.
+    }
+    else if (is_action(TuiAction::PaletteNext) && (result = step_completion(CompletionStep::Next, navigation, snapshot)).handled)
+    {
+    // Composer selected the row and produced its status.
+    }
+    else if (is_action(TuiAction::HistoryNext))
+    {
+      if (browse_history(false))
+      {
+        result.status = history_index() ? "history next" : "history draft";
+      }
+      else
+      {
+        result.request = ComposerInputRequest::ScrollDown;
+      }
+    }
+    else if (event.key == Key::ArrowDown)
+    {
+      result.request = ComposerInputRequest::ScrollDown;
+    }
+    else if (is_action(TuiAction::CursorDown) && move_vertical(TuiAction::CursorDown))
+    {
+    // Composer applied the movement and its successful-movement reset.
+    }
+    else if (is_action(TuiAction::Undo))
+    {
+      result.status = apply_edit(TuiAction::Undo) ? "undo" : "nothing to undo";
+    }
+    else if (is_action(TuiAction::Redo))
+    {
+      result.status = apply_edit(TuiAction::Redo) ? "redo" : "nothing to redo";
+    }
+    else if (is_action(TuiAction::Yank))
+    {
+      result.status = apply_edit(TuiAction::Yank) ? "yanked text" : "nothing to yank";
+    }
+    else if (is_action(TuiAction::YankPop))
+    {
+      result.status = apply_edit(TuiAction::YankPop) ? "yank-pop" : "nothing to yank-pop";
+    }
+    else
+      return {};
+    result.handled = true;
+    return result;
+  }
+  if (phase == ComposerInputPhase::Tail)
+  {
+    // Cancel gives the draft selection priority over the transcript selection,
+    // then dismisses completion. Only an unclaimed Escape reaches double-Escape clearing.
+    if (is_action(TuiAction::Cancel))
+    {
+      if (selection_bounds())
+      {
+        clear_selection();
+        cancel_escape();
+        result.status = std::string{};
+      }
+      else if (transcript_selected)
+      {
+        result.request = ComposerInputRequest::ClearTranscriptSelection;
+        cancel_escape();
+        result.status = std::string{};
+      }
+      else if (navigation.slash_palette_active() || navigation.file_reference_palette_active() || navigation.path_completion_palette_active())
+      {
+        dismiss_completion();
+        result.status = std::string{};
+      }
+      else
+        result = handle_escape();
+    }
+    else if (is_action(TuiAction::Submit))
+    {
+      if (input.event.key == Key::Enter)
+        result = convert_backslash_enter_to_newline();
+      if (!result.handled)
+        result.request = ComposerInputRequest::Submit;
+    }
+    // Space comes after Submit deliberately: a custom Space binding must submit.
+    else if (input.event.key == Key::Space)
+      result = insert_input(input);
+    else
+      return {};
+    result.handled = true;
+    return result;
+  }
+  return {};
+}
+
+ComposerInputResult Composer::step_completion(CompletionStep step, RuntimeNavigationController& navigation, ComposerSnapshot const& snapshot)
+{
+  bool const slash = navigation.slash_palette_active();
+  bool const reference = !slash && navigation.file_reference_palette_active();
+  bool const path = !slash && !reference && navigation.path_completion_palette_active();
+  if (!slash && !reference && !path)
+    return {};
+  cancel_escape();
+  auto const count = slash ? filter_slash_commands(draft_.text, draft_.cursor, snapshot.slash_commands).size() : navigation.completion_match_count();
+  if (count == 0)
+    return {.handled = true, .status = slash ? "no matching slash commands" : reference ? "no matching file references" : "no matching paths"};
+  if (slash)
+    select_completion(step == CompletionStep::Previous
+                          ? previous_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, completion_index())
+                          : next_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, completion_index()));
+  else
+    select_completion(step == CompletionStep::Previous ? navigation.previous_completion(completion_index()) : navigation.next_completion(completion_index()));
+  return {.handled = true,
+          .status = std::string(slash       ? "command "
+                                : reference ? "reference "
+                                            : "path ") +
+                    std::to_string(completion_index() + 1) + "/" + std::to_string(count)};
+}
+
+ComposerInputResult Composer::select_slash_command(ComposerSnapshot const& snapshot)
+{
+  ComposerInputResult result{.handled = true};
   selected_slash_command_index_ = clamp_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, selected_slash_command_index_);
   if (auto const reason = slash_command_selection_disabled_reason(draft_.text, draft_.cursor, snapshot.slash_commands, selected_slash_command_index_))
   {
-    snapshot.status = "command disabled: " + *reason;
-    context.beep();
-    return;
+    result.status = "command disabled: " + *reason;
+    result.beep = true;
+    return result;
   }
   auto selection = slash_command_selection_text(draft_.text, draft_.cursor, snapshot.slash_commands, selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
-  snapshot.status = "command selected - press Enter to run";
+  result.status = "command selected - press Enter to run";
+  return result;
 }
-void Composer::select_file_reference(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context)
+ComposerInputResult Composer::select_file_reference(RuntimeNavigationController& navigation)
 {
+  ComposerInputResult result{.handled = true};
   selected_slash_command_index_ = navigation.clamp_completion(selected_slash_command_index_);
   if (auto const reason = navigation.selected_completion_disabled_reason(selected_slash_command_index_))
   {
-    snapshot.status = "reference disabled: " + *reason;
-    context.beep();
-    return;
+    result.status = "reference disabled: " + *reason;
+    result.beep = true;
+    return result;
   }
   auto selection = navigation.selected_completion_text(selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
-  snapshot.status = "file reference selected";
+  result.status = "file reference selected";
+  return result;
 }
-void Composer::select_path_completion(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context)
+ComposerInputResult Composer::select_path_completion(RuntimeNavigationController& navigation)
 {
+  ComposerInputResult result{.handled = true};
   selected_slash_command_index_ = navigation.clamp_completion(selected_slash_command_index_);
   if (auto const reason = navigation.selected_completion_disabled_reason(selected_slash_command_index_))
   {
-    snapshot.status = "path disabled: " + *reason;
-    context.beep();
-    return;
+    result.status = "path disabled: " + *reason;
+    result.beep = true;
+    return result;
   }
   auto selection = navigation.selected_completion_text(selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
-  snapshot.status = "path selected";
+  result.status = "path selected";
+  return result;
 }
-bool Composer::force_path_completion(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context,
-                                     ComposerEditContext edit_context)
+ComposerInputResult Composer::force_path_completion(RuntimeNavigationController& navigation, ComposerEditContext edit_context)
 {
+  ComposerInputResult result{.handled = true};
   auto const was_suppressed = slash_palette_suppressed_;
   slash_palette_suppressed_ = false;
   path_completion_force_active_ = true;
@@ -62,7 +355,7 @@ bool Composer::force_path_completion(RuntimeNavigationController& navigation, Co
   {
     slash_palette_suppressed_ = was_suppressed;
     path_completion_force_active_ = false;
-    return false;
+    return {};
   }
   if (edit_context == ComposerEditContext::Idle)
   {
@@ -75,21 +368,21 @@ bool Composer::force_path_completion(RuntimeNavigationController& navigation, Co
     if (auto const reason = navigation.selected_completion_disabled_reason(0))
     {
       path_completion_force_active_ = false;
-      snapshot.status = "path disabled: " + *reason;
-      context.beep();
-      return true;
+      result.status = "path disabled: " + *reason;
+      result.beep = true;
+      return result;
     }
     auto selection = navigation.selected_completion_text(0);
     accept_completion(std::move(selection.text), selection.cursor, ComposerCompletionOrigin::Forced);
-    snapshot.status = "path selected";
-    return true;
+    result.status = "path selected";
+    return result;
   }
   if (edit_context == ComposerEditContext::Idle)
     draft_scroll_offset_ = 0;
   else
     selected_slash_command_index_ = 0;
-  snapshot.status = "path suggestions";
-  return true;
+  result.status = "path suggestions";
+  return result;
 }
 
 ComposerDraftState const& Composer::draft() const noexcept
@@ -252,21 +545,21 @@ bool Composer::browse_history(bool previous)
   draft_scroll_offset_ = 0;
   return browse_composer_input_history(draft_, input_history_, history_index_, draft_input_, previous);
 }
-void Composer::insert_input(runtime_input::RuntimeInput const& input, ComposerSnapshot& snapshot, ComposerEditContext context)
+ComposerInputResult Composer::insert_input(runtime_input::RuntimeInput const& input, ComposerEditContext context)
 {
+  ComposerInputResult result{.handled = true};
   prepare_text_edit();
-  if (context == ComposerEditContext::ActiveRun)
-    snapshot.local_command_feedback.reset();
   auto const text = input.text.empty() ? std::string(1, input.event.character) : input.text;
   if (input.bracketed_paste)
   {
     static_cast<void>(delete_selection());
     auto const inserted = insert_composer_paste_text(draft_, text);
     if (inserted || context == ComposerEditContext::ActiveRun)
-      snapshot.status = "pasted into draft safely";
+      result.status = "pasted into draft safely";
   }
   else if (!replace_selection(text))
     static_cast<void>(insert_composer_draft_text(draft_, text));
+  return result;
 }
 void Composer::select_completion(std::size_t index)
 {
@@ -368,8 +661,9 @@ void Composer::end_pointer_selection()
 {
   mouse_selecting_ = false;
 }
-void Composer::handle_escape(ComposerSnapshot& snapshot)
+ComposerInputResult Composer::handle_escape()
 {
+  ComposerInputResult result{.handled = true};
   if (!draft_.text.empty())
   {
     if (pending_escape_clear_)
@@ -379,19 +673,20 @@ void Composer::handle_escape(ComposerSnapshot& snapshot)
       leave_history();
       draft_scroll_offset_ = 0;
       cancel_escape();
-      snapshot.status = "input cleared";
+      result.status = "input cleared";
     }
     else
     {
       pending_escape_clear_ = true;
-      snapshot.status = "press Esc again to clear";
+      result.status = "press Esc again to clear";
     }
   }
   else
   {
     cancel_escape();
-    snapshot.status = "escape ignored";
+    result.status = "escape ignored";
   }
+  return result;
 }
 void Composer::clamp_scroll(std::size_t maximum)
 {
@@ -413,6 +708,7 @@ void Composer::project(ComposerSnapshot& snapshot)
 {
   draft_.cursor = clamp_composer_draft_cursor(draft_.text, draft_.cursor);
   project_completion(snapshot);
+  snapshot.draft_scroll_offset = draft_scroll_offset_;
   auto const selection = selection_bounds();
   snapshot.input_selection_start = selection ? selection->first : std::string::npos;
   snapshot.input_selection_end = selection ? selection->second : std::string::npos;
@@ -490,24 +786,28 @@ std::optional<std::string> Composer::selected_text() const
   return draft_.text.substr(bounds->first, bounds->second - bounds->first);
 }
 
-bool Composer::copy_selection(ComposerSnapshot& snapshot)
+ComposerInputResult Composer::copy_selection()
 {
+  ComposerInputResult result{.handled = true};
   auto const text = selected_text();
   if (!text || text->empty())
   {
-    snapshot.status = "no selection to copy";
-    ava::core::Application::instance().terminal_context().beep();
-    return false;
+    result.status = "no selection to copy";
+    result.beep = true;
+    result.handled = false;
+    return result;
   }
   auto const copied = runtime_transcript::copy_text_to_terminal_clipboard(*text);
-  snapshot.status = copied ? "selection copy request sent" : "clipboard copy failed";
+  result.status = copied ? "selection copy request sent" : "clipboard copy failed";
   if (!copied)
-    ava::core::Application::instance().terminal_context().beep();
-  return copied;
+    result.beep = true;
+  result.handled = copied;
+  return result;
 }
 
-void Composer::extend_selection(TuiAction movement, ComposerSnapshot& snapshot)
+ComposerInputResult Composer::extend_selection(TuiAction movement)
 {
+  ComposerInputResult result{.handled = true};
   pending_escape_clear_ = false;
   history_index_.reset();
   draft_input_.clear();
@@ -520,11 +820,13 @@ void Composer::extend_selection(TuiAction movement, ComposerSnapshot& snapshot)
   draft_.cursor = clamp_composer_draft_cursor(draft_.text, draft_.cursor);
   draft_selection_anchor_ = anchor;
   draft_selection_cursor_ = draft_.cursor;
-  snapshot.status = selection_bounds() ? "selection active" : "selection boundary";
+  result.status = selection_bounds() ? "selection active" : "selection boundary";
+  return result;
 }
 
-void Composer::extend_selection_to(std::size_t target, ComposerSnapshot& snapshot)
+ComposerInputResult Composer::extend_selection_to(std::size_t target)
 {
+  ComposerInputResult result{.handled = true};
   pending_escape_clear_ = false;
   history_index_.reset();
   draft_input_.clear();
@@ -539,48 +841,39 @@ void Composer::extend_selection_to(std::size_t target, ComposerSnapshot& snapsho
   draft_.yank_end = std::string::npos;
   draft_selection_anchor_ = anchor;
   draft_selection_cursor_ = draft_.cursor;
-  snapshot.status = selection_bounds() ? "selection active" : "selection boundary";
+  result.status = selection_bounds() ? "selection active" : "selection boundary";
+  return result;
 }
 
-bool Composer::extend_selection_for_key(terminal::Key key, ComposerSnapshot& snapshot)
+ComposerInputResult Composer::extend_selection_for_key(terminal::Key key)
 {
   using Key = terminal::Key;
   switch (key)
   {
     case Key::ShiftArrowUp:
-      extend_selection(TuiAction::CursorUp, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorUp);
     case Key::ShiftArrowDown:
-      extend_selection(TuiAction::CursorDown, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorDown);
     case Key::ShiftArrowLeft:
-      extend_selection(TuiAction::CursorLeft, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorLeft);
     case Key::ShiftArrowRight:
-      extend_selection(TuiAction::CursorRight, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorRight);
     case Key::ShiftCtrlArrowLeft:
     case Key::ShiftAltArrowLeft:
-      extend_selection(TuiAction::CursorWordLeft, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorWordLeft);
     case Key::ShiftCtrlArrowRight:
     case Key::ShiftAltArrowRight:
-      extend_selection(TuiAction::CursorWordRight, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorWordRight);
     case Key::ShiftHome:
-      extend_selection(TuiAction::CursorLineStart, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorLineStart);
     case Key::ShiftEnd:
-      extend_selection(TuiAction::CursorLineEnd, snapshot);
-      return true;
+      return extend_selection(TuiAction::CursorLineEnd);
     case Key::ShiftCtrlHome:
-      extend_selection_to(0, snapshot);
-      return true;
+      return extend_selection_to(0);
     case Key::ShiftCtrlEnd:
-      extend_selection_to(draft_.text.size(), snapshot);
-      return true;
+      return extend_selection_to(draft_.text.size());
     default:
-      return false;
+      return {};
   }
 }
 
@@ -596,12 +889,13 @@ void Composer::insert_newline()
     static_cast<void>(insert_composer_draft_text(draft_, "\n"));
 }
 
-bool Composer::convert_backslash_enter_to_newline(ComposerSnapshot& snapshot)
+ComposerInputResult Composer::convert_backslash_enter_to_newline()
 {
+  ComposerInputResult result{.handled = true};
   if (selection_bounds())
-    return false;
+    return {};
   if (!replace_composer_backslash_before_cursor_with_newline(draft_))
-    return false;
+    return {};
   pending_escape_clear_ = false;
   history_index_.reset();
   draft_input_.clear();
@@ -609,8 +903,8 @@ bool Composer::convert_backslash_enter_to_newline(ComposerSnapshot& snapshot)
   slash_palette_suppressed_ = false;
   path_completion_force_active_ = false;
   draft_scroll_offset_ = 0;
-  snapshot.status = "newline inserted";
-  return true;
+  result.status = "newline inserted";
+  return result;
 }
 
 }  // namespace ava::tui

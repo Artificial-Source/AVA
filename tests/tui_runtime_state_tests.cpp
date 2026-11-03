@@ -4,6 +4,7 @@
 #include "ava/event/EventEnvelope.h"
 #include "ava/event/EventEnvelopeContext.h"
 #include "ava/event/RuntimeEvent.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -1654,14 +1655,17 @@ void test_tui_active_nonblocking_command_lane()
 
 void test_tui_selector_authority_dispatch_paints_before_callback()
 {
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::SelectorHost selectors(snapshot);
-  snapshot.mode = "build";
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  auto const& snapshot = presentation.screen();
+  ava::tui::Composer composer;
+  ava::tui::SelectorHost selectors(presentation);
   //  snapshot.provider = "openai";
   //  snapshot.model = "gpt-5.5";
-  snapshot.session_id = "session_current";
-  snapshot.input = "draft survives";
-  snapshot.status = "selecting";
+  presentation.finish_session_transition("session_current");
+  composer.replace_draft("draft survives");
+  presentation.publish_composer(composer);
+  presentation.publish_status("selecting");
   selectors.open(ava::tui::ActiveSelectList::Model, ava::tui::SelectListView{.title = "Select model",
                                                                              .subtitle = {},
                                                                              .items = {ava::tui::SelectListItemView{.value = "openai/gpt-5.5",
@@ -1678,7 +1682,8 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
                                                                              .placeholder = "Search",
                                                                              .empty_text = "No matches",
                                                                              .footer_hint = "Esc cancel"});
-  snapshot.input_cursor = 5;
+  composer.replace_draft(snapshot.input, 5);
+  presentation.publish_composer(composer);
   auto const original_input = snapshot.input;
   auto const original_cursor = snapshot.input_cursor;
   std::mutex mutex;
@@ -1691,7 +1696,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
 
   std::thread dispatch([&]() {
     auto result = ava::tui::dispatch_tui_selector_authority(
-        snapshot, selectors, "switching model…",
+        presentation, selectors, "switching model…",
         [&]() {
           events.push_back("render");
           return true;
@@ -1722,7 +1727,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
   session_view.title = "Select session";
   selectors.open(ava::tui::ActiveSelectList::Session, std::move(session_view));
   auto failed = ava::tui::dispatch_tui_selector_authority(
-      snapshot, selectors, "opening session…", []() { return true; },
+      presentation, selectors, "opening session…", []() { return true; },
       []() -> ava::core::Result<std::string> { return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "session unavailable")); });
   expect(!failed && !snapshot.select_list && snapshot.status.find("session unavailable") != std::string::npos && snapshot.input == original_input &&
              snapshot.input_cursor == original_cursor,

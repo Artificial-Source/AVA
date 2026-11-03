@@ -11,10 +11,12 @@
 #include "ava/app/plugin_ui_capability.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
+#include "ava/tui/runtime_state_internal.h"
 #include "ava/plugin/enablement.h"
 #include "ava/plugin/manifest.h"
 #include "ava/plugin/runner.h"
@@ -1082,10 +1084,12 @@ void test_external_disable_revokes_active_ui_command()
   expect(enabled.has_value(), "external-disable fixture is initially enabled");
   auto session = plugin_ui_test_session(paths, workspace);
 
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
-  snapshot.width = 80;
-  snapshot.height = 12;
+  tui_test_support::TuiFrontEndFixture snapshot_frontend;
+  ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+  auto const& snapshot = snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  snapshot_presentation.publish_dimensions(80, snapshot.height);
+  snapshot_presentation.publish_dimensions(snapshot.width, 12);
   auto const artificial_start = std::chrono::steady_clock::now() - ava::tui::kTuiPluginUiInvocationDeadline + std::chrono::seconds(3);
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "disable_invocation", artificial_start);
   expect(endpoint.has_value(), "external-disable fixture arms the real TUI coordinator with a finite test deadline");
@@ -1281,12 +1285,16 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
                           {"trailing space rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {} ")},
                           {"noncanonical id rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run COM.EXAMPLE.ui run {}")}});
 
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
-  snapshot.width = 80;
-  snapshot.height = 24;
-  snapshot.input = "draft remains";
-  snapshot.transcript = {{.label = "you", .text = "history remains"}};
+  tui_test_support::TuiFrontEndFixture snapshot_frontend;
+  ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+  auto const& snapshot = snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  snapshot_presentation.publish_dimensions(80, snapshot.height);
+  snapshot_presentation.publish_dimensions(snapshot.width, 24);
+  ava::tui::Composer snapshot_composer;
+  snapshot_composer.replace_draft("draft remains");
+  snapshot_presentation.publish_composer(snapshot_composer);
+  snapshot_presentation.publish_transcript({{.label = "you", .text = "history remains"}});
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "invocation-1");
   expect(endpoint && static_cast<bool>(*endpoint), "direct submission arms one bounded TUI-local presenter endpoint");
   if (!ava::tests::require(endpoint.has_value(), "UI presenter fixture is available"))
@@ -1354,13 +1362,17 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   ava::core::UniqueFd input(descriptors[0]);
   ava::core::UniqueFd output(descriptors[1]);
   ava::tui::TuiEventLoop loop(input.get());
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
+  tui_test_support::TuiFrontEndFixture snapshot_frontend;
+  ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+  auto const& snapshot = snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
   coordinator.attach_loop(loop);
-  snapshot.width = 80;
-  snapshot.height = 10;
-  snapshot.input = "untouched draft";
-  snapshot.transcript = {{.label = "assistant", .text = "untouched transcript"}};
+  snapshot_presentation.publish_dimensions(80, snapshot.height);
+  snapshot_presentation.publish_dimensions(snapshot.width, 10);
+  ava::tui::Composer snapshot_composer;
+  snapshot_composer.replace_draft("untouched draft");
+  snapshot_presentation.publish_composer(snapshot_composer);
+  snapshot_presentation.publish_transcript({{.label = "assistant", .text = "untouched transcript"}});
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui choose {}", "modal-1");
   if (!endpoint)
   {
@@ -1490,10 +1502,12 @@ void test_tui_plugin_ui_attribution_fit_policy()
   auto narrow_case = [&](std::string const& plugin_id, std::string_view invocation_prefix) {
     for (std::size_t height = 8; height <= 12; ++height)
     {
-      ava::tui::ComposerSnapshot snapshot;
-      ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
-      snapshot.width = 80;
-      snapshot.height = height;
+      tui_test_support::TuiFrontEndFixture snapshot_frontend;
+      ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+      auto const& snapshot = snapshot_presentation.screen();
+      ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+      snapshot_presentation.publish_dimensions(80, snapshot.height);
+      snapshot_presentation.publish_dimensions(snapshot.width, height);
       auto const invocation_id = std::string(invocation_prefix) + std::to_string(height);
       auto const canonical = "/plugin run " + plugin_id + " " + max_command + " {}";
       auto endpoint = coordinator.begin_submission(canonical, invocation_id);
@@ -1538,10 +1552,12 @@ void test_tui_plugin_ui_attribution_fit_policy()
     for (std::size_t height = 8; height <= 12; ++height)
     {
       auto exercise = [&](ava::tui::TuiPluginUiKind kind, std::string_view suffix, Trigger trigger) {
-        ava::tui::ComposerSnapshot snapshot;
-        ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
-        snapshot.width = 160;
-        snapshot.height = height;
+        tui_test_support::TuiFrontEndFixture snapshot_frontend;
+        ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+        auto const& snapshot = snapshot_presentation.screen();
+        ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+        snapshot_presentation.publish_dimensions(160, snapshot.height);
+        snapshot_presentation.publish_dimensions(snapshot.width, height);
         auto const invocation_id = "wide_narrow_" + std::to_string(height) + std::string(suffix);
         auto endpoint = coordinator.begin_submission("/plugin run " + plugin_id + " " + max_command + " {}", invocation_id);
         if (!endpoint)
@@ -1559,7 +1575,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
           return false;
         }
 
-        snapshot.width = 80;
+        snapshot_presentation.publish_dimensions(80, snapshot.height);
         bool invisible = true;
         for (auto const& line : ava::tui::render_composer(frontend.frontend(), snapshot))
           invisible = invisible && strip_sgr(line).find(plugin_id) == std::string::npos;
@@ -1646,10 +1662,12 @@ void test_tui_plugin_ui_attribution_fit_policy()
              dock_visible.find("Ctrl+C stop · 120s max") != std::string::npos && dock_visible.find("…") == std::string::npos,
          "sufficient-width dock chrome also renders complete maximum attribution and fixed controls");
 
-  ava::tui::ComposerSnapshot queued_snapshot;
-  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_snapshot);
-  queued_snapshot.width = 160;
-  queued_snapshot.height = 12;
+  tui_test_support::TuiFrontEndFixture queued_snapshot_frontend;
+  ava::tui::RuntimePresentationState queued_snapshot_presentation(queued_snapshot_frontend.frontend(), {});
+  auto const& queued_snapshot = queued_snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_snapshot_presentation);
+  queued_snapshot_presentation.publish_dimensions(160, queued_snapshot.height);
+  queued_snapshot_presentation.publish_dimensions(queued_snapshot.width, 12);
   auto queued_endpoint = queued_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "queued_resize");
   if (!queued_endpoint)
   {
@@ -1674,7 +1692,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
     std::unique_lock lock(enqueue_mutex);
     static_cast<void>(enqueued_cv.wait_until(lock, queued_deadline, [&] { return enqueued; }));
   }
-  queued_snapshot.width = 80;
+  queued_snapshot_presentation.publish_dimensions(80, queued_snapshot.height);
   while (queued_reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < queued_deadline)
   {
     static_cast<void>(queued_coordinator.poll(false));
@@ -1684,10 +1702,12 @@ void test_tui_plugin_ui_attribution_fit_policy()
     queued_coordinator.cancel_active();
   auto const queued_result = queued_reply.get();
 
-  ava::tui::ComposerSnapshot visible_snapshot;
-  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_snapshot);
-  visible_snapshot.width = 160;
-  visible_snapshot.height = 12;
+  tui_test_support::TuiFrontEndFixture visible_snapshot_frontend;
+  ava::tui::RuntimePresentationState visible_snapshot_presentation(visible_snapshot_frontend.frontend(), {});
+  auto const& visible_snapshot = visible_snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_snapshot_presentation);
+  visible_snapshot_presentation.publish_dimensions(160, visible_snapshot.height);
+  visible_snapshot_presentation.publish_dimensions(visible_snapshot.width, 12);
   auto visible_endpoint = visible_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "visible_resize");
   if (!visible_endpoint)
   {
@@ -1699,7 +1719,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
   visible_widget.title = "Wide dock";
   visible_widget.lines = {"visible before resize"};
   auto const visible_result = present_update_and_poll(visible_coordinator, *visible_endpoint, std::move(visible_widget));
-  visible_snapshot.width = 80;
+  visible_snapshot_presentation.publish_dimensions(80, visible_snapshot.height);
   auto const invalidated = visible_coordinator.cancel_unfittable_surfaces();
   auto after_invalidation =
       tui_request({.plugin_id = first_id, .command = max_command, .invocation_id = "visible_resize"}, "after-invalidation", ava::tui::TuiPluginUiKind::Status);
@@ -1722,10 +1742,12 @@ void test_tui_plugin_ui_attribution_fit_policy()
 
 void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
 {
-  ava::tui::ComposerSnapshot snapshot;
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot);
-  snapshot.width = 80;
-  snapshot.height = 24;
+  tui_test_support::TuiFrontEndFixture snapshot_frontend;
+  ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
+  auto const& snapshot = snapshot_presentation.screen();
+  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  snapshot_presentation.publish_dimensions(80, snapshot.height);
+  snapshot_presentation.publish_dimensions(snapshot.width, 24);
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "close_race");
   if (!endpoint)
   {

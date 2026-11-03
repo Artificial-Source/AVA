@@ -197,17 +197,19 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   auto state = std::make_shared<FakeBridgeState>();
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  auto& snapshot = presentation.screen();
+  auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar(), composer);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), snapshot, composer, renderer);
-  ava::tui::SelectorHost selectors(snapshot);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
+  ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
-  ava::tui::RuntimeMermaidPresentationController controller(snapshot, renderer, search, fake_bridge(state));
-  snapshot.session_id = "session-a";
-  snapshot.mermaid_enabled = true;
-  snapshot.mermaid_config_epoch = 1;
-  snapshot.transcript = {{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}};
+  ava::tui::RuntimeMermaidPresentationController controller(presentation, renderer, search, fake_bridge(state));
+  presentation.finish_session_transition("session-a");
+  auto display = frontend.frontend()->display_settings_snapshot();
+  display.mermaid_enabled = true;
+  display.mermaid_config_epoch = 1;
+  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  presentation.publish_transcript({{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}});
   auto const generation = snapshot.transcript_generation;
   auto pending = controller.service();
   expect(pending == ava::tui::MermaidServiceOutcome::Unchanged && state->requests.size() == 1 && snapshot.transcript_generation == generation &&
@@ -223,7 +225,8 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
          "accepted completion publishes one bounded presentation result and advances transcript geometry generation");
 
   auto fallback_before = ava::tui::detail::render_transcript_layout(snapshot.transcript, 60);
-  snapshot.mermaid_config_epoch = 2;
+  display.mermaid_config_epoch = 2;
+  presentation.apply_local_display_settings(*frontend.frontend(), display);
   state->completions.push_back({.identity = request.identity, .config_epoch = 1, .accepted = true, .text = "stale result"});
   auto reconfigured = controller.service();
   auto fallback_after = ava::tui::detail::render_transcript_layout(snapshot.transcript, 60, ava::tui::ToolPresentation::Rich, true, false,
@@ -232,9 +235,10 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
              state->requests.size() == 2,
          "configuration epoch changes remove old projections, ignore stale completions, and immediately requeue under the new epoch");
 
-  snapshot.transcript.front().append_only_stream = true;
-  snapshot.transcript.front().stream_id = "live";
-  ++snapshot.transcript_generation;
+  auto streaming = snapshot.transcript;
+  streaming.front().append_only_stream = true;
+  streaming.front().stream_id = "live";
+  presentation.publish_transcript(std::move(streaming));
   auto const request_count = state->requests.size();
   static_cast<void>(controller.service());
   expect(state->requests.size() == request_count && !state->cancellations.empty(),
@@ -248,24 +252,27 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
   auto state = std::make_shared<FakeBridgeState>();
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  auto& snapshot = presentation.screen();
+  auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar(), composer);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), snapshot, composer, renderer);
-  ava::tui::SelectorHost selectors(snapshot);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
+  ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
-  ava::tui::RuntimeMermaidPresentationController controller(snapshot, renderer, search, fake_bridge(state));
-  snapshot.session_id = "bounded";
-  snapshot.mermaid_enabled = true;
-  snapshot.mermaid_config_epoch = 1;
+  ava::tui::RuntimeMermaidPresentationController controller(presentation, renderer, search, fake_bridge(state));
+  presentation.finish_session_transition("bounded");
+  auto display = frontend.frontend()->display_settings_snapshot();
+  display.mermaid_enabled = true;
+  display.mermaid_config_epoch = 1;
+  presentation.apply_local_display_settings(*frontend.frontend(), display);
   for (std::size_t index = 0; index < 40; ++index)
-    snapshot.transcript.push_back({.label = "ava", .text = "```mermaid\ngraph TD; A" + std::to_string(index) + "-->B\n```"});
+    static_cast<void>(presentation.append_transcript({.label = "ava", .text = "```mermaid\ngraph TD; A" + std::to_string(index) + "-->B\n```"}));
   static_cast<void>(controller.service());
   expect(state->requests.size() == 32, "TUI reconciliation never exceeds the coordinator's 32 undrained identity bound");
 
   auto const evicted_request = state->requests.front();
-  snapshot.transcript.erase(snapshot.transcript.begin());
-  ++snapshot.transcript_generation;
+  auto retained = snapshot.transcript;
+  retained.erase(retained.begin());
+  presentation.publish_transcript(std::move(retained));
   static_cast<void>(controller.service());
   state->completions.push_back({.identity = evicted_request.identity, .config_epoch = 1, .accepted = true, .text = "must stay stale after leading eviction"});
   static_cast<void>(controller.service());
@@ -373,26 +380,27 @@ struct B5AttachedMermaidFixture
   // Composer is borrowed by renderer and navigation.
   ava::tui::Composer composer;
   // Renderer batches invalidation while attached to the loop.
-  ava::tui::RuntimeRenderer renderer{frontend.frontend(), presentation.screen(), presentation.sidebar(), composer};
+  ava::tui::RuntimeRenderer renderer{frontend.frontend(), presentation, composer};
   // Navigation shares the stable presentation and renderer owners.
-  ava::tui::RuntimeNavigationController navigation{*frontend.frontend(), presentation.screen(), composer, renderer};
+  ava::tui::RuntimeNavigationController navigation{*frontend.frontend(), presentation, composer, renderer};
   // Selectors precede the search owner that borrows them.
-  ava::tui::SelectorHost selectors{presentation.screen()};
+  ava::tui::SelectorHost selectors{presentation};
   // Search consumes projection mutations without owning the controller.
   ava::tui::TranscriptSearchController search{presentation, renderer, navigation, selectors};
   // Controller is destroyed first and unregisters its producer notification.
-  ava::tui::RuntimeMermaidPresentationController controller{presentation.screen(), renderer, search, b5_bridge(state)};
+  ava::tui::RuntimeMermaidPresentationController controller{presentation, renderer, search, b5_bridge(state)};
 
   // Attach renderer before Mermaid and install one finalized eligible block.
   B5AttachedMermaidFixture()
   {
     renderer.attach_loop(loop);
     controller.attach_loop(loop);
-    auto& snapshot = presentation.screen();
-    snapshot.session_id = "b5-attached";
-    snapshot.mermaid_enabled = true;
-    snapshot.mermaid_config_epoch = 1;
-    snapshot.transcript = {{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}};
+    presentation.finish_session_transition("b5-attached");
+    auto display = frontend.frontend()->display_settings_snapshot();
+    display.mermaid_enabled = true;
+    display.mermaid_config_epoch = 1;
+    presentation.apply_local_display_settings(*frontend.frontend(), display);
+    presentation.publish_transcript({{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}});
   }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -402,7 +410,7 @@ struct B5AttachedMermaidFixture
 void test_attached_mermaid_completion_without_transcript_change()
 {
   B5AttachedMermaidFixture fixture;
-  auto& snapshot = fixture.presentation.screen();
+  auto const& snapshot = fixture.presentation.screen();
   auto const generation = snapshot.transcript_generation;
   auto const first = fixture.controller.service_if_changed();
   if (!ava::tests::require(
@@ -456,7 +464,7 @@ void test_attached_mermaid_busy_backoff(bool busy_drain)
          "first Busy result arms a 100 ms retry");
 
   // Force an unrelated transcript observation; no source changes and no readiness notification justify another bridge attempt.
-  ++fixture.presentation.screen().transcript_generation;
+  fixture.presentation.invalidate_transcript_layout();
   static_cast<void>(fixture.controller.service_if_changed());
   static_cast<void>(fixture.controller.service());
   expect((busy_drain ? fixture.state->drains : fixture.state->enqueues) == first_attempts && !fixture.loop.has_due_work(before_first + 99ms),

@@ -6,6 +6,7 @@
 #include "ava/app/tui/command_palette_views.h"
 #include "ava/app/tui/reasoning_selector.h"
 #include "ava/app/tui/subagent_workspace.h"
+#include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -13,6 +14,7 @@
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_commands_internal.h"
+#include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 #include "ava/tui/runtime_user_turn_selection_internal.h"
 #include "ava/tui/runtime_views_internal.h"
@@ -1259,7 +1261,7 @@ void run_tui_selector_tests()
     {
       auto const last_good_revision = preview.overlay->theme->revision;
       auto const last_good_composer = preview.overlay->theme->palette->composer_bg;
-      overlay_snapshot.custom_themes.clear();  // invalid file dropped from app catalog
+      overlay_snapshot.custom_themes.clear(); // invalid file dropped from app catalog
       overlay_snapshot.custom_themes.push_back(ava::tui::ThemeOptionItem{.name = "broken", .detail = "/tmp/ava/broken.json"});
       reapply_settings_preview_after_display_reload(preview, overlay_snapshot);
       expect(preview.active() && preview.overlay && preview.overlay->theme && preview.overlay->theme->name == "sunrise" &&
@@ -1883,15 +1885,17 @@ void run_tui_selector_tests()
     promoted_id = std::string(id);
     return promote_outcome;
   };
-  ava::tui::ComposerSnapshot controller_snapshot;
-  controller_snapshot.input = "parent draft";
-  controller_snapshot.status = "parent status";
-  controller_snapshot.transcript = {{.label = "assistant", .text = "parent transcript"}};
-  controller_snapshot.transcript_generation = 42;
-  controller_snapshot.width = 40;
-  controller_snapshot.height = 8;
-  ava::tui::SelectorHost selectors(controller_snapshot);
-  ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_snapshot, selectors);
+  ava::tui::RuntimePresentationState controller_presentation(controller_frontend.frontend(), {});
+  auto const& controller_snapshot = controller_presentation.screen();
+  ava::tui::Composer controller_composer;
+  controller_composer.replace_draft("parent draft");
+  controller_presentation.publish_composer(controller_composer);
+  controller_presentation.publish_status("parent status");
+  controller_presentation.publish_transcript({{.label = "assistant", .text = "parent transcript"}});
+  auto const parent_generation = controller_snapshot.transcript_generation;
+  controller_presentation.publish_dimensions(40, 8);
+  ava::tui::SelectorHost selectors(controller_presentation);
+  ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
   auto const time_zero = WorkspaceClock::time_point{};
   expect(workspace_controller.open_selector(time_zero) && workspace_controller.selector_active() && list_calls == 1,
@@ -2014,7 +2018,7 @@ void run_tui_selector_tests()
   static_cast<void>(workspace_controller.handle_input(escape_workspace));
   static_cast<void>(workspace_controller.handle_input(escape_workspace));
   expect(!workspace_controller.active() && controller_snapshot.input == "parent draft" && controller_snapshot.status == "parent status" &&
-             controller_snapshot.transcript_generation == 42 && controller_snapshot.transcript.size() == 1,
+             controller_snapshot.transcript_generation == parent_generation && controller_snapshot.transcript.size() == 1,
          "closing the shared workspace restores the exact parent draft, status, transcript, and generation");
 
   auto prompt_precedence_snapshot = ava::tui::ComposerSnapshot{};

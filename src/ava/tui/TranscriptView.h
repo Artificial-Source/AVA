@@ -11,6 +11,8 @@
 
 namespace ava::tui {
 
+class RuntimePresentationState;
+
 class TranscriptPositionIndicatorState final
 {
  public:
@@ -47,7 +49,7 @@ class TranscriptView final
 {
  public:
   using Clock = std::chrono::steady_clock;
-  TranscriptView(ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& composer);
+  TranscriptView(RuntimePresentationState& presentation, Composer& composer);
   TranscriptView(TranscriptView const&) = delete;
   TranscriptView& operator=(TranscriptView const&) = delete;
 
@@ -107,8 +109,7 @@ class TranscriptView final
 
  private:
   void settle_scroll_change();
-  ComposerSnapshot& snapshot_;
-  SidebarSnapshot const& sidebar_;
+  RuntimePresentationState& presentation_;
   Composer& composer_;
   std::size_t scroll_offset_ = 0;
   std::size_t new_output_count_ = 0;

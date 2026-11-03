@@ -41,9 +41,61 @@ enum class ComposerCompletionOrigin
   Forced
 };
 
+// The dispatcher calls the editor at its original positions so user-defined
+// binding collisions retain their precedence across session/transcript actions.
+enum class ComposerInputPhase
+{
+  Jump, // An armed jump consumes its next character before ordinary typing.
+  Primary, // Character input, follow-up, and newline precede editor/session keys.
+  Editor, // Deletion, draft copying, clearing, and completion precede Interrupt.
+  Navigation, // Cursor, palette and history follow transcript-specific bindings.
+  Tail, // Cancel and Submit precede literal Space insertion.
+};
+
+// Cross-owner requests let the editor choose precedence without owning transcript
+// layout, terminal rendering, or submission lifetime.
+enum class ComposerInputRequest
+{
+  None, // No work remains outside the editor.
+  CopyTranscript, // Copy the transcript selection after draft selection lost precedence.
+  ClearTranscriptSelection, // Starting a draft selection retires transcript selection.
+  ScrollUp, // Empty history falls back to the preceding transcript rows.
+  ScrollDown, // Empty history falls back to the following transcript rows.
+  Submit, // The session starts or queues a run after editing has declined Enter.
+};
+
+enum class CompletionStep
+{
+  Previous,
+  Next
+};
+
+// Result of a TUI-thread editor action. The caller publishes feedback and beeps
+// after the editor mutation, preserving the dispatcher stage's paint ordering.
+struct ComposerInputResult
+{
+  // True when this action applies; false lets the caller try its documented fallback.
+  bool handled = false;
+  // No value preserves existing feedback; an empty value explicitly clears it.
+  std::optional<std::string> status = std::nullopt;
+  // The caller's terminal context emits the bell, keeping terminal I/O out of editing.
+  bool beep = false;
+  // The session performs this request only after applying feedback.
+  ComposerInputRequest request = ComposerInputRequest::None;
+  // Editor feedback may include arbitrary user text, so it cannot enter debug output.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 class Composer
 {
  public:
+  // TUI thread: handle one documented dispatch phase. All inputs are call-scoped;
+  // returned requests are performed by the session before its next paint.
+  [[nodiscard]] ComposerInputResult handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
+                                               RuntimeNavigationController& navigation, bool transcript_selected, ComposerInputPhase phase);
+  // TUI thread: share palette wrapping/status between idle and active-run routing.
+  [[nodiscard]] ComposerInputResult step_completion(CompletionStep step, RuntimeNavigationController& navigation, ComposerSnapshot const& snapshot);
+
   [[nodiscard]] ComposerDraftState const& draft() const noexcept;
   [[nodiscard]] std::vector<std::string> const& history() const noexcept;
   [[nodiscard]] std::optional<std::size_t> history_index() const noexcept;
@@ -75,13 +127,12 @@ class Composer
   bool apply_edit(TuiAction action, ComposerEditContext context = ComposerEditContext::Idle);
   bool move_vertical(TuiAction action);
   bool browse_history(bool previous);
-  void insert_input(runtime_input::RuntimeInput const& input, ComposerSnapshot& snapshot, ComposerEditContext context = ComposerEditContext::Idle);
+  ComposerInputResult insert_input(runtime_input::RuntimeInput const& input, ComposerEditContext context = ComposerEditContext::Idle);
 
-  void select_slash_command(ComposerSnapshot& snapshot, terminal::Context& context);
-  void select_file_reference(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context);
-  void select_path_completion(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context);
-  bool force_path_completion(RuntimeNavigationController& navigation, ComposerSnapshot& snapshot, terminal::Context& context,
-                             ComposerEditContext edit_context = ComposerEditContext::Idle);
+  ComposerInputResult select_slash_command(ComposerSnapshot const& snapshot);
+  ComposerInputResult select_file_reference(RuntimeNavigationController& navigation);
+  ComposerInputResult select_path_completion(RuntimeNavigationController& navigation);
+  ComposerInputResult force_path_completion(RuntimeNavigationController& navigation, ComposerEditContext edit_context = ComposerEditContext::Idle);
   PromptStashRestoreResult restore_stashed(PromptStash& stash, std::uint64_t id);
   void select_completion(std::size_t index);
   void reset_completion();
@@ -95,7 +146,7 @@ class Composer
   void begin_pointer_selection(std::size_t cursor, bool selecting, ComposerEditContext context = ComposerEditContext::Idle);
   void extend_pointer_selection(std::size_t cursor, ComposerEditContext context = ComposerEditContext::Idle);
   void end_pointer_selection();
-  void handle_escape(ComposerSnapshot& snapshot);
+  ComposerInputResult handle_escape();
 
   [[nodiscard]] std::size_t max_draft_scroll_offset(ComposerSnapshot const& snapshot, std::size_t height) const;
   void clamp_scroll(std::size_t maximum);
@@ -109,12 +160,12 @@ class Composer
   bool replace_selection(std::string_view replacement);
   bool delete_selection();
   [[nodiscard]] std::optional<std::string> selected_text() const;
-  bool copy_selection(ComposerSnapshot& snapshot);
-  void extend_selection(TuiAction movement, ComposerSnapshot& snapshot);
-  void extend_selection_to(std::size_t target, ComposerSnapshot& snapshot);
-  bool extend_selection_for_key(terminal::Key key, ComposerSnapshot& snapshot);
+  ComposerInputResult copy_selection();
+  ComposerInputResult extend_selection(TuiAction movement);
+  ComposerInputResult extend_selection_to(std::size_t target);
+  ComposerInputResult extend_selection_for_key(terminal::Key key);
   void insert_newline();
-  bool convert_backslash_enter_to_newline(ComposerSnapshot& snapshot);
+  ComposerInputResult convert_backslash_enter_to_newline();
 
   // Draft, history, selection and editor undo/kill buffers contain arbitrary user
   // text and must never be emitted by generated member printing.

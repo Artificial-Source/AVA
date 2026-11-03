@@ -27,11 +27,11 @@ void SettingsDialog::open()
 {
   retire();
   if (selectors_.kind() == ActiveSelectList::Overview)
-    presentation_state_.screen().startup_overview.reset();
+    presentation_state_.clear_startup_overview();
   // Workspace trust is popup-only; a close/reopen reads current backend facts.
-  presentation_state_.screen().project_trust = frontend_.read_project_trust();
+  presentation_state_.publish_project_trust(frontend_.read_project_trust());
   rebuild(SettingsSection::Root);
-  presentation_state_.screen().status = "settings opened";
+  presentation_state_.publish_status("settings opened");
 }
 
 void SettingsDialog::synchronize_selector()
@@ -51,7 +51,7 @@ void SettingsDialog::highlight(std::size_t index, std::string query)
 void SettingsDialog::clear_preview()
 {
   navigation_.preview.cancel();
-  navigation_.preview.apply_image_overlay(presentation_state_.screen());
+  presentation_state_.publish_display_preview(navigation_.preview);
 }
 
 void SettingsDialog::begin_baseline()
@@ -91,7 +91,7 @@ void SettingsDialog::rebuild(SettingsSection section, std::string query, std::op
   view.selected_item_index = clamp_select_list_selection(view, view.selected_item_index);
   selectors_.open(ActiveSelectList::Settings, std::move(view));
   navigation_.section = section;
-  navigation_.preview.apply_image_overlay(presentation_state_.screen());
+  presentation_state_.publish_display_preview(navigation_.preview);
 }
 
 void SettingsDialog::preview_highlight()
@@ -101,7 +101,7 @@ void SettingsDialog::preview_highlight()
     if (navigation_.preview.active())
     {
       navigation_.preview.cancel();
-      navigation_.preview.apply_image_overlay(presentation_state_.screen());
+      presentation_state_.publish_display_preview(navigation_.preview);
     }
     return;
   }
@@ -109,7 +109,7 @@ void SettingsDialog::preview_highlight()
   if (index >= selectors_.view()->items.size())
   {
     navigation_.preview.cancel();
-    navigation_.preview.apply_image_overlay(presentation_state_.screen());
+    presentation_state_.publish_display_preview(navigation_.preview);
     return;
   }
   auto const& item = selectors_.view()->items[index];
@@ -117,7 +117,7 @@ void SettingsDialog::preview_highlight()
     navigation_.preview.update(std::move(*overlay));
   else
     navigation_.preview.cancel();
-  navigation_.preview.apply_image_overlay(presentation_state_.screen());
+  presentation_state_.publish_display_preview(navigation_.preview);
 }
 
 void SettingsDialog::close()
@@ -154,12 +154,12 @@ void SettingsDialog::cancel()
     clear_preview();
     begin_baseline();
     rebuild(SettingsSection::Root, std::move(root_query), root_selected);
-    presentation_state_.screen().status = "settings";
+    presentation_state_.publish_status("settings");
   }
   else
   {
     close();
-    presentation_state_.screen().status = "view canceled";
+    presentation_state_.publish_status("view canceled");
   }
 }
 
@@ -180,7 +180,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     clear_preview();
     begin_baseline();
     rebuild(*section);
-    presentation_state_.screen().status = "settings section opened";
+    presentation_state_.publish_status("settings section opened");
   }
   else if (selected_value == kSettingsOpenModels)
   {
@@ -205,7 +205,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
   else if (selected_value == kSettingsEditKeybindings)
   {
     close();
-    return std::string("/keybindings set ");
+    return DraftCommand{.command = "/keybindings set ", .status = "keybinding edit command drafted"};
   }
   else if (selected_value == kSettingsReloadKeybindings)
   {
@@ -213,13 +213,13 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     auto reloaded = frontend_.on_reload_key_bindings();
     if (!reloaded)
     {
-      presentation_state_.screen().status = reloaded.error().format();
+      presentation_state_.publish_status(reloaded.error().format());
       terminal_context_.beep();
     }
     else
     {
       presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
-      presentation_state_.screen().status = "keybindings reloaded";
+      presentation_state_.publish_status("keybindings reloaded");
     }
   }
   else if (selected_value == kSettingsDraftPermissions || selected_value == kSettingsDraftTools || selected_value == kSettingsDraftPlugins ||
@@ -244,11 +244,11 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     else if (selected_value == kSettingsDraftDetails)
       draft_command = "/details";
     close();
-    return draft_command;
+    return DraftCommand{.command = std::move(draft_command), .status = "command drafted"};
   }
   else if (selected_value.empty() || (selected_item && !selected_item->enabled))
   {
-    presentation_state_.screen().status = "settings action unavailable from this row";
+    presentation_state_.publish_status("settings action unavailable from this row");
     terminal_context_.beep();
   }
   else if (navigation_.in_display())
@@ -262,11 +262,11 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
       presentation_state_.apply_local_display_settings(frontend_, std::move(selected->settings));
       begin_baseline();
       rebuild(navigation_.section, current_query, current_selected);
-      presentation_state_.screen().status = status.empty() ? std::string("display setting saved") : std::move(status);
+      presentation_state_.publish_status(status.empty() ? std::string("display setting saved") : std::move(status));
     }
     else
     {
-      presentation_state_.screen().status = selected.error().format();
+      presentation_state_.publish_status(selected.error().format());
       begin_baseline();
       terminal_context_.beep();
     }
@@ -282,7 +282,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     {
       presentation_state_.refresh_after_backend_action(frontend_);
       auto status = std::move(*selected);
-      presentation_state_.screen().status = status;
+      presentation_state_.publish_status(status);
       begin_baseline();
       if (navigation_.in_display())
       {
@@ -291,7 +291,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
         // settings actions never append chat/transcript items.
         auto const receipt = status.empty() ? std::string("display setting saved") : status;
         rebuild(navigation_.section, current_query, current_selected);
-        presentation_state_.screen().status = receipt;
+        presentation_state_.publish_status(receipt);
       }
       else
       {
@@ -302,8 +302,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     {
       // Error restores latest authoritative presentation and keeps the section open.
       begin_baseline();
-      navigation_.preview.apply_image_overlay(presentation_state_.screen());
-      presentation_state_.screen().status = selected.error().format();
+      presentation_state_.publish_display_preview(navigation_.preview);
+      presentation_state_.publish_status(selected.error().format());
       terminal_context_.beep();
     }
   }
@@ -335,7 +335,7 @@ void SettingsDialog::rebase_after_display_reload()
     if (navigation_.preview.overlay && !navigation_.preview.overlay->action_token.empty())
       staged_overlay_action = navigation_.preview.overlay->action_token;
 
-    reapply_settings_preview_after_display_reload(navigation_.preview, presentation_state_.screen());
+    presentation_state_.reapply_display_preview(navigation_.preview);
     if (navigation_.in_display() && selectors_.view())
     {
       rebuild(navigation_.section, query, std::nullopt);

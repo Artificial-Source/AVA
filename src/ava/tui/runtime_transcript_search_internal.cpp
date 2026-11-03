@@ -655,12 +655,11 @@ namespace {
 class ScopedTranscriptSearchModalProjection final
 {
  public:
-  ScopedTranscriptSearchModalProjection(ComposerSnapshot& snapshot, bool project) : snapshot_(snapshot)
+  ScopedTranscriptSearchModalProjection(RuntimePresentationState& presentation, bool project) : presentation_(presentation)
   {
-    if (!project || !snapshot_.select_list)
+    if (!project || !presentation_.screen().select_list)
       return;
-    select_list_ = std::move(snapshot_.select_list);
-    snapshot_.select_list.reset();
+    select_list_ = presentation_.withdraw_selector_projection();
   }
 
   ScopedTranscriptSearchModalProjection(ScopedTranscriptSearchModalProjection const&) = delete;
@@ -669,13 +668,13 @@ class ScopedTranscriptSearchModalProjection final
   ~ScopedTranscriptSearchModalProjection()
   {
     if (select_list_)
-      snapshot_.select_list = std::move(select_list_);
+      presentation_.publish_selector(std::move(select_list_));
   }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  ComposerSnapshot& snapshot_;
+  RuntimePresentationState& presentation_;
   std::optional<SelectListView> select_list_ = std::nullopt;
 };
 
@@ -694,11 +693,9 @@ bool TranscriptSearchController::is_open() const noexcept
 
 void TranscriptSearchController::refresh_authoritative_layout()
 {
-  auto& snapshot = presentation_state_.screen();
   auto const [width, height] = terminal_size();
-  snapshot.width = width;
-  snapshot.height = height;
-  ScopedTranscriptSearchModalProjection project_search_modal(snapshot, is_open());
+  presentation_state_.publish_dimensions(width, height);
+  ScopedTranscriptSearchModalProjection project_search_modal(presentation_state_, is_open());
   renderer_.synchronize_detached_transcript_layout();
   static_cast<void>(renderer_.prepare_transcript_layout());
 }
@@ -718,11 +715,11 @@ void TranscriptSearchController::capture_authoritative_layout_settings()
 
 bool TranscriptSearchController::open(std::string query)
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   if (!detail::transcript_search_query_valid(query))
   {
-    snapshot.status = query.size() > detail::kMaxTranscriptSearchQueryBytes ? "search query is too long (maximum 1024 bytes)"
-                                                                            : "search query must be a single printable line";
+    presentation_state_.publish_status(query.size() > detail::kMaxTranscriptSearchQueryBytes ? "search query is too long (maximum 1024 bytes)"
+                                                                                             : "search query must be a single printable line");
     return false;
   }
 
@@ -739,7 +736,7 @@ bool TranscriptSearchController::open(std::string query)
   static_cast<void>(projection_cache_.update_query(query_));
   auto const update = projection_cache_.rebuild_all(snapshot, renderer_.prepared_transcript_layout().layout);
   rebuild(std::nullopt, std::numeric_limits<std::size_t>::max(), update.first_changed_match_row);
-  snapshot.status = projection_cache_.matches().empty() ? "no transcript matches" : "transcript search opened";
+  presentation_state_.publish_status(projection_cache_.matches().empty() ? "no transcript matches" : "transcript search opened");
   return true;
 }
 
@@ -814,10 +811,9 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
   }
   accumulated_item_index_shift_ += item_index_shift;
 
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   auto const [terminal_width, terminal_height] = terminal_size();
-  snapshot.width = terminal_width;
-  snapshot.height = terminal_height;
+  presentation_state_.publish_dimensions(terminal_width, terminal_height);
   auto const compact_spacing = detail::composer_layout_policy(snapshot, terminal_height).compact_transcript_spacing;
   auto const settings_compatible = authoritative_settings_valid_ && terminal_width == authoritative_terminal_width_ &&
                                    terminal_height == authoritative_terminal_height_ && snapshot.tool_presentation == authoritative_tool_presentation_ &&
@@ -858,7 +854,7 @@ void TranscriptSearchController::refresh_after_resize()
 
 void TranscriptSearchController::restore_saved_viewport(std::string status)
 {
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   selectors_.close();
   refresh_authoritative_layout();
   auto const max_scroll = renderer_.prepare_transcript_layout();
@@ -870,8 +866,8 @@ void TranscriptSearchController::restore_saved_viewport(std::string status)
                           ? detail::restore_transcript_viewport_anchor(saved_viewport_anchor_, renderer_.prepared_transcript_layout().layout, max_scroll,
                                                                        accumulated_item_index_shift_)
                           : std::min(saved_scroll_offset_, max_scroll);
-  renderer_.transcript().navigate_to_offset(offset, max_scroll);
-  snapshot.status = std::move(status);
+  renderer_.navigate_transcript(offset);
+  presentation_state_.publish_status(std::move(status));
   projection_cache_.clear();
   query_.clear();
   authoritative_settings_valid_ = false;
@@ -881,7 +877,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
 {
   if (!is_open())
     return std::nullopt;
-  auto& snapshot = presentation_state_.screen();
+  auto const& snapshot = presentation_state_.screen();
   if (!selectors_.view())
   {
     selectors_.close();
@@ -943,7 +939,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
     }
     else
     {
-      snapshot.status = "search query is limited to 1024 printable bytes";
+      presentation_state_.publish_status("search query is limited to 1024 printable bytes");
     }
     rebuild(selected_item_index, input_result.selected_item_index, first_changed_match_row);
     return renderer_.request_render();
