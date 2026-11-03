@@ -751,6 +751,55 @@ bool test_attached_prompt_render_failure_returns_io()
   return passed;
 }
 
+// Queue cancellation must let the TUI finish a claimed automatic answer before releasing its worker.
+bool test_claimed_question_cancellation_keeps_automatic_answer()
+{
+  EventLoopFixture event_loop;
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::ComposerSnapshot snapshot;
+  ava::tui::SidebarSnapshot sidebar;
+  ava::tui::Composer composer;
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, sidebar, composer);
+  renderer.attach_loop(event_loop.loop());
+  ava::tui::TuiSessionGrantRegistry grants;
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), snapshot, grants, renderer, event_loop.loop());
+  bool passed = true;
+  for (bool throws : {false, true})
+  {
+    coordinator.open_admission();
+    std::atomic_bool worker_returned = false;
+    bool callback_kept_worker = false;
+    auto worker = ava::core::make_async("cancel_claim", [&] {
+      ava::agent::QuestionPrompt prompt{
+          .header = "Automatic answer", .question = "Wait for callback", .options = {{.value = "done", .label = "Done"}}, .auto_resolve = [&] {
+            callback_kept_worker = !worker_returned.load();
+            if (throws)
+              throw std::runtime_error("test callback failure");
+            return true;
+          }};
+      auto answer = coordinator.question_resolver()(prompt);
+      worker_returned = true;
+      return answer.has_value();
+    });
+    auto const deadline = ava::tests::now_plus_seconds(2);
+    while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    bool caught = false;
+    try
+    {
+      static_cast<void>(coordinator.start_pending({}, [&] { coordinator.fail_pending_requests(); }));
+    }
+    catch (std::runtime_error const&)
+    {
+      caught = true;
+    }
+    coordinator.shutdown();
+    bool const answered = worker.get();
+    passed = callback_kept_worker && answered == !throws && caught == throws && !coordinator.has_active() && passed;
+  }
+  return passed;
+}
+
 bool test_atomic_search_input_prompt_precedence()
 {
   EventLoopFixture event_loop;
@@ -1901,6 +1950,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "atomic_search")
   {
+    expect(test_claimed_question_cancellation_keeps_automatic_answer(), "claimed cancellation preserves automatic answers and retires throwing callbacks");
     expect(test_attached_prompt_render_failure_returns_io(), "deferred prompt paint failure reaches its worker as Io before shutdown");
     expect(
         test_atomic_search_input_prompt_precedence(),

@@ -571,7 +571,6 @@ PromptServiceOutcome RuntimePromptCoordinator::complete_permission(PermissionRes
   clear_prompt_projection();
   auto request = retire_active_callbacks();
   std::get<std::shared_ptr<PendingPermissionRequest>>(request)->complete(std::move(result));
-  retire_claimed_request(request);
   return PromptServiceOutcome::Completed;
 }
 
@@ -580,7 +579,6 @@ PromptServiceOutcome RuntimePromptCoordinator::complete_question(QuestionResult 
   clear_prompt_projection();
   auto request = retire_active_callbacks();
   std::get<std::shared_ptr<PendingQuestionRequest>>(request)->complete(std::move(result));
-  retire_claimed_request(request);
   return PromptServiceOutcome::Completed;
 }
 
@@ -591,7 +589,6 @@ void RuntimePromptCoordinator::abandon_active_request()
     (*permission)->complete(ava::permissions::PermissionResolution::Deny);
   else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
     (*question)->complete(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted")));
-  retire_claimed_request(request);
   // Release the waiter before best-effort UI cleanup can fail during unwinding.
   clear_prompt_projection();
 }
@@ -775,63 +772,44 @@ void RuntimePromptCoordinator::fail_active_render()
     static_cast<void>(complete_question(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"))));
 }
 
-void RuntimePromptCoordinator::interrupt_claimed_request(ClaimedPromptRequest const& request)
-{
-  if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&request))
-    (*permission)->interrupt();
-  else if (auto const* question = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&request))
-    (*question)->interrupt();
-}
-
-void RuntimePromptCoordinator::retire_claimed_request(ClaimedPromptRequest const& request)
-{
-  std::lock_guard lock(prompt_request_mutex_);
-  if (claimed_request_ == request)
-    claimed_request_ = std::monostate{};
-}
-
 void RuntimePromptCoordinator::fail_pending_requests()
 {
-  // Queue and claim shares keep requests alive after removal until each waiter
-  // receives cancellation; claimed UI resolution keeps its own share as well.
+  // Queued requests have no UI callbacks and can be interrupted immediately.
+  // The TUI thread alone resolves an active claim, preserving automatic answers
+  // and retiring borrowed callbacks before its waiting worker can return.
   std::deque<std::shared_ptr<PendingPermissionRequest>> permission_requests;
   std::deque<std::shared_ptr<PendingQuestionRequest>> question_requests;
-  ClaimedPromptRequest claimed_request;
   {
     std::lock_guard lock(prompt_request_mutex_);
     accept_prompt_requests_ = false;
     cancellation_pending_ = true;
     permission_requests.swap(pending_permission_requests_);
     question_requests.swap(pending_question_requests_);
-    claimed_request = claimed_request_;
   }
   for (auto const& request : permission_requests)
     request->interrupt();
   for (auto const& request : question_requests)
     request->interrupt();
-  interrupt_claimed_request(claimed_request);
   wakeup_.notify();
 }
 
 RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::claim_pending_request_locked()
 {
-  if (!std::holds_alternative<std::monostate>(claimed_request_))
-    return {};
   if (!pending_permission_requests_.empty())
   {
     auto request = std::move(pending_permission_requests_.front());
     pending_permission_requests_.pop_front();
     if (request->begin_resolution())
-      claimed_request_ = std::move(request);
+      return request;
   }
   else if (!pending_question_requests_.empty())
   {
     auto request = std::move(pending_question_requests_.front());
     pending_question_requests_.pop_front();
     if (request->begin_resolution())
-      claimed_request_ = std::move(request);
+      return request;
   }
-  return claimed_request_;
+  return {};
 }
 
 SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_with_prompt_precedence(std::function<bool()> const& dispatch_search_input,

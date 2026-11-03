@@ -134,8 +134,6 @@ class RuntimePromptCoordinator final
   void expire_wheel_suppression(TuiTimer::Clock::time_point now);
   void suppress_wheel_input();
   void close_competing_selector();
-  void interrupt_claimed_request(ClaimedPromptRequest const& request);
-  void retire_claimed_request(ClaimedPromptRequest const& request);
 
   TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
@@ -147,14 +145,14 @@ class RuntimePromptCoordinator final
   // Queue/claim shares pair with each resolver worker's owning local request.
   std::deque<std::shared_ptr<PendingPermissionRequest>> pending_permission_requests_;
   std::deque<std::shared_ptr<PendingQuestionRequest>> pending_question_requests_;
-  ClaimedPromptRequest claimed_request_;
   bool accept_prompt_requests_ = false;
   bool cancellation_pending_ = false;
   std::mutex prompt_audit_mutex_;
   ava::event::RuntimeEventSink prompt_audit_sink_;
 
-  // The TUI operation retains an independent share while queue cancellation may
-  // inspect the claim. Its callbacks are retired before the worker is released.
+  // Only the TUI thread owns a claim. Other threads publish cancellation under
+  // prompt_request_mutex_; service() resolves it after checking automatic answers.
+  // Retire every borrowed callback before completing and releasing its worker.
   ClaimedPromptRequest active_request_;
   std::function<bool()> stop_requested_;
   bool allow_session_available_ = false;
