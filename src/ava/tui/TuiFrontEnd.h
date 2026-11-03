@@ -14,13 +14,6 @@ struct TuiRuntimeOptions;
 
 class TuiFrontEnd : public frontend::FrontEnd
 {
-  // Composition calls the existing protected frontend authority boundary.
-  friend class TuiSession;
-  friend class SettingsDialog;
-  friend class SessionSelector;
-  friend class BranchSummaryOperation;
-  friend class SelectorInputController;
-
  protected:
   TuiKeyBindings key_bindings_;
   TuiRuntimeOptions options_;
@@ -33,10 +26,16 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual void load_display_settings(std::string& status_line) = 0;
   // Return the effective cursor settings from application-owned display state.
   virtual ava::tui::terminal::CursorSettings cursor_settings() const = 0;
-  // Return a process-neutral callable bridge to application-owned Mermaid rendering.
-  virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;
   // Return the application configuration path used for keybind loading.
   virtual std::filesystem::path keybinds_json_path() const = 0;
+
+ public:
+  // TUI feature owners request backend actions through these existing virtual
+  // operations. They cannot access startup options or keybinding storage; the
+  // application implementations retain validation and backend authority.
+
+  // Return the notification bridge while the application-owned renderer is alive.
+  virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;
 
   // Toggle the committed Build/Plan mode or return the command error.
   virtual core::VoidResult on_toggle_mode() const = 0;
