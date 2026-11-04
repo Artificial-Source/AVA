@@ -123,6 +123,20 @@ Failures after the join produce a nonzero session outcome. The frontend's outer
 shutdown guard covers exits that never reach
 the session's normal exit path.
 
+## Debug output
+
+Print TUI owners on the TUI thread. Generated printers show reference and raw
+pointer members as addresses; they do not inspect the borrowed objects.
+For its operation, `ActiveRun` prints only the lifecycle flags. Plugin transport stays
+opaque, so logging does not read its synchronized request queue.
+
+Use the explicit `NoLogString` annotation for owned strings that can contain
+prompts, paths or other user text. The generator omits the whole annotated
+member, including optional or container forms. A new alias that hides that
+spelling needs its own generator support; ordinary `std::string` still prints.
+The [debug privacy tests](../../tests/debug_pointer_security_tests.cpp) protect
+this distinction. A debug marker alone does not sanitize content.
+
 ## One turn of the loop
 
 The normal order in `TuiSession::run` is:

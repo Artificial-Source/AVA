@@ -99,9 +99,9 @@ class SelectorHost final
   // update selection, query and subtitle together. No borrowed row survives this mutation.
   void replace_rows(std::size_t first_changed, std::vector<SelectListItemView> rows, std::size_t selected, std::string query, std::string subtitle);
 
-  // Selector rows may contain stashed prompts or transcript excerpts; keep their content
-  // out of debug output. The host itself retains only a presentation reference and kind.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // The host prints only its kind and the presentation address. Selector rows stay
+  // in presentation and are never traversed through this borrowed reference.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // Session-owned display storage; outlives this host, which changes it through presentation methods.

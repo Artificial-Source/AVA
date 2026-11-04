@@ -1347,6 +1347,17 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
        {"queue cap", ava::tui::kTuiPluginUiMaxQueuedRecords == 64}});
 
   auto old_endpoint = *endpoint;
+#ifdef CWDEBUG
+  // The coordinator printer must not inspect its synchronized binding or displayed plugin text.
+  std::ostringstream debug_metadata;
+  coordinator.print_on(debug_metadata);
+  auto const logged = debug_metadata.str();
+  expect(logged.find("state:") != std::string::npos && logged.find("deadline_timer:") != std::string::npos,
+         "plugin coordinator diagnostics retain transport identity and timer metadata");
+  expect(logged.find("invocation-1") == std::string::npos && logged.find("working safely") == std::string::npos &&
+             logged.find("widget 0") == std::string::npos && logged.find("draft remains") == std::string::npos,
+         "plugin coordinator diagnostics omit private transport and screen contents");
+#endif
   coordinator.finish_submission();
   auto replacement = coordinator.begin_submission("/plugin run com.example.ui run {}", "invocation-2");
   auto stale = tui_request(binding, "stale", ava::tui::TuiPluginUiKind::Status);

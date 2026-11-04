@@ -3,6 +3,8 @@
 // clang-format off
 #include "ava/debug/debug_ostream_operators.h" // Must precede the test harness's debug includes.
 #include "tests/support/test_harness.h"
+#include "ava/tui/Composer.h"
+#include "ava/tui/SettingsDialog.h"
 #include "ava/tui/runtime_state_internal.h"
 // clang-format on
 
@@ -174,6 +176,25 @@ void test_archive_action_hides_session_id()
   expect(rendered.find("archive:false") != std::string::npos, "generated archive action preserves its selected archive flag");
 }
 
+// Editor and Settings results keep useful flags while omitting every owned content string.
+void test_editor_results_hide_content()
+{
+  std::string const secret = "private-editor-feedback-sentinel";
+  ava::tui::ComposerInputResult const result{.handled = true, .status = secret, .beep = true};
+  auto const rendered = render_member<decltype(result)>(result);
+  expect(rendered.find(secret) == std::string::npos && rendered.find("status:") == std::string::npos,
+         "generated Composer input feedback omits the entire annotated string");
+  expect(
+      rendered.find("handled:true") != std::string::npos && rendered.find("beep:true") != std::string::npos && rendered.find("request:") != std::string::npos,
+      "generated Composer input result retains its non-content routing metadata");
+
+  ava::tui::DraftCommand const command{.command = "private-command-sentinel", .status = secret};
+  auto const draft = render_member<decltype(command)>(command);
+  expect(draft.find("private-command-sentinel") == std::string::npos && draft.find(secret) == std::string::npos &&
+             draft.find("command:") == std::string::npos && draft.find("status:") == std::string::npos,
+         "generated draft command omits both command text and feedback even when populated");
+}
+
 } // namespace
 
 // Exercise generated raw-pointer privacy and preserve neighboring value/reference behavior.
@@ -186,4 +207,5 @@ void run_debug_pointer_security_tests()
   test_array_and_function_pointer_addresses();
   test_owned_string_and_reference_semantics();
   test_archive_action_hides_session_id();
+  test_editor_results_hide_content();
 }

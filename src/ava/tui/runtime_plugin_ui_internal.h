@@ -101,9 +101,10 @@ class RuntimePluginUiCoordinator final
   // it runs outside the state lock so tests can arrange cancellation races.
   void set_after_queue_swap_for_test(std::function<void(std::size_t)> hook);
 
-  // Plugin requests and the borrowed screen data contain arbitrary user/plugin
-  // text; generated printing must not expose those content-bearing aggregates.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Print on the TUI thread: the presentation reference and opaque transport/token
+  // pointers reveal identity only. The private synchronized request state has no
+  // content printer, so printing never reads its queues or worker callbacks.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // Session borrow accessed only by TUI methods; endpoint lambdas never capture it.

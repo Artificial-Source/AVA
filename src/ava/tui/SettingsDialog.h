@@ -4,6 +4,7 @@
 
 #include "runtime_views_internal.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <variant>
 
@@ -39,11 +40,11 @@ enum class SettingsDialogRequest
 struct DraftCommand
 {
   // Owned draft text transferred to Composer; no view into a retired selector survives.
-  std::string command;
+  ava::core::NoLogString command;
   // Feedback chosen by the feature that requested the draft.
-  std::string status;
-  // Commands may contain user content, which must stay out of generated logging.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  ava::core::NoLogString status;
+  // Both strings are annotated; generated output omits them even when populated.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // Session receives either a typed feature request or owned editor text with feedback;

@@ -118,8 +118,9 @@ class ActiveRun final
   // visible completion gate. No result grants permission for arbitrary commands.
   [[nodiscard]] TuiActiveNonblockingCommandDispatchResult dispatch_command(ComposerSnapshot const& completion, std::string const& command);
 
-  // Submission bodies, results, events and borrowed screen views contain user data.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // TUI-thread diagnostics print borrowed owners as addresses and the operation's
+  // flags through its restricted printer. Submission text and queues are omitted.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // ActiveRun owns this value on the TUI thread for exactly one submission.
@@ -153,7 +154,13 @@ class ActiveRun final
     bool queues_finished = false;
     // TUI-thread queue completion failure; both complete and shutdown return a failure exit.
     bool completion_failed = false;
-    // Owned events and submitted text must never enter generated diagnostics.
+#ifdef CWDEBUG
+    // TUI thread while this operation is alive: show only its six lifecycle flags.
+    // Never inspect the inbox, reducer, future, submitted text or queue callbacks.
+    void print_on(std::ostream& os) const;
+#endif
+    // The handwritten printer excludes content and concurrent worker state; do not
+    // generate another printer that traverses those owned values.
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 

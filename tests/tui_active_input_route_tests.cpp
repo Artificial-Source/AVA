@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <future>
 #include <initializer_list>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -301,6 +302,31 @@ void run_tui_active_input_route_tests()
     return;
   if (!ava::tests::require(renderer.paint_ready_frame(), "active input fixture paints its initial transcript layout"))
     return;
+
+#ifdef CWDEBUG
+  // A live operation must expose its lifecycle flags without traversing worker
+  // endpoints, submitted text or the borrowed frontend and screen owners.
+  std::ostringstream run_metadata;
+  active_run.print_on(run_metadata);
+  auto const logged_run = run_metadata.str();
+  expect(logged_run.find("is_command_submission:") != std::string::npos && logged_run.find("close_after_submit:") != std::string::npos &&
+             logged_run.find("terminal_write_failed:") != std::string::npos && logged_run.find("terminal_signal_received:") != std::string::npos &&
+             logged_run.find("queues_finished:") != std::string::npos && logged_run.find("completion_failed:") != std::string::npos &&
+             logged_run.find("keep the fake active run open") == std::string::npos && logged_run.find("active navigation transcript") == std::string::npos &&
+             logged_run.find("active-input-route-test") == std::string::npos,
+         "active run diagnostics retain six lifecycle flags and omit submitted, queue and transcript contents");
+
+  // A host with a private title still prints only its kind and presentation address.
+  ava::tui::SelectListView private_view;
+  private_view.title = "private-selector-title-sentinel";
+  selectors.open(ava::tui::ActiveSelectList::Hotkeys, std::move(private_view));
+  std::ostringstream selector_metadata;
+  selectors.print_on(selector_metadata);
+  expect(selector_metadata.str().find("kind:") != std::string::npos, "selector host diagnostics retain the active selector kind");
+  expect(selector_metadata.str().find("private-selector-title-sentinel") == std::string::npos,
+         "selector host diagnostics do not traverse the view owned by presentation");
+  selectors.close();
+#endif
 
   test_active_copy_failure_precedes_delete(input, presentation, composer);
   test_active_interrupt_precedes_clear(input, presentation, composer);

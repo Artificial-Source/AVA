@@ -7,6 +7,7 @@
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -94,13 +95,13 @@ struct ComposerInputResult
   // True when this action applies; false lets the caller try its documented fallback.
   bool handled = false;
   // No value preserves existing feedback; an empty value explicitly clears it.
-  std::optional<std::string> status = std::nullopt;
+  std::optional<ava::core::NoLogString> status = std::nullopt;
   // The caller's terminal context emits the bell, keeping terminal I/O out of editing.
   bool beep = false;
   // The session performs this request only after applying feedback.
   ComposerInputRequest request = ComposerInputRequest::None;
-  // Editor feedback may include arbitrary user text, so it cannot enter debug output.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // The generator omits annotated feedback and prints only handled/beep/request.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // Session owns the draft text, undo state and selection in this editor. Renderer,

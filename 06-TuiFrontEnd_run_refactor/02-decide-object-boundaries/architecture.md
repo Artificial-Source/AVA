@@ -154,3 +154,24 @@ refreshes, local bindings and local display settings. Callers no longer pass the
 same frontend through several features. `apply_key_bindings` replaces the stored
 map's value; its address remains valid for existing const borrows. Presentation
 updates key hints immediately after applying that map.
+
+## Final R15 diagnostic boundaries
+
+`SelectorHost` owns only a kind and a presentation reference, so its generated
+printer is enabled. `RuntimePluginUiCoordinator` prints its presentation address,
+opaque transport/token identities and timer metadata. Its request state remains
+private in the implementation file with no content printer; diagnostics never
+inspect that state or acquire its mutex.
+
+`ActiveRun::Operation` stays nested because only its lifecycle owner uses it.
+This is a file-layout exception for private implementation state, not a shared
+result or another feature API. Its handwritten printer shows only the six
+lifecycle flags. Submitted text, queues, future, reducer and inbox are excluded.
+That bounded printer permits generated printing of the containing `ActiveRun`.
+
+`ComposerInputResult::status` and both `DraftCommand` strings directly spell
+`NoLogString`, which the generator omits. Their remaining metadata can print.
+`MemberReference` now lives in its matching header and preserves address-only
+reference handling through the existing helper include. The selector result's
+printing change belongs with its variant conversion: its current saved
+`SelectListView` has no safe content printer and must not gain one just for logging.

@@ -46,6 +46,16 @@
 #include <vector>
 
 namespace ava::tui {
+
+#ifdef CWDEBUG
+void ActiveRun::Operation::print_on(std::ostream& os) const
+{
+  os << "{is_command_submission:" << is_command_submission << ", close_after_submit:" << close_after_submit
+     << ", terminal_write_failed:" << terminal_write_failed << ", terminal_signal_received:" << terminal_signal_received
+     << ", queues_finished:" << queues_finished << ", completion_failed:" << completion_failed << '}';
+}
+#endif
+
 using runtime_commands::is_compact_command;
 using runtime_commands::shell_helper_submission;
 using runtime_transcript::apply_assistant_turn_meta;
