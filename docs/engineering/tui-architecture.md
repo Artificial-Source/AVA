@@ -148,6 +148,38 @@ and join workers before destroying their dependencies. A copied Mermaid callback
 can likewise run after it is unregistered; it retains shared readiness state and
 a weak wake handle, not a pointer to the presentation controller.
 
+Mermaid producers retain a shared copy of the registered callback while holding
+the queue mutex, then invoke it after releasing that mutex. The application
+bridge also releases its mutex before any operation that can notify or join.
+A callback can therefore query or drain results. Callbacks may overlap and must
+protect their own mutable state. They must not destroy the coordinator or join
+its worker from a worker callback. Result drainage reserves space for the bounded
+batch before taking it; allocation failure requests a retry without losing results.
+
+## Queue and buffer limits
+
+These are local implementation limits, not a bound on all TUI memory. The
+refactor keeps the baseline capacities. In particular, bounded work per turn
+does not imply bounded queue storage.
+
+| Owner or buffer | Current bound |
+| --- | --- |
+| `ActiveRunInbox` event FIFO | No local item or byte cap, as in the baseline. Live turns drain at most 256 events; that is a fairness limit. The final result occupies one separate slot. |
+| Permission and question request queues | No local queue cap, as in the baseline. Each producer blocks on its request, but upstream concurrency is not a local capacity guarantee. |
+| Plugin UI ordinary records | 63 queued records. A detached batch can hold another 63 while producers refill; this is not a global 64-record limit. There is one interactive modal reservation, an 8-KiB validated text budget per request, at most 32 widget lines, and four displayed widgets. |
+| Mermaid coordinator | 32 undrained request identities across queued, active, and completed work. Source is at most 64 KiB; accepted output is at most 256 KiB per result. Cache limits are 128 sources and 4 MiB of accepted output. A detached drain batch is additional temporary storage. |
+| Mermaid TUI presentation | 128 retained records and 4 MiB of accepted output; at most 32 pending backend requests. Candidate scanning can temporarily examine the full transcript, so retained-record limits are not peak-allocation limits. |
+| Startup input replay | 64 decoded events. A paste has at most 1 MiB of text, stored in both the full event and its key-event view. The internal enqueue helper has no independent byte cap; production decoding supplies the size limit. |
+| Paste and escape decoding | 1 MiB of retained paste text and 16 KiB per escape sequence. A truncated paste tail retains only a flag and a closing-marker position, and is discarded through normal polling. |
+| Native input and keyboard negotiation | A raw read is at most 4096 bytes. Startup keyboard negotiation has two 50-ms collection phases but no total byte cap, unchanged from the baseline. ncurses and the kernel own their own buffers. |
+| One input turn | At most 32 decoded or discarded results. Escape/paste continuation can perform multiple native reads within one result. |
+
+The limits live in [input decoding](../../src/ava/tui/runtime_input.cpp),
+[plugin UI transport](../../src/ava/tui/runtime_plugin_ui_internal.cpp), and
+the [Mermaid coordinator](../../src/ava/app/mermaid_render_coordinator.h).
+Adding hard limits to the event or prompt queues would need an explicit overflow
+policy; silently dropping tool results or permission requests is not acceptable.
+
 ## Submission, prompt and plugin flows
 
 `RuntimeSubmitController` validates the draft and completion choice, performs

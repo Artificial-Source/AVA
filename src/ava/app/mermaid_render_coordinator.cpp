@@ -643,6 +643,10 @@ MermaidRenderConfiguration mermaid_render_configuration_from_display_settings(Me
 // shutdown and join before destruction.
 struct MermaidRenderCoordinator::Impl
 {
+  // Publication snapshots share one registered callable. Copying
+  // this handle cannot allocate; its captures survive unlocked invocation and
+  // replacement. Captured state must support concurrent producer notifications.
+  using CompletionNotifier = std::shared_ptr<std::function<void()> const>;
   // Owned queue/active value under Impl mutex. Identical source shares one helper execution; each admitted
   // identity receives its own completion unless canceled/reconfigured.
   struct Work
@@ -715,15 +719,16 @@ struct MermaidRenderCoordinator::Impl
     return std::ranges::any_of(queue, [&](auto const& work) { return std::ranges::find(work.identities, identity) != work.identities.end(); });
   }
 
-  // Producer or caller thread, with mutex held. The notifier only signals safe
-  // shared state; it must not read this queue or call frontend code.
-  void notify_completion_locked() noexcept
+  // Producer/caller after unlocking: invoke a retained snapshot, allowing queue
+  // queries or replacement to reenter. Exceptions do not discard published work.
+  // The callback must not destroy this coordinator or join its own worker.
+  static void notify_completion(CompletionNotifier const& notifier) noexcept
   {
-    if (!completion_notifier)
+    if (!notifier)
       return;
     try
     {
-      completion_notifier();
+      (*notifier)();
     }
     catch (...)
     {
@@ -739,11 +744,11 @@ struct MermaidRenderCoordinator::Impl
 
   // Publish before notification so a woken consumer cannot miss the result.
   // Called with mutex held for worker, cache, fallback and cancellation results.
+  // The caller takes a notifier snapshot and invokes it only after unlocking.
   void add_completion_locked(std::uint64_t identity, MermaidRenderOutcome outcome, std::string text = {}, bool from_cache = false)
   {
     completions.push_back(MermaidRenderCompletion{
         .identity = identity, .config_epoch = configuration.epoch, .outcome = outcome, .text = std::move(text), .from_cache = from_cache});
-    notify_completion_locked();
   }
 
   // Caller/worker with mutex held: find current-epoch source cache entry; iterator is valid only while lock and
@@ -811,6 +816,7 @@ struct MermaidRenderCoordinator::Impl
       // Only this worker owns helper execution. Cancellation briefly reacquires mutex through active_canceled;
       // it never borrows mutable active storage outside the lock.
       auto result = render_one(std::move(argv), source, wake_pipe.read_end.get(), [this, epoch, &source] { return active_canceled(epoch, source); });
+      CompletionNotifier notification;
       {
         std::lock_guard lock(mutex);
         // Revalidate active identity/epoch after I/O before caching or publishing; canceled/reconfigured
@@ -822,10 +828,14 @@ struct MermaidRenderCoordinator::Impl
             cache_result_locked(source, result);
             for (auto const identity : active->identities)
               add_completion_locked(identity, result.outcome, result.text);
+            notification = completion_notifier;
           }
           active.reset();
         }
       }
+      // The callback can drain these results or query the coordinator. Neither
+      // queue synchronization nor a worker-local reference escapes this scope.
+      notify_completion(notification);
       changed.notify_all();
     }
 
@@ -835,8 +845,8 @@ struct MermaidRenderCoordinator::Impl
     changed.notify_all();
   }
 
-  // Sole lock for configuration, queue/active/completions, cache, notifier, and shutdown; notification may not
-  // reenter coordinator.
+  // Sole lock for configuration, queue/active/completions, cache, notifier, and
+  // shutdown. Arbitrary callback invocation always occurs after releasing it.
   mutable std::mutex mutex;
   // Used with mutex for worker queue admission and caller diagnostic waits; mutations notify after changing
   // predicates.
@@ -853,9 +863,9 @@ struct MermaidRenderCoordinator::Impl
   // Owned published results under mutex; append occurs before notification, and consumer swap releases
   // admission capacity.
   std::vector<MermaidRenderCompletion> completions;
-  // Replaced by registration and invoked after publication, both under mutex.
-  // Captures must remain safe independently of the frontend owner lifetime.
-  std::function<void()> completion_notifier;
+  // Registration replaces this share under mutex. Producers retain snapshots
+  // for unlocked invocation; replacement cannot retire an in-flight callback.
+  CompletionNotifier completion_notifier;
   // Current-epoch result cache under mutex, oldest first; cache hits move entries to newest position.
   std::deque<CacheEntry> cache;
   // Queue-mutex-protected accepted text byte total; updated with every cache insert/erase and reset on
@@ -929,83 +939,102 @@ ava::core::VoidResult MermaidRenderCoordinator::reconfigure(MermaidRenderConfigu
 
 MermaidEnqueueResult MermaidRenderCoordinator::enqueue(MermaidRenderRequest request)
 {
+  Impl::CompletionNotifier notification;
+  // Keep publication and its snapshot together, then release the lock before
+  // invoking code supplied by another owner. The snapshot itself cannot allocate.
+  auto const result = [&]() -> MermaidEnqueueResult {
   // One mutex covers deduplication and capacity accounting across queued, active, and undrained results; no
   // helper executes in this critical section.
-  std::lock_guard lock(impl_->mutex);
-  if (impl_->shutting_down || request.config_epoch != impl_->configuration.epoch)
-    return MermaidEnqueueResult::StaleEpoch;
-  if (impl_->identity_present_locked(request.identity))
-    return MermaidEnqueueResult::AttachedToExisting;
-  if (impl_->pending_identities_locked() + impl_->completions.size() >= kMaxMermaidQueuedRequests)
-    return MermaidEnqueueResult::QueueFull;
-  if (request.source.size() > kMaxMermaidSourceBytes)
-  {
-    impl_->add_completion_locked(request.identity, MermaidRenderOutcome::SourceTooLarge);
-    return MermaidEnqueueResult::CompletedFallback;
-  }
-  if (!impl_->configuration.enabled)
-  {
-    impl_->add_completion_locked(request.identity, MermaidRenderOutcome::Disabled);
-    return MermaidEnqueueResult::CompletedFallback;
-  }
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->shutting_down || request.config_epoch != impl_->configuration.epoch)
+      return MermaidEnqueueResult::StaleEpoch;
+    if (impl_->identity_present_locked(request.identity))
+      return MermaidEnqueueResult::AttachedToExisting;
+    if (impl_->pending_identities_locked() + impl_->completions.size() >= kMaxMermaidQueuedRequests)
+      return MermaidEnqueueResult::QueueFull;
+    if (request.source.size() > kMaxMermaidSourceBytes)
+    {
+      impl_->add_completion_locked(request.identity, MermaidRenderOutcome::SourceTooLarge);
+      notification = impl_->completion_notifier;
+      return MermaidEnqueueResult::CompletedFallback;
+    }
+    if (!impl_->configuration.enabled)
+    {
+      impl_->add_completion_locked(request.identity, MermaidRenderOutcome::Disabled);
+      notification = impl_->completion_notifier;
+      return MermaidEnqueueResult::CompletedFallback;
+    }
   // Immediate cache/fallback results are published before notification just like worker results, so the
   // consumer cannot miss synchronous completion.
-  if (auto cached = impl_->find_cache_locked(request.source); cached != impl_->cache.end())
-  {
-    auto entry = std::move(*cached);
-    impl_->cache.erase(cached);
-    impl_->cache.push_back(entry);
-    impl_->add_completion_locked(request.identity, entry.outcome, entry.text, true);
-    return MermaidEnqueueResult::CompletedFromCache;
-  }
+    if (auto cached = impl_->find_cache_locked(request.source); cached != impl_->cache.end())
+    {
+      auto entry = std::move(*cached);
+      impl_->cache.erase(cached);
+      impl_->cache.push_back(entry);
+      impl_->add_completion_locked(request.identity, entry.outcome, entry.text, true);
+      notification = impl_->completion_notifier;
+      return MermaidEnqueueResult::CompletedFromCache;
+    }
   // Attach matching source waiters before creating new work; one helper execution can satisfy several opaque
   // identities.
-  if (impl_->active && impl_->active->epoch == request.config_epoch && impl_->active->source == request.source)
-  {
-    impl_->active->identities.push_back(request.identity);
-    return MermaidEnqueueResult::AttachedToExisting;
-  }
-  if (auto queued = std::ranges::find(impl_->queue, request.source, &Impl::Work::source); queued != impl_->queue.end())
-  {
-    queued->identities.push_back(request.identity);
-    return MermaidEnqueueResult::AttachedToExisting;
-  }
-  impl_->queue.push_back(Impl::Work{.epoch = request.config_epoch, .source = std::move(request.source), .identities = {request.identity}});
-  impl_->signal_worker();
-  return MermaidEnqueueResult::Queued;
+    if (impl_->active && impl_->active->epoch == request.config_epoch && impl_->active->source == request.source)
+    {
+      impl_->active->identities.push_back(request.identity);
+      return MermaidEnqueueResult::AttachedToExisting;
+    }
+    if (auto queued = std::ranges::find(impl_->queue, request.source, &Impl::Work::source); queued != impl_->queue.end())
+    {
+      queued->identities.push_back(request.identity);
+      return MermaidEnqueueResult::AttachedToExisting;
+    }
+    impl_->queue.push_back(Impl::Work{.epoch = request.config_epoch, .source = std::move(request.source), .identities = {request.identity}});
+    impl_->signal_worker();
+    return MermaidEnqueueResult::Queued;
+  }();
+  Impl::notify_completion(notification);
+  return result;
 }
 
 bool MermaidRenderCoordinator::cancel(std::uint64_t identity, std::uint64_t config_epoch)
 {
+  Impl::CompletionNotifier notification;
+  // Keep publication and its snapshot together, then release the lock before
+  // invoking code supplied by another owner. The snapshot itself cannot allocate.
+  auto const result = [&]() -> bool {
   // Remove the caller identity while holding queue authority, then publish cancellation before waking the
   // consumer/worker.
-  std::lock_guard lock(impl_->mutex);
-  if (impl_->shutting_down || config_epoch != impl_->configuration.epoch)
-    return false;
-  if (impl_->active && impl_->active->epoch == config_epoch)
-  {
-    auto found = std::ranges::find(impl_->active->identities, identity);
-    if (found != impl_->active->identities.end())
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->shutting_down || config_epoch != impl_->configuration.epoch)
+      return false;
+    if (impl_->active && impl_->active->epoch == config_epoch)
     {
-      impl_->active->identities.erase(found);
+      auto found = std::ranges::find(impl_->active->identities, identity);
+      if (found != impl_->active->identities.end())
+      {
+        impl_->active->identities.erase(found);
+        impl_->add_completion_locked(identity, MermaidRenderOutcome::Canceled);
+        notification = impl_->completion_notifier;
+        impl_->signal_worker();
+        return true;
+      }
+    }
+    for (auto work = impl_->queue.begin(); work != impl_->queue.end(); ++work)
+    {
+      auto found = std::ranges::find(work->identities, identity);
+      if (found == work->identities.end())
+        continue;
+      work->identities.erase(found);
+      if (work->identities.empty())
+        impl_->queue.erase(work);
       impl_->add_completion_locked(identity, MermaidRenderOutcome::Canceled);
-      impl_->signal_worker();
+      notification = impl_->completion_notifier;
+      impl_->changed.notify_all();
       return true;
     }
-  }
-  for (auto work = impl_->queue.begin(); work != impl_->queue.end(); ++work)
-  {
-    auto found = std::ranges::find(work->identities, identity);
-    if (found == work->identities.end())
-      continue;
-    work->identities.erase(found);
-    if (work->identities.empty())
-      impl_->queue.erase(work);
-    impl_->add_completion_locked(identity, MermaidRenderOutcome::Canceled);
-    impl_->changed.notify_all();
-    return true;
-  }
-  return false;
+    return false;
+  }();
+  Impl::notify_completion(notification);
+  return result;
 }
 
 std::vector<MermaidRenderCompletion> MermaidRenderCoordinator::take_completions()
@@ -1018,12 +1047,22 @@ std::vector<MermaidRenderCompletion> MermaidRenderCoordinator::take_completions(
 
 void MermaidRenderCoordinator::set_completion_notifier(std::function<void()> notifier)
 {
-  // Register under the same lock used by publication; re-notify an existing backlog so attachment cannot lose a
-  // completion wake.
-  std::lock_guard lock(impl_->mutex);
-  impl_->completion_notifier = std::move(notifier);
-  if (!impl_->completions.empty())
-    impl_->notify_completion_locked();
+  // Allocate before changing registration. Keep the old share outside the lock:
+  // destroying user captures may itself reenter an owner.
+  auto replacement = notifier ? std::make_shared<std::function<void()> const>(std::move(notifier)) : Impl::CompletionNotifier{};
+  Impl::CompletionNotifier retired;
+  Impl::CompletionNotifier notification;
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->shutting_down)
+      return;
+    retired = std::exchange(impl_->completion_notifier, std::move(replacement));
+    if (!impl_->completions.empty())
+      notification = impl_->completion_notifier;
+  }
+  // Late registration observes already published work without calling unknown
+  // code under the queue lock. Empty registration does not wait for old calls.
+  Impl::notify_completion(notification);
 }
 
 MermaidRenderCoordinatorStats MermaidRenderCoordinator::stats() const
@@ -1055,8 +1094,10 @@ void MermaidRenderCoordinator::shutdown() noexcept
 {
   if (!impl_)
     return;
+  Impl::CompletionNotifier retired;
   {
     std::lock_guard lock(impl_->mutex);
+    retired = std::exchange(impl_->completion_notifier, {});
     if (!impl_->shutting_down)
     {
       impl_->shutting_down = true;

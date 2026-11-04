@@ -112,11 +112,12 @@ struct TuiMermaidRenderBridge
   // TUI thread: best-effort cancel matching identity/epoch; false can mean contention or already retired work,
   // so completion may still arrive.
   std::function<bool(std::uint64_t identity, std::uint64_t config_epoch)> cancel;
-  // TUI thread: nullopt means lock contention; an empty vector means no results.
+  // TUI thread: nullopt means retry after contention or temporary allocation
+  // failure; no results were consumed. An empty vector means no results.
   std::function<std::optional<std::vector<TuiMermaidRenderCompletion>>()> drain;
-  // Register before submitting work; an empty callback unregisters. The callback
-  // runs after publication under the producer lock and must only signal bounded
-  // thread-safe state. It must not reenter the bridge or borrow a TUI owner.
+  // Register before submitting work; an empty callback unregisters. Notifications
+  // run outside producer/bridge locks and may overlap on caller/worker threads.
+  // TUI callbacks only signal shared thread-safe state and never borrow a UI owner.
   // TUI setup/teardown: an already copied notifier may run after empty registration returns. It must capture
   // only independent shared readiness and a weak waiter, publish readiness before wake, and never access a
   // retired UI owner.

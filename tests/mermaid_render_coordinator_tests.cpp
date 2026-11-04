@@ -684,8 +684,8 @@ void test_completion_notification_publication_registration_and_unregister()
   auto coordinator = ava::app::MermaidRenderCoordinator::create({.epoch = 9, .enabled = false, .argv = {}});
   if (!ava::tests::require(coordinator.has_value(), "notification coordinator starts without a helper"))
     return;
-  // The callback runs under the coordinator mutex and may only perform bounded, noexcept publication.
-  auto notify = [&notifications]() noexcept { notifications.fetch_add(1, std::memory_order_relaxed); };
+  // Copied notifications run unlocked; this atomic outlives the coordinator and every callback.
+  auto notify = [notifications = &notifications]() noexcept { notifications->fetch_add(1, std::memory_order_relaxed); };
   (*coordinator)->set_completion_notifier(notify);
   expect(notifications.load() == 0, "registration on an empty completion queue does not notify");
   auto disabled = (*coordinator)->enqueue({.identity = 1, .config_epoch = 9, .source = "source"});

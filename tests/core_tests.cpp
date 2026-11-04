@@ -83,6 +83,8 @@ void run_process_supervisor_tests();
 void run_process_supervisor_posix_tests();
 void run_mcp_tests();
 void run_mermaid_render_coordinator_tests();
+// Reentry and retry guarantees exercise real coordinator/bridge synchronization.
+void run_mermaid_notification_tests();
 void run_permission_rules_tests();
 void run_tui_composer_tests();
 void run_tui_event_loop_tests();
@@ -180,6 +182,7 @@ constexpr std::array kTestSuites{
     TestSuite{"process_supervisor_posix", run_process_supervisor_posix_tests},
     TestSuite{"mcp", run_mcp_tests},
     TestSuite{"mermaid_render", run_mermaid_render_coordinator_tests},
+    TestSuite{"mermaid_notifications", run_mermaid_notification_tests},
     TestSuite{"permission_rules", run_permission_rules_tests},
     TestSuite{"tui_composer", run_tui_composer_tests},
     TestSuite{"tui_event_loop", run_tui_event_loop_tests},

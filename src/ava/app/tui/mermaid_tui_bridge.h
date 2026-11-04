@@ -20,12 +20,12 @@ struct MermaidTuiPresentationConfiguration
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Application-owned adapter between validated display settings/process
-// coordination and the TUI's process-neutral callback DTOs.
 // Application-owned synchronized adapter retained by shared callback captures in TuiMermaidRenderBridge.
-// Callers may run on application/TUI threads; mutex protects settings, coordinator lifetime, epoch, and
-// shutdown. Bridge lock precedes coordinator lock, so notification must never reenter either. Final destruction
-// waits for worker shutdown after all callback owners release their shares.
+// Callers may run on application/TUI threads; mutex protects settings, epoch, and
+// shutdown. The coordinator is never replaced, and this shared bridge outlives
+// every exported callback. Notifications run outside both locks and may query
+// the bridge. Final destruction joins the worker after callback owners retire;
+// a worker notification must never destroy the bridge or request its own join.
 class MermaidTuiBridge final : public std::enable_shared_from_this<MermaidTuiBridge>
 {
  public:
@@ -66,19 +66,21 @@ class MermaidTuiBridge final : public std::enable_shared_from_this<MermaidTuiBri
   // TUI thread: best-effort try-lock cancellation; false may leave a completion pending, so caller must still
   // drain retired identities.
   [[nodiscard]] bool cancel(std::uint64_t identity, std::uint64_t config_epoch) noexcept;
-  // TUI thread: nullopt preserves lock contention as Busy for bounded retries.
-  // TUI thread: coordinator exceptions become an empty result. Projection allocation is outside that catch;
-  // allocation failure terminates under this noexcept API.
+  // TUI thread: nullopt requests retry after contention or allocation failure.
+  // Reserve bounded output storage before removing results; once taken, owned
+  // completion text moves into that storage without allocation or lost identities.
   [[nodiscard]] std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> drain() noexcept;
-  // TUI setup/teardown only. The notifier may run on the rendering worker and
-  // must not borrow UI owners; registration is serialized with shutdown.
+  // TUI setup/teardown: registration can synchronously notify a backlog outside
+  // both locks. Copied callbacks may run concurrently and outlive unregister;
+  // they must not borrow UI owners or destroy/join their own rendering worker.
   void set_completion_notifier(std::function<void()> notifier);
 
-  // Serializes settings/epoch and coordinator lifetime across application/TUI callbacks; acquire before
-  // coordinator mutex, never from notification callback.
+  // Serializes settings/epoch and admission across application/TUI callbacks.
+  // Release before any coordinator call that may invoke a notifier or join.
   mutable std::mutex mutex_;
-  // Exclusive application worker owner, accessed under bridge mutex; shutdown joins before destruction releases
-  // it.
+  // Exclusive stable worker owner, never replaced or reset during bridge life.
+  // Exported callbacks retain the bridge while borrowing this pointer unlocked;
+  // owning-thread shutdown joins before destruction releases it.
   std::unique_ptr<MermaidRenderCoordinator> coordinator_;
   // Last successfully applied settings under bridge mutex; equality avoids unnecessary epoch invalidation.
   MermaidDisplaySettings settings_;

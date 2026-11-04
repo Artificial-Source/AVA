@@ -254,6 +254,7 @@ set(AVA_TESTS_SOURCES
   "lsp_tests.cpp"
   "mcp_tests.cpp"
   "mermaid_render_coordinator_tests.cpp"
+  "mermaid_notification_tests.cpp"
   "permission_rules_tests.cpp"
   "plugin_tests.cpp"
   "plugin_runner_process_tests.cpp"
@@ -355,6 +356,8 @@ target_link_options(ava_tests PRIVATE
   "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13start_pendingESt8functionIFbvEES2_IFvvEE"
   "LINKER:--wrap=write"
   "LINKER:--wrap=fflush"
+  "LINKER:--wrap=_Znwm"
+  "LINKER:--wrap=_ZN3ava3app24MermaidRenderCoordinator8shutdownEv"
   "LINKER:--wrap=_ZN3ava3tui15RuntimeRenderer17paint_for_handoffEv"
   "LINKER:--wrap=_ZN3ava3tui14ActiveRunInput8dispatchERKNS0_13runtime_input12RuntimeInputE"
   "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator14set_audit_sinkESt8functionIFSt8expectedIvNS_4core5ErrorEERKNS_5event12RuntimeEventEEE"
@@ -450,6 +453,7 @@ set(AVA_TEST_SUITES
   process_supervisor_posix
   mcp
   mermaid_render
+  mermaid_notifications
   permission_rules
   tui_composer
   tui_event_loop

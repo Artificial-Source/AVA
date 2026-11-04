@@ -135,10 +135,12 @@ class MermaidRenderCoordinator final
   // Consumer thread: atomically take owned completions under queue lock, releasing their admission capacity
   // before further enqueue.
   [[nodiscard]] std::vector<MermaidRenderCompletion> take_completions();
-  // Any thread, before admission or during teardown. Replacement is serialized
-  // with publication; an existing completion triggers the new notifier too.
-  // Called under the queue mutex: only bounded, nonthrowing notification work is
-  // allowed, with no reentry into this coordinator. Empty unregisters it.
+  // Any thread: replace registration under the queue mutex, then notify existing
+  // work after unlocking. Empty unregisters; shutdown rejects later registration.
+  // Notifications may run concurrently on caller/worker threads and may query or
+  // drain this owner. Captures must survive already copied calls after unregister.
+  // A callback must not destroy this owner or call shutdown: it may be running
+  // on the worker that shutdown must join. Callback exceptions are contained.
   void set_completion_notifier(std::function<void()> notifier);
   // Any caller thread while owner lives: copy bounded counters under the queue mutex without exposing
   // source/output.

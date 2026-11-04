@@ -3,6 +3,7 @@
 #include "ava/app/tui/mermaid_tui_bridge.h"
 
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 namespace ava::app {
@@ -45,8 +46,9 @@ MermaidTuiBridge::~MermaidTuiBridge()
 
 ava::core::VoidResult MermaidTuiBridge::apply(MermaidDisplaySettings const& settings)
 {
-  // Bridge lock precedes coordinator lock: configuration and epoch publication must remain atomic to exported
-  // callbacks. Notifiers may never reenter this bridge.
+  // Reconfiguration never invokes a notifier, so this lock can keep settings
+  // and epoch publication atomic. Prepare the fallible copy before changing the
+  // coordinator; committing the prepared settings below only moves owned values.
   std::lock_guard lock(mutex_);
   if (shutdown_ || !coordinator_)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "Mermaid TUI bridge is shut down"));
@@ -54,11 +56,13 @@ ava::core::VoidResult MermaidTuiBridge::apply(MermaidDisplaySettings const& sett
     return {};
   if (epoch_ == std::numeric_limits<std::uint64_t>::max())
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "Mermaid configuration epoch is exhausted"));
+  auto prepared_settings = settings;
+  static_assert(std::is_nothrow_move_assignable_v<MermaidDisplaySettings>);
   auto const next_epoch = epoch_ + 1;
   auto reconfigured = coordinator_->reconfigure(coordinator_config(settings, next_epoch));
   if (!reconfigured)
     return std::unexpected(reconfigured.error());
-  settings_ = settings;
+  settings_ = std::move(prepared_settings);
   epoch_ = next_epoch;
   return {};
 }
@@ -87,18 +91,20 @@ ava::tui::TuiMermaidRenderBridge MermaidTuiBridge::tui_bridge()
 
 ava::tui::TuiMermaidEnqueueResult MermaidTuiBridge::enqueue(ava::tui::TuiMermaidRenderRequest request) noexcept
 {
-  // Expose bridge contention as Busy without waiting on settings/shutdown. Once admitted, coordinator queue
-  // serialization performs no helper I/O.
+  // Expose bridge contention as Busy. The coordinator is never replaced, and
+  // this callback's shared bridge owner keeps it alive after releasing the lock.
   std::unique_lock lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock())
     return ava::tui::TuiMermaidEnqueueResult::Busy;
   if (shutdown_ || !coordinator_ || request.config_epoch != epoch_ || !settings_.enabled)
     return ava::tui::TuiMermaidEnqueueResult::Rejected;
+  auto* coordinator = coordinator_.get();
+  lock.unlock();
   auto result = MermaidEnqueueResult::StaleEpoch;
   try
   {
     result =
-        coordinator_->enqueue(MermaidRenderRequest{.identity = request.identity, .config_epoch = request.config_epoch, .source = std::move(request.source)});
+        coordinator->enqueue(MermaidRenderRequest{.identity = request.identity, .config_epoch = request.config_epoch, .source = std::move(request.source)});
   }
   catch (...)
   {
@@ -124,9 +130,13 @@ bool MermaidTuiBridge::cancel(std::uint64_t identity, std::uint64_t config_epoch
   std::unique_lock lock(mutex_, std::try_to_lock);
   if (!lock.owns_lock() || shutdown_ || !coordinator_ || config_epoch != epoch_)
     return false;
+  // Cancellation can publish synchronously. Release bridge serialization before
+  // its notifier runs; the coordinator rechecks the epoch under its own mutex.
+  auto* coordinator = coordinator_.get();
+  lock.unlock();
   try
   {
-    return coordinator_->cancel(identity, config_epoch);
+    return coordinator->cancel(identity, config_epoch);
   }
   catch (...)
   {
@@ -136,55 +146,66 @@ bool MermaidTuiBridge::cancel(std::uint64_t identity, std::uint64_t config_epoch
 
 std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> MermaidTuiBridge::drain() noexcept
 {
-  // Preserve contention as nullopt so the TUI schedules bounded retry instead of treating the mailbox as empty.
-  std::unique_lock lock(mutex_, std::try_to_lock);
-  if (!lock.owns_lock())
-    return std::nullopt;
-  if (shutdown_ || !coordinator_)
-    return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
-  std::vector<MermaidRenderCompletion> completions;
   try
   {
-    completions = coordinator_->take_completions();
+    // Retry contention or allocation failure without consuming results. Reserve
+    // the coordinator's entire bounded capacity before taking any completion;
+    // otherwise allocation after removal could lose an admitted identity.
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock())
+      return std::nullopt;
+    if (shutdown_ || !coordinator_)
+      return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
+    std::vector<ava::tui::TuiMermaidRenderCompletion> projected;
+    projected.reserve(kMaxMermaidQueuedRequests);
+    auto completions = coordinator_->take_completions();
+    // String ownership moves into reserved slots. Once results leave the queue,
+    // this conversion and the returned vector's move must not allocate or throw.
+    static_assert(std::is_nothrow_move_constructible_v<ava::tui::TuiMermaidRenderCompletion>);
+    for (auto& completion : completions)
+    {
+      auto const accepted = completion.outcome == MermaidRenderOutcome::Accepted;
+      projected.push_back(ava::tui::TuiMermaidRenderCompletion{.identity = completion.identity,
+                                                               .config_epoch = completion.config_epoch,
+                                                               .accepted = accepted,
+                                                               .text = accepted ? std::move(completion.text) : std::string{}});
+    }
+    return projected;
   }
   catch (...)
   {
-    return std::vector<ava::tui::TuiMermaidRenderCompletion>{};
+    return std::nullopt;
   }
-  // Take owned application results before projecting accepted text; the TUI receives values only, never
-  // helper/process authority.
-  std::vector<ava::tui::TuiMermaidRenderCompletion> projected;
-  projected.reserve(completions.size());
-  for (auto& completion : completions)
-  {
-    auto const accepted = completion.outcome == MermaidRenderOutcome::Accepted;
-    projected.push_back(ava::tui::TuiMermaidRenderCompletion{.identity = completion.identity,
-                                                             .config_epoch = completion.config_epoch,
-                                                             .accepted = accepted,
-                                                             .text = accepted ? std::move(completion.text) : std::string{}});
-  }
-  return projected;
 }
 
 void MermaidTuiBridge::set_completion_notifier(std::function<void()> notifier)
 {
-  // Registration shares the bridge-to-coordinator lock order with shutdown; installed callbacks must only touch
-  // independent readiness/wake state.
-  std::lock_guard lock(mutex_);
-  if (coordinator_)
-    coordinator_->set_completion_notifier(std::move(notifier));
+  // Registration may immediately notify an existing backlog. The stable borrow
+  // survives unlock; coordinator registration rejects a concurrent shutdown.
+  MermaidRenderCoordinator* coordinator;
+  {
+    std::lock_guard lock(mutex_);
+    if (shutdown_ || !coordinator_)
+      return;
+    coordinator = coordinator_.get();
+  }
+  coordinator->set_completion_notifier(std::move(notifier));
 }
 
 void MermaidTuiBridge::shutdown() noexcept
 {
-  // Hold bridge lifetime/settings serialization while joining coordinator work; worker notification must not
-  // acquire this mutex.
-  std::lock_guard lock(mutex_);
-  if (shutdown_)
-    return;
-  shutdown_ = true;
-  if (coordinator_)
-    coordinator_->shutdown();
+  MermaidRenderCoordinator* coordinator;
+  {
+    std::lock_guard lock(mutex_);
+    if (shutdown_)
+      return;
+    shutdown_ = true;
+    coordinator = coordinator_.get();
+  }
+  // Close admission before joining, but release the bridge mutex first: a
+  // finishing worker notifier may query this bridge before it can return.
+  if (coordinator)
+    coordinator->shutdown();
 }
 
 }  // namespace ava::app
