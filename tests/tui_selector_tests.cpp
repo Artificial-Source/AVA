@@ -1910,7 +1910,10 @@ void run_tui_selector_tests()
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
   workspace_controller.attach_loop(discovery_loop, workspace_renderer);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
-  auto const time_zero = WorkspaceClock::now();
+  // Put discovery far beyond real paint time, with room for all offsets and
+  // repeat advancement. Even a slow paint cannot hide an erroneous new frame
+  // deadline beyond the synthetic no-redraw probe.
+  auto const time_zero = WorkspaceClock::time_point::max() - std::chrono::seconds(10);
   expect(workspace_controller.open_selector(time_zero) && workspace_controller.selector_active() && list_calls == 1,
          "shared subagent controller opens the selector without changing the parent composer state");
   ava::tui::InputEvent type_query;

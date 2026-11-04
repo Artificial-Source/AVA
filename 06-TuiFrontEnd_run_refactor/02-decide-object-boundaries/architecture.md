@@ -264,3 +264,27 @@ transcript or draft selection. No shared local-command router is introduced.
 The `Composer` and `composer` filenames remain distinct only by case, as the
 maintainer explicitly requested. Case-insensitive checkout support still needs
 a separate filename decision.
+
+## Final R20 test observations
+
+The session integration test keeps its local `Turn` observations and
+`SessionProbe` arrangement fields public. These are test instrumentation and
+file-layout exceptions: cases install callbacks and inspect owned measurements
+without adding production hooks or a second API of test-only setters. Only the
+TUI thread accesses the scoped probe. Copied audit callbacks use independently
+synchronized captures that survive worker shutdown. Both anonymous types opt
+out of printing; observations can contain input examples.
+
+The control-timer case wraps real registration, callback preparation and waiting.
+It checks the selected absolute control deadline, a real OS timeout without
+another event, and actual execution of the copied callback on the next turn.
+The borrowed registration node is read only while Session is alive. Late setup
+may first require ready-only turns; the assertions begin with the first actual
+blocking wait and do not impose a tight elapsed-time limit.
+
+The session-reset test seeds `session_entry_count` through an explicit const cast
+of a known non-const, single-threaded fixture. This is a narrow test-only exception
+because the field currently has no production writer; no public setter is added.
+The test checks the populated live owner before transition and its absence after.
+Workspace discovery uses a far-future synthetic time with headroom, so real paint
+time cannot conceal an erroneous redraw deadline.

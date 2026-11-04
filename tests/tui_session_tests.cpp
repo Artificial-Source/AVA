@@ -9,6 +9,7 @@
 #include "ava/tui/ActiveRun.h"
 #include "ava/tui/ActiveRunInbox.h"
 #include "ava/tui/TuiSession.h"
+#include "ava/tui/TuiWaitState.h"
 #include "ava/tui/terminal/BasicWindow.h"
 #include "ava/core/Application.h"
 #include "ava/core/UniqueFd.h"
@@ -79,6 +80,14 @@ struct Turn
   std::vector<ava::tui::RuntimeEventDrainResult> application_results;
   // Session's requested wait policy, absent for closing and stopped turns.
   std::optional<TuiWaitMode> wait;
+  // Absolute deadline selected by the real waiter, copied before its OS call.
+  std::optional<Clock::time_point> wait_deadline;
+  // Actual control registration deadline at that same wait boundary.
+  std::optional<Clock::time_point> control_deadline;
+  // True only for a real timeout with no descriptor/application event; absent before wait.
+  std::optional<bool> timeout_without_events;
+  // Real control callback invocations, counted when the copied callback executes.
+  std::size_t control_callbacks = 0;
   // Calls flushing the Application output stream inside this turn's real paint.
   std::size_t flushes = 0;
   // Actual paint result, absent when control/input stopped the turn first.
@@ -128,6 +137,12 @@ struct SessionProbe
   std::optional<Clock::time_point> control_epoch;
   // The first 500 ms registration belongs to display reload; it shares the control origin.
   std::optional<Clock::time_point> display_epoch;
+  // Enable deeper call-through observation only for the control-timer regression.
+  bool observe_control_timer = false;
+  // Borrowed stable registry node; inspect only while Session and its loop exist.
+  ava::tui::TuiTimerRegistration* control_registration = nullptr;
+  // Scope OS wait observations to TuiWaitState; other library waits are unrelated.
+  bool inside_wait_state = false;
   // A test failure records whether the guard, rather than the scenario, stopped execution.
   bool timed_out = false;
   // A conservative cadence origin recorded after every real paint entry returns.
@@ -652,35 +667,40 @@ void test_closing_drain(bool descriptor_error)
          "closing drain preserves the 32-result input budget through the final empty sentinel");
 }
 
-// B6: the actual idle 100 ms timer supplies the wake. Inject SIGTERM after the
-// next control stage, immediately before real dispatch, to expose any callback
-// that improperly claims signals or performs cancellation inside service_due.
+// B6/R20: prove a real timeout selected the 100 ms control deadline and its
+// callback ran on the following turn. SIGTERM injected after control must remain
+// pending through that callback, then stop the next turn before application/input.
 void test_control_timer()
 {
   SessionInput input;
   SessionSignals signals;
   tui_test_support::TuiFrontEndFixture frontend;
   SessionProbe probe;
+  probe.observe_control_timer = true;
+  std::optional<std::size_t> first_block;
   bool injected = false;
   bool pending_after_dispatch = false;
   bool running_after_dispatch = false;
   probe.before_due = [&](TuiEventLoop&, Clock::time_point) {
-    if (probe.turns.size() == 2)
+    if (first_block && probe.turns.size() == *first_block + 2)
     {
       expect(::raise(SIGTERM) == 0, "inject SIGTERM before real control-timer dispatch");
       injected = true;
     }
   };
   probe.after_due = [&](TuiEventLoop& loop) {
-    if (probe.turns.size() == 2)
+    if (first_block && probe.turns.size() == *first_block + 2)
     {
       pending_after_dispatch = ava::core::Signals::received(ava::core::Signals::to_mask(SIGTERM));
       running_after_dispatch = !loop.stopped();
     }
   };
   probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
-    // The first Block is deliberately untouched: the real timer must wake it.
-    if (probe.turns.size() > 1)
+    // Slow setup may first require ReadyOnly turns. Leave the first actual
+    // Block untouched, so only the real timer/input waiter can end that sleep.
+    if (!first_block && mode == TuiWaitMode::Block)
+      first_block = probe.turns.size() - 1;
+    else if (first_block)
       notify_before_block(loop, mode);
   };
   auto const exit_code = run_session(frontend, probe);
@@ -688,8 +708,15 @@ void test_control_timer()
          "control timer only wakes; SIGTERM remains pending until the next control checkpoint");
   expect(probe.control_epoch && probe.display_epoch && probe.control_epoch == probe.display_epoch,
          "Session arms control and display reload from the same clock sample");
-  expect(probe.turns.size() == 3 && probe.turns.front().wait == TuiWaitMode::Block && probe.turns.back().stages == std::vector<Stage>{Stage::Control},
-         "idle timer wake reaches a later control-only signal exit");
+  if (!ava::tests::require(first_block && probe.turns.size() == *first_block + 3, "idle timer wake is followed by dispatch and a control-only exit"))
+    return;
+  auto const& waited = probe.turns[*first_block];
+  auto const& dispatched = probe.turns[*first_block + 1];
+  expect(waited.wait == TuiWaitMode::Block && waited.wait_deadline && waited.control_deadline && waited.wait_deadline == waited.control_deadline &&
+             waited.timeout_without_events == true,
+         "first blocking wait really times out at the pending control deadline without another event");
+  expect(dispatched.control_callbacks == 1 && probe.turns.back().stages == std::vector<Stage>{Stage::Control},
+         "real control callback runs on the next turn before the later control-only signal exit");
 }
 
 // T4: SIGTERM arriving immediately after a real character decode consumes that
@@ -1580,6 +1607,86 @@ extern "C" void session_wrap_set_audit_sink(ava::tui::RuntimePromptCoordinator* 
     };
   }
   session_real_set_audit_sink(coordinator, std::move(sink));
+}
+
+// Keep the real registration schedule while identifying the control timer.
+extern "C" void session_real_registration_repeat(ava::tui::TuiTimerRegistration*, Clock::duration, Clock::time_point) asm(
+    "__real__ZN3ava3tui20TuiTimerRegistration6repeatENSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE");
+// Call-through observation is limited to the scoped TUI-thread control test.
+extern "C" void session_wrap_registration_repeat(ava::tui::TuiTimerRegistration*, Clock::duration, Clock::time_point) asm(
+    "__wrap__ZN3ava3tui20TuiTimerRegistration6repeatENSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE");
+// Keep real generation/deadline updates and observe the eventual callback invocation.
+extern "C" ava::tui::TuiTimerRegistration::Callback session_real_prepare_dispatch(ava::tui::TuiTimerRegistration*, Clock::time_point) asm(
+    "__real__ZN3ava3tui20TuiTimerRegistration16prepare_dispatchENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE");
+// Call-through observation is limited to the scoped TUI-thread control test.
+extern "C" ava::tui::TuiTimerRegistration::Callback session_wrap_prepare_dispatch(ava::tui::TuiTimerRegistration*, Clock::time_point) asm(
+    "__wrap__ZN3ava3tui20TuiTimerRegistration16prepare_dispatchENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE");
+// Preserve the selected absolute deadline and all real terminal readiness latches.
+extern "C" void session_real_wait_state(ava::tui::TuiWaitState*, std::optional<Clock::time_point>) asm(
+    "__real__ZN3ava3tui12TuiWaitState4waitESt8optionalINSt6chrono10time_pointINS3_3_V212steady_clockENS3_8durationIlSt5ratioILl1ELl1000000000EEEEEEE");
+// Call-through observation is limited to the scoped TUI-thread control test.
+extern "C" void session_wrap_wait_state(ava::tui::TuiWaitState*, std::optional<Clock::time_point>) asm(
+    "__wrap__ZN3ava3tui12TuiWaitState4waitESt8optionalINSt6chrono10time_pointINS3_3_V212steady_clockENS3_8durationIlSt5ratioILl1ELl1000000000EEEEEEE");
+// Read the real wait result after the OS wait returns; no timeout is simulated.
+extern "C" void session_real_os_wait(utils::threading::EventLoop*, std::optional<std::chrono::nanoseconds>) asm(
+    "__real__ZN5utils9threading9EventLoop9wait_implESt8optionalINSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEEE");
+// Call-through observation is limited to the scoped TUI-thread control test.
+extern "C" void session_wrap_os_wait(utils::threading::EventLoop*, std::optional<std::chrono::nanoseconds>) asm(
+    "__wrap__ZN5utils9threading9EventLoop9wait_implESt8optionalINSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEEE");
+
+// The first 100 ms registration in idle Session construction is the control timer.
+// Its node remains stable until Session destruction; no worker uses this pointer.
+extern "C" void session_wrap_registration_repeat(ava::tui::TuiTimerRegistration* registration, Clock::duration interval, Clock::time_point now)
+{
+  session_real_registration_repeat(registration, interval, now);
+  if (auto* probe = session_probe; probe && probe->observe_control_timer && !probe->control_registration && interval == std::chrono::milliseconds(100))
+    probe->control_registration = registration;
+}
+
+// Count actual invocation, not preparation. The copied callback is executed by
+// service_due before it returns, while the scoped probe and Session remain alive.
+extern "C" ava::tui::TuiTimerRegistration::Callback session_wrap_prepare_dispatch(ava::tui::TuiTimerRegistration* registration, Clock::time_point now)
+{
+  auto callback = session_real_prepare_dispatch(registration, now);
+  if (auto* probe = session_probe; probe && probe->observe_control_timer && probe->control_registration == registration)
+    return [probe, callback = std::move(callback)](Clock::time_point dispatched_at) {
+      ++probe->turn().control_callbacks;
+      callback(dispatched_at);
+    };
+  return callback;
+}
+
+// Record before waiting, while the control registration still exists. Restore
+// the observation scope on both normal and exceptional returns, so teardown
+// cannot mistake an unrelated library wait for this terminal wait.
+extern "C" void session_wrap_wait_state(ava::tui::TuiWaitState* state, std::optional<Clock::time_point> deadline)
+{
+  auto* probe = session_probe;
+  if (!probe || !probe->observe_control_timer)
+    return session_real_wait_state(state, deadline);
+  probe->turn().wait_deadline = deadline;
+  if (probe->control_registration)
+    probe->turn().control_deadline = probe->control_registration->deadline();
+  bool const previous = std::exchange(probe->inside_wait_state, true);
+  try
+  {
+    session_real_wait_state(state, deadline);
+  }
+  catch (...)
+  {
+    probe->inside_wait_state = previous;
+    throw;
+  }
+  probe->inside_wait_state = previous;
+}
+
+// Inspect only the result of the real call. A wake notification, fd readiness or
+// termination cannot satisfy the timeout assertion, even at the same timestamp.
+extern "C" void session_wrap_os_wait(utils::threading::EventLoop* waiter, std::optional<std::chrono::nanoseconds> timeout)
+{
+  session_real_os_wait(waiter, timeout);
+  if (auto* probe = session_probe; probe && probe->inside_wait_state)
+    probe->turn().timeout_without_events = waiter->result().status() == utils::threading::EventLoop::WaitStatus::timed_out && waiter->result().events().none();
 }
 
 // Observe exactly the real due call, with optional signal injection at its boundary.

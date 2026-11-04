@@ -377,8 +377,12 @@ bool test_changed_session_snapshot_resets_presentation()
   old_run.todos = presentation.sidebar().todos;
   old_run.modified_files = {{.path = "old.cpp"}};
   presentation.publish_run_progress(old_run);
-  // The sidebar count currently has no backend writer. Exercise its production
-  // reset transform on a standalone DTO instead of adding a test-only live setter.
+  // Seed stale count in the actual owner before transition, not only a detached
+  // copy. This fixture is known non-const and single-threaded; the cast is solely
+  // test setup because production currently has no writer for a populated count.
+  const_cast<ava::tui::SidebarSnapshot&>(presentation.sidebar()).session_entry_count = 9;
+  expect(presentation.sidebar().session_entry_count == 9, "session transition starts with a populated live sidebar count");
+  // Keep the separate transform check as well as the live-owner assertion below.
   auto sidebar_reset = presentation.sidebar();
   sidebar_reset.session_entry_count = 9;
   ava::tui::reset_session_sidebar(sidebar_reset);
