@@ -44,7 +44,8 @@ class RuntimeActionController final
 
   // TUI thread: attach the 500 ms timer once; it only marks display reload work due.
   // The loop outlives this stable owner; maybe_reload_display_settings performs the check.
-  void attach_loop(TuiEventLoop& loop);
+  // Session supplies its control timer's epoch so their deadlines coincide every fifth tick.
+  void attach_loop(TuiEventLoop& loop, TuiTimer::Clock::time_point epoch = TuiTimer::Clock::now());
   // TUI thread: consume initial or timer-marked work once; repeated calls without
   // a due flag do not check. TerminalFailure means rendering has already failed.
   // Applied updates display values without requesting a final frame, so callers can

@@ -97,11 +97,14 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
   // due timers, after every member and attachment is ready at a stable address.
   renderer_.attach_loop(loop_);
   plugin_ui_.attach_loop(loop_);
-  action_controller_.attach_loop(loop_);
+  // Share an origin so the 500 ms reload deadline adds no wake between control
+  // ticks. Each timer still skips missed ticks independently after a slow turn.
+  auto const control_epoch = TuiTimer::Clock::now();
+  action_controller_.attach_loop(loop_, control_epoch);
   branch_summary_.attach_loop(loop_);
   subagent_workspace_.attach_loop(loop_, renderer_);
   mermaid_presentation_.attach_loop(loop_);
-  control_timer_.repeat(kControlObservationInterval);
+  control_timer_.repeat(kControlObservationInterval, control_epoch);
 }
 
 // TUI thread: keep all members alive during explicit shutdown; reverse member

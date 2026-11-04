@@ -118,14 +118,14 @@ RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimeP
 {
 }
 
-void RuntimeActionController::attach_loop(TuiEventLoop& loop)
+void RuntimeActionController::attach_loop(TuiEventLoop& loop, TuiTimer::Clock::time_point epoch)
 {
   // Attach display discovery once before servicing this nonmoving controller.
   ASSERT(!display_reload_timer_.active());
   if (display_reload_timer_.active())
     return;
   display_reload_timer_ = loop.member_timer(*this, &RuntimeActionController::mark_display_reload_due);
-  display_reload_timer_.repeat(kDisplayReloadPollInterval);
+  display_reload_timer_.repeat(kDisplayReloadPollInterval, epoch);
 }
 
 void RuntimeActionController::mark_display_reload_due(TuiTimer::Clock::time_point)

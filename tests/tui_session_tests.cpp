@@ -121,6 +121,11 @@ struct SessionProbe
   // Only the turn-order and frame-deadline cases postpone recurring timers,
   // so unrelated control/spinner/reload ticks cannot change their wait policy.
   bool defer_recurring_timers = false;
+  // Record production origins before any fixture postponement; construction arms
+  // the control and display timers before a worker or host prompt can add timers.
+  std::optional<Clock::time_point> control_epoch;
+  // The first 500 ms registration belongs to display reload; it shares the control origin.
+  std::optional<Clock::time_point> display_epoch;
   // A test failure records whether the guard, rather than the scenario, stopped execution.
   bool timed_out = false;
   // A conservative cadence origin recorded after every real paint entry returns.
@@ -676,6 +681,8 @@ void test_control_timer()
   auto const exit_code = run_session(frontend, probe);
   expect(exit_code == 130 && !probe.timed_out && injected && pending_after_dispatch && running_after_dispatch,
          "control timer only wakes; SIGTERM remains pending until the next control checkpoint");
+  expect(probe.control_epoch && probe.display_epoch && probe.control_epoch == probe.display_epoch,
+         "Session arms control and display reload from the same clock sample");
   expect(probe.turns.size() == 3 && probe.turns.front().wait == TuiWaitMode::Block && probe.turns.back().stages == std::vector<Stage>{Stage::Control},
          "idle timer wake reaches a later control-only signal exit");
 }
@@ -1432,6 +1439,13 @@ extern "C" void session_wrap_due(TuiEventLoop* loop, Clock::time_point now)
 // them before their watchdog. One-shot frame timers retain their original timing.
 extern "C" void session_wrap_repeat(TuiEventLoop* loop, std::uint64_t id, Clock::duration interval, Clock::time_point now)
 {
+  if (auto* probe = session_probe)
+  {
+    if (interval == std::chrono::milliseconds(100) && !probe->control_epoch)
+      probe->control_epoch = now;
+    if (interval == std::chrono::milliseconds(500) && !probe->display_epoch)
+      probe->display_epoch = now;
+  }
   if (auto* probe = session_probe; probe && probe->defer_recurring_timers)
     now = probe->deadline + std::chrono::seconds(1);
   session_real_repeat(loop, id, interval, now);

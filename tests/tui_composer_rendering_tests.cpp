@@ -1989,6 +1989,79 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
          unchanged_signal;
 }
 
+// Protect aligned reload deadlines and coalescing after a slow turn, without
+// counting delivered control callbacks as elapsed time or calling the frontend in a timer.
+bool test_display_reload_shares_control_deadlines()
+{
+  // This test-thread target counts actual dispatches. Its timer is destroyed
+  // first, so no callback can outlive the counter it updates.
+  struct TickCounter
+  {
+    // Timer stage only: record one delivered callback, without application work.
+    void tick(ava::tui::TuiTimer::Clock::time_point) { ++count; }
+    // Test thread reads this after service_due; only tick increments it.
+    int count = 0;
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
+  bool passed = true;
+  for (bool delayed : {false, true})
+  {
+    EventLoopFixture event_loop;
+    int reloads = 0;
+    tui_test_support::TuiFrontEndFixture frontend;
+    frontend.hooks().on_maybe_reload_display_settings = [&reloads]() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
+      ++reloads;
+      return std::nullopt;
+    };
+    ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+    ava::tui::PendingAttachments attachments(presentation);
+    ava::tui::Composer draft;
+    ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft);
+    ava::tui::SelectorHost selectors(presentation);
+    ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, ava::core::Application::instance().terminal_context());
+    ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, draft, renderer, selectors, sessions, attachments);
+    auto const epoch = ava::tui::TuiTimer::Clock::time_point{};
+    actions.attach_loop(event_loop.loop(), epoch);
+    TickCounter ticks;
+    auto control = event_loop.loop().member_timer(ticks, &TickCounter::tick);
+    control.repeat(std::chrono::milliseconds(100), epoch);
+    static_cast<void>(actions.maybe_reload_display_settings());
+    passed &= reloads == 1;
+
+    // Service each synthetic boundary once and consume application work afterward.
+    // No wall-clock sleep can change which deadlines are due in this fixture.
+    auto step = [&](int milliseconds, bool control_due, bool reload_due) {
+      int const before_reload = reloads;
+      int const before_ticks = ticks.count;
+      auto const now = epoch + std::chrono::milliseconds(milliseconds);
+      event_loop.loop().service_due(now);
+      passed &= reloads == before_reload && ticks.count == before_ticks + (control_due ? 1 : 0);
+      static_cast<void>(actions.maybe_reload_display_settings());
+      passed &= reloads == before_reload + (reload_due ? 1 : 0);
+      passed &= !event_loop.loop().has_due_work(now);
+    };
+    if (delayed)
+    {
+      step(1150, true, true);
+      step(1150, false, false);
+      step(1199, false, false);
+      step(1200, true, false);
+      step(1499, true, false);
+      step(1500, true, true);
+    }
+    else
+    {
+      for (int tick = 1; tick <= 10; ++tick)
+      {
+        step(tick * 100 - 1, false, false);
+        step(tick * 100, true, tick % 5 == 0);
+      }
+    }
+  }
+  return passed;
+}
+
 // Protect an open overview from displaying stale settings after a reload.
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
@@ -2386,6 +2459,8 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "display_reload_poll")
   {
+    expect(test_display_reload_shares_control_deadlines(),
+           "display reload shares each fifth control deadline and skips missed ticks without extra wakeups or timer-stage frontend calls");
     expect(test_settings_archive_restores_preview_and_selector_storage(),
            "Archive through SelectorHost restores nested Settings preview without copying selector rows");
     expect(test_composer_draw_preserves_context_color_pair_allocations(),
