@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Verify that generate_print_members.py emits only per-object data members.
+# Protect generated member selection and omission of private text annotations.
 
 import argparse
 import json
@@ -10,7 +10,7 @@ import tempfile
 
 
 def main(argv):
-    """Protect static-member exclusion and declared-type dispatch for borrowed members."""
+    """Protect static exclusion, declared-type dispatch, and private-text omission."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--generator", required=True)
     args = parser.parse_args(argv)
@@ -51,6 +51,45 @@ def main(argv):
         },
     ]
 
+    # Omit the complete annotated field, including wrappers that would otherwise
+    # instantiate a string/container printer. Similar names are not annotations.
+    private_types = [
+        "ava::core::NoLogString",
+        "std::optional<ava::core::NoLogString>",
+        "std::vector<ava::core::NoLogString>",
+        "ava::core::NoLogString const",
+        "ava::core::NoLogString const &",
+    ]
+    private_names = []
+    for index, spelling in enumerate(private_types):
+        name = f"private_text_{index}_"
+        private_names.append(name)
+        tags.append({
+            "_type": "tag", "name": name, "path": "src/ava/example/Example.h",
+            "line": 10 + index, "kind": "member", "scope": "ava::example::Example",
+            "typeref": "typename:" + spelling,
+        })
+    for index, (name, spelling) in enumerate([
+        ("ordinary_text_", "std::string"),
+        ("similar_name_", "NoLogStringView"),
+    ]):
+        tags.append({
+            "_type": "tag", "name": name, "path": "src/ava/example/Example.h",
+            "line": 20 + index, "kind": "member", "scope": "ava::example::Example",
+            "typeref": "typename:" + spelling,
+        })
+    # A class containing only private text must still receive a valid empty
+    # printer; omitting every field must not create a bare ostream expression.
+    tags.extend([
+        {"_type": "tag", "name": "PrivateOnly", "path": "src/ava/example/Example.h",
+         "line": 30, "kind": "class", "scope": "ava::example"},
+        {"_type": "tag", "name": "only_secret_", "path": "src/ava/example/Example.h",
+         "line": 31, "kind": "member", "scope": "ava::example::PrivateOnly",
+         "typeref": "typename:NoLogString"},
+        {"_type": "tag", "name": "print_members_opt_in", "path": "src/ava/example/Example.h",
+         "line": 32, "kind": "function", "scope": "ava::example::PrivateOnly"},
+    ])
+
     with tempfile.TemporaryDirectory(prefix="ava-print-members-") as temp_dir:
         tags_path = os.path.join(temp_dir, "tags.json")
         output_dir = os.path.join(temp_dir, "generated")
@@ -78,6 +117,18 @@ def main(argv):
         return 1
     if '__write__("value:") << ::ava_utils::print_member<decltype(value_)>(value_)' not in generated:
         sys.stderr.write("instance member value_ was not emitted:\n" + generated)
+        return 1
+    for name in private_names + ["only_secret_"]:
+        if name in generated:
+            sys.stderr.write("private text member was emitted: " + name + "\n" + generated)
+            return 1
+    for name in ["ordinary_text_", "similar_name_"]:
+        if "print_member<decltype(" + name + ")>(" + name + ")" not in generated:
+            sys.stderr.write("ordinary member was incorrectly hidden: " + name + "\n" + generated)
+            return 1
+    private_body = generated.split("void PrivateOnly::print_members", 1)[1]
+    if '<< "";' not in private_body or "print_member<" in private_body:
+        sys.stderr.write("private-only class did not receive an empty printer:\n" + private_body)
         return 1
     return 0
 

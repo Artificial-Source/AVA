@@ -1,6 +1,7 @@
-// Debug stream adapters; generated member references print identity without exposing borrowed content.
+// Debug stream adapters; generated references and raw pointers expose identity without borrowed content.
 #pragma once
 
+#include "MemberPointer.h"
 #include "print_members_on.h"
 #include "utils/iomanip.h"
 
@@ -43,13 +44,17 @@ std::ostream& operator<<(std::ostream& os, MemberReference<T> const& reference)
 }
 
 // Generated printers pass the member's declared type via unparenthesized
-// decltype(member). Values keep existing printers; references use address only.
+// decltype(member). Values keep existing printers; references and raw pointers
+// expose identity only, without traversing borrowed content. NoLogString fields
+// are omitted by the generator before reaching this C++ adapter.
 // This does not make concurrent reads of ordinary value members safe.
 template <typename Declared, typename T>
 decltype(auto) print_member(T const& value)
 {
   if constexpr (std::is_reference_v<Declared>)
     return MemberReference<T>(value);
+  else if constexpr (std::is_pointer_v<Declared>)
+    return MemberPointer<std::remove_cv_t<T>>(value);
   else
     return (value);
 }

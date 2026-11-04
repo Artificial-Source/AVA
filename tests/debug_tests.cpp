@@ -17,6 +17,9 @@
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
 #include "debug.h"
 
+// Protect generated pointer identity and annotated private text in the same debug suite.
+void run_debug_pointer_security_tests();
+
 // A type in namespace ava::session that owns a print_on method, used to exercise
 // printing of an owning pointer (boost::intrusive_ptr) and an optional of one.
 namespace ava::session {
@@ -471,6 +474,7 @@ void test_full_render_smoke()
 // Exercise owned-value formatting and privacy of borrowed references and weak capabilities.
 void run_debug_tests()
 {
+  run_debug_pointer_security_tests();
   test_string_literal_renders_raw();
   test_std_string_is_quoted();
   test_maxlen_truncates_long_string();

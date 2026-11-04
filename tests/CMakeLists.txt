@@ -339,7 +339,7 @@ set(AVA_TESTS_SOURCES
 # The debug suite relies on libcwd-backed machinery (ava_debug, CWDEBUG), so it is
 # only compiled in when libcwd is effectively enabled.
 if(OptionEnableLibcwd)
-  list(APPEND AVA_TESTS_SOURCES "debug_tests.cpp")
+  list(APPEND AVA_TESTS_SOURCES "debug_tests.cpp" "debug_pointer_security_tests.cpp")
 endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})

@@ -16,11 +16,13 @@
 # ava/<submodule>; any other top-level namespace gets its own bucket. Everything
 # deeper folds into its bucket. The generated body is uniform (`<< member`); how
 # each member is printed is resolved by C++ overload/concept dispatch at compile
-# time, so member types are not needed here.
+# time. The declared type spelling is also used to omit NoLogString members;
+# that alias is a source annotation, not a distinct C++ type.
 #
 # Usage: generate_print_members.py <tags.json> <output_dir>
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -56,6 +58,14 @@ def is_static_member(tag):
     return "static" in properties.split(",")
 
 
+def is_private_text_member(tag):
+    # NoLogString is a string alias, so C++ overloads cannot distinguish it.
+    # Honor its explicit source annotation before generating any expression.
+    # Omitting the entire member also covers optional/vector and cv/reference
+    # spellings without reading a secret or instantiating a content printer.
+    return re.search(r"\bNoLogString\b", tag.get("typeref") or "") is not None
+
+
 def load_tags(tags_path):
     classes = {}                       # fqname -> class/struct tag (name, scope, path)
     members_by_scope = defaultdict(list)  # fqname -> [(line, member_name)]
@@ -72,7 +82,7 @@ def load_tags(tags_path):
             fqname = (scope + "::" + name) if (scope and name) else None
             if kind in ("class", "struct") and name and tag.get("path") and fqname:
                 classes[fqname] = tag
-            elif kind == "member" and scope and name and not is_static_member(tag):
+            elif kind == "member" and scope and name and not is_static_member(tag) and not is_private_text_member(tag):
                 # Keep the line so members can be emitted in declaration order
                 # rather than tags.json's alphabetical order. Static members
                 # describe the type rather than an individual object's state
@@ -96,7 +106,7 @@ def emit_body(rel, members):
         # that is meant to start a `<< member` chain. With no members it would
         # form a bare `os;` statement, which -Wunused-value flags (and -Werror
         # rejects). Stream an empty string instead: it is a function call (so
-        # -Wunused-value stays quiet) and writes nothing.
+        # -Wunused-value stays quiet) without inspecting any object member.
         lines.append('      << "";\n')
     else:
         for idx, m in enumerate(members):
