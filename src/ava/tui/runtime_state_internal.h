@@ -22,8 +22,8 @@
 namespace ava::tui {
 
 class Composer;
-struct ComposerInputResult;
 class ActiveRunEvents;
+struct TuiEventState;
 class RuntimeTranscriptSelectionState;
 struct CappedTranscriptSnapshotUpdate;
 namespace runtime_views {
@@ -213,7 +213,7 @@ class RuntimePresentationState final
   void publish_status(std::string status);
   // TUI thread: Composer alone selects and projects editor/completion fields.
   // The composer and this display storage must outlive the synchronous call only.
-  void publish_composer(Composer& composer);
+  void publish_composer(Composer const& composer);
   // TUI thread: let Composer project only its selected completion/suppression facts after editor actions.
   void publish_completion(Composer const& composer);
   // TUI thread: publish observed terminal geometry before preparing layouts.
@@ -291,9 +291,6 @@ class RuntimePresentationState final
   void clear_input_feedback();
   // TUI thread: retire local-command feedback when the owning command/input transition has consumed it.
   void clear_local_feedback();
-  // TUI thread after Composer dispatch: publish optional status; the caller remains responsible for beep and
-  // frame routing.
-  void publish_composer_feedback(ComposerInputResult const& result);
   // TUI thread after a successful cycle: apply reasoning feedback through the shared feedback-precedence
   // helper.
   void publish_reasoning_feedback(std::string feedback);
@@ -349,21 +346,18 @@ class RuntimePresentationState final
   // TUI thread: find newest width-boundable thinking block, toggle it, and return its item index if geometry
   // changed.
   [[nodiscard]] std::optional<std::size_t> toggle_latest_thinking_details(std::size_t width);
-  // TUI thread: show whether a run is processing. ActiveRun changes this at start
-  // and completion; this operation does not start, stop or join its worker.
-  void publish_processing(bool processing);
-  // TUI thread: publish Spinner's current frame; scheduling and active-run lifetime remain with its owner.
-  void publish_spinner(std::size_t frame);
-  // TUI thread after reduction: replace live sidebar activity; detached visible sidebar remains under
-  // TranscriptView control.
-  void publish_run_activity(std::vector<SidebarActivityItem> activity);
-  // TUI thread after reduction: replace live todo facts; no backend todo mutation occurs here.
-  void publish_run_todos(std::vector<agent::TodoItem> todos);
-  // TUI thread: replace the displayed queued follow-ups; the backend run still accepts and stores
-  // those messages.
-  void publish_queued_messages(std::vector<QueuedMessageItem> messages);
-  // TUI thread: merge unseen paths into live sidebar history and retain at most the most recent 50 entries.
-  void publish_modified_files(std::vector<SidebarModifiedFile> const& files);
+  // TUI thread: publish a run phase or spinner tick together. Omitted frame/status
+  // preserve current feedback. Move supplied status without allocation here; shutdown
+  // uses empty optionals. This does not start, stop or join the worker.
+  void publish_run_frame(bool processing, std::optional<std::size_t> frame = std::nullopt, std::optional<std::string> status = std::nullopt) noexcept;
+  // TUI thread after reduction: replace queued messages, activity and todos together,
+  // then merge bounded modified-file history. Detached visible sidebar stays unchanged.
+  // Borrow the reduced facts only for this call; ActiveRun reapplies any stopping item afterward.
+  void publish_run_progress(TuiEventState const& state);
+  // TUI thread at completion of a command that preserves the conversation: retain
+  // old activity/todos when final facts are empty, and add paths from final tools.
+  // Keep queued messages and detached display state; borrow both inputs only for this call.
+  void publish_run_summary(TuiEventState const& state, std::vector<ToolTimelineItem> const& tools);
   // TUI thread: upsert one live sidebar activity by identity, preserving other current activities.
   void publish_activity_item(SidebarActivityItem item);
   // TUI thread at run settlement: change only a still-running responding item so later completion cannot
@@ -391,6 +385,10 @@ class RuntimePresentationState final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // TUI thread inside a run publication: merge unseen paths into live sidebar history
+  // and retain the newest 50 entries. Inputs are borrowed only during the merge.
+  void merge_modified_files(std::vector<SidebarModifiedFile> const& files);
+
   // Owned TUI-thread render DTO; named feature publications are its only external mutation path and nested
   // borrows expire on those mutations.
   ComposerSnapshot snapshot_;

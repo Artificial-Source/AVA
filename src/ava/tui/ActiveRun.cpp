@@ -96,12 +96,9 @@ void ActiveRun::settle_turn_activity()
 void ActiveRun::apply_non_transcript_event_authority()
 {
   auto const& state = operation_->events->aggregate();
-  presentation_state_.publish_queued_messages(state.queued_messages);
-  presentation_state_.publish_run_activity(state.activity);
-  presentation_state_.publish_run_todos(state.todos);
+  presentation_state_.publish_run_progress(state);
   if (operation_->inbox->stop_requested() && state.run_status == TuiEventRunStatus::Running)
     upsert_stopping_activity();
-  presentation_state_.publish_modified_files(state.modified_files);
 }
 
 ActiveRunOutcome ActiveRun::exit_outcome() const
@@ -190,8 +187,7 @@ bool ActiveRun::start(std::string submitted)
     auto endpoint = plugin_ui_.begin_submission(operation_->submitted, request_id);
     prompt_coordinator_.set_audit_sink(operation_->inbox->event_sink());
     operation_->turn_started_at = std::chrono::steady_clock::now();
-    presentation_state_.publish_status(operation_->is_command_submission ? "running command..." : "thinking...");
-    presentation_state_.publish_processing(true);
+    presentation_state_.publish_run_frame(true, std::nullopt, operation_->is_command_submission ? "running command..." : "thinking...");
     if (!render())
     {
       operation_->terminal_write_failed = true;
@@ -376,7 +372,7 @@ void ActiveRun::publish_spinner_frame(std::size_t frame)
   if (!active() || !presentation_state_.screen().processing)
     return;
   {
-    presentation_state_.publish_spinner(frame);
+    presentation_state_.publish_run_frame(true, frame);
   }
   if (!subagent_workspace_.active() && !renderer_.request_render(FrameRenderKind::Footer))
     operation_->terminal_write_failed = true;
@@ -591,7 +587,7 @@ void ActiveRun::retire_operation()
   plugin_ui_.finish_submission();
   if (operation_->inbox)
     operation_->inbox->retire();
-  presentation_state_.publish_processing(false);
+  presentation_state_.publish_run_frame(false);
   operation_.reset();
 }
 
@@ -650,7 +646,7 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
   });
   // The worker has returned, so later cleanup failures cannot strand it. Keep
   // every failure recorded in the outcome before destroying per-run state.
-  presentation_state_.publish_processing(false);
+  presentation_state_.publish_run_frame(false);
   operation_.reset();
   return outcome;
 }
@@ -722,15 +718,7 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
     // Restore the exact pre-submit sequence before presenting its local result.
     presentation_state_.publish_transcript(std::move(settlement.transcript));
 
-    if (!event_state.activity.empty())
-      presentation_state_.publish_run_activity(event_state.activity);
-    if (!event_state.todos.empty())
-      presentation_state_.publish_run_todos(event_state.todos);
-    auto files = event_state.modified_files;
-    for (auto const& tool : result.tool_timeline)
-      for (auto const& path : tool.changed_paths)
-        files.push_back(SidebarModifiedFile{.path = path});
-    presentation_state_.publish_modified_files(files);
+    presentation_state_.publish_run_summary(event_state, result.tool_timeline);
   }
   {
     settle_turn_activity();
@@ -772,6 +760,8 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
   }
   // Update the chosen output surface after the transcript; only then finish
   // processing metadata and request the final frame used by the next idle turn.
+  // Local completion already chooses feedback; only other completions replace it.
+  std::optional<std::string> final_status;
   if (settlement.policy.present_command_output)
   {
     presentation_state_.publish_local_completion(operation_->submitted, std::move(settlement.command_output), std::move(settlement.command_tools), false);
@@ -780,12 +770,12 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
   {
     if (!events_received && !transcript_search_.is_open())
       renderer_.show_live_tail(LiveTailReason::Requested);
-    presentation_state_.publish_status(events_received ? (event_state.run_status == TuiEventRunStatus::Error      ? "error"
-                                                          : event_state.run_status == TuiEventRunStatus::Canceled ? "stopped"
-                                                                                                                  : "done")
-                                                       : (result.output.empty() ? "ok" : "done"));
+    final_status = events_received ? (event_state.run_status == TuiEventRunStatus::Error      ? "error"
+                                      : event_state.run_status == TuiEventRunStatus::Canceled ? "stopped"
+                                                                                              : "done")
+                                   : (result.output.empty() ? "ok" : "done");
   }
-  presentation_state_.publish_processing(false);
+  presentation_state_.publish_run_frame(false, std::nullopt, std::move(final_status));
   presentation_state_.refresh_prompt_metadata();
   if (mermaid_.service() == MermaidServiceOutcome::RenderFailed || !render())
   {

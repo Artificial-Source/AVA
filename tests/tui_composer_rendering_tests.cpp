@@ -20,6 +20,7 @@
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
+#include "ava/tui/event_state.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime.h"
@@ -367,11 +368,15 @@ bool test_changed_session_snapshot_resets_presentation()
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.publish_visible_sidebar(presentation.sidebar());
-  presentation.publish_queued_messages({{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}});
+
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
-  presentation.publish_run_activity({{.id = "activity-old", .label = "tool", .detail = "old activity"}});
-  presentation.publish_modified_files({{.path = "old.cpp"}});
+  ava::tui::TuiEventState old_run;
+  old_run.queued_messages = {{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}};
+  old_run.activity = {{.id = "activity-old", .label = "tool", .detail = "old activity"}};
+  old_run.todos = presentation.sidebar().todos;
+  old_run.modified_files = {{.path = "old.cpp"}};
+  presentation.publish_run_progress(old_run);
   // The sidebar count currently has no backend writer. Exercise its production
   // reset transform on a standalone DTO instead of adding a test-only live setter.
   auto sidebar_reset = presentation.sidebar();
@@ -446,8 +451,11 @@ bool test_changed_session_snapshot_resets_presentation()
 
   presentation.publish_transcript({{.label = "ava", .text = "new receipt only"}});
   presentation.invalidate_transcript_layout();
-  presentation.publish_queued_messages({{.id = "queued-new", .kind = "follow-up", .text = "new queued message"}});
-  presentation.publish_run_activity({{.id = "activity-new", .label = "tool", .detail = "new activity"}});
+  ava::tui::TuiEventState new_run;
+  new_run.queued_messages = {{.id = "queued-new", .kind = "follow-up", .text = "new queued message"}};
+  new_run.activity = {{.id = "activity-new", .label = "tool", .detail = "new activity"}};
+  new_run.todos = presentation.sidebar().todos;
+  presentation.publish_run_progress(new_run);
   auto const unchanged_generation = presentation.screen().transcript_generation;
   frontend.seed_committed_todos({{.id = "todo-same", .content = "same-session todo"}});
   auto unchanged = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
@@ -642,11 +650,15 @@ bool test_active_run_session_transition_discards_prior_session_events()
   frontend.seed_committed_todos({{.id = "old-todo", .content = "OLD TODO", .status = ava::agent::TodoStatus::InProgress}});
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.publish_visible_sidebar(presentation.sidebar());
-  presentation.publish_queued_messages({{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}});
+
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
-  presentation.publish_run_activity({{.id = "old-activity", .label = "tool", .detail = "OLD ACTIVITY"}});
-  presentation.publish_modified_files({{.path = "old-preloaded.cpp"}});
+  ava::tui::TuiEventState preloaded_run;
+  preloaded_run.queued_messages = {{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}};
+  preloaded_run.activity = {{.id = "old-activity", .label = "tool", .detail = "OLD ACTIVITY"}};
+  preloaded_run.todos = presentation.sidebar().todos;
+  preloaded_run.modified_files = {{.path = "old-preloaded.cpp"}};
+  presentation.publish_run_progress(preloaded_run);
   ava::tui::Composer draft_state;
   draft_state.record_submission("OLD HISTORY PROMPT");
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
@@ -1021,16 +1033,22 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
   expect(woke, "answering a host prompt wakes the loop before the fallback timer");
   static_cast<void>(active_run.consume());
   bool const displayed = presentation.screen().plugin_ui_modal && presentation.screen().plugin_ui_modal->request_id == "wake-deferred-modal";
+  // Run-frame ticks must preserve unrelated prompt feedback while processing remains active.
+  auto const feedback = presentation.screen().status;
   loop.service_due(std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
-  bool const resumed = presentation.screen().spinner_frame == paused_frame + 1;
+  bool const resumed = presentation.screen().spinner_frame == paused_frame + 1 && presentation.screen().processing && presentation.screen().status == feedback;
   static_cast<void>(plugin_ui.handle_input(enter.event));
   cancel_plugin.once();
   auto const reply = join_released_worker(plugin_worker, "deferred wake plugin");
   cancel_prompt.once();
   bool const host_answered = join_released_worker(prompt_worker, "wake host prompt");
   release_run.once();
+  auto const final_frame = presentation.screen().spinner_frame;
+  auto const final_feedback = presentation.screen().status;
   static_cast<void>(active_run.shutdown());
-  return woke && displayed && resumed && host_answered && reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen";
+  bool const retired =
+      !presentation.screen().processing && presentation.screen().spinner_frame == final_frame && presentation.screen().status == final_feedback;
+  return woke && displayed && resumed && retired && host_answered && reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen";
 }
 
 // Attached prompt rendering deferred paint failure and previously let shutdown replace Io with cancellation.
@@ -1497,7 +1515,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   presentation.publish_visible_sidebar(presentation.sidebar());
-  presentation.publish_processing(true);
+  presentation.publish_run_frame(true);
   ava::tui::Composer draft_state;
   draft_state.replace_draft("STREAM-DRAFT-KEEP");
   presentation.publish_composer(draft_state);
@@ -1531,7 +1549,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   presentation.publish_transcript(std::move(continued_transcript));
   renderer.complete_transcript_update(detached_update, 0, static_cast<std::size_t>(kNewOutputCount));
   presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
-  presentation.publish_processing(false);
+  presentation.publish_run_frame(false);
 
   auto const rendered = renderer.render();
   auto const after_numbers = numbered_window(renderer.painted_frame().surfaces);

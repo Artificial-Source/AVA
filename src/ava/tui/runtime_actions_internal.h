@@ -52,7 +52,8 @@ class RuntimeActionController final
   // rebase/reapply any settings preview before requesting that frame.
   [[nodiscard]] DisplaySettingsReloadPollOutcome maybe_reload_display_settings();
   // TUI thread: reset draft interaction and transient status, then clear text. Return
-  // whether the editor changed so routing can decide whether Interrupt still applies.
+  // whether text changed so routing can decide whether Interrupt still applies.
+  // Publish all editor fields before returning, including an empty draft's reset.
   bool clear_draft_for_interrupt();
   // TUI thread: paint pending status, release terminal protocols and call the blocking
   // frontend editor callback. Restore terminal/geometry before feedback; return paint success.

@@ -104,7 +104,8 @@ struct ComposerInputResult
 // Session owns the draft text, undo state and selection in this editor. Renderer,
 // input and navigation borrow it and must be destroyed first. All access stays on
 // the TUI thread; workers never read its state. Completion uses the caller's prepared
-// const model, so editing does not call back into navigation.
+// const model, so editing does not call back into navigation. Edits leave the
+// cursor outside the interior of a valid UTF-8 character; malformed bytes remain editable.
 class Composer final
 {
  public:
@@ -240,9 +241,9 @@ class Composer final
   // TUI thread: clamp a requested top row to current layout; the caller disarms Escape
   // when scrolling should interrupt a pending clear.
   void scroll_to(std::size_t offset, ComposerSnapshot const& snapshot, std::size_t height);
-  // TUI thread: clamp the editor's stored cursor, then copy draft, completion, scroll
-  // and selection fields into the display snapshot. Retain no reference to the snapshot.
-  void project(ComposerSnapshot& snapshot);
+  // TUI thread: copy draft, completion, scroll and selection fields without changing
+  // editor state. Mutations establish cursor validity; retain no snapshot reference.
+  void project(ComposerSnapshot& snapshot) const;
   // TUI thread: publish only draft/completion inputs before the caller prepares matches.
   void project_completion(ComposerSnapshot& snapshot) const;
   // TUI thread: retire both a drag and its range without moving the draft cursor.

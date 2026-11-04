@@ -188,7 +188,6 @@ TuiInputOutcome TuiSession::handle_signals()
     if (claimed_sigint)
     {
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.publish_completion(draft_state_);
       // Keep plugin geometry retirement before this urgent redraw, including a
       // signal observed between input decode and the ordinary presentation stage.
       refresh_geometry_from_kernel();
@@ -246,7 +245,6 @@ TuiInputOutcome TuiSession::handle_signals()
       }
       // and nonempty draft. Clear draft and continue if successful.
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.publish_completion(draft_state_);
       if (!renderer_.render())
       {
         return TuiInputOutcome::Failure;
@@ -478,7 +476,6 @@ TuiInputOutcome TuiSession::handle_session_input(runtime_input::RuntimeInput con
     if (!draft_state_.draft().text.empty())
     {
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.publish_completion(draft_state_);
       if (!renderer_.render())
       {
         return TuiInputOutcome::Failure;
@@ -620,7 +617,8 @@ TuiInputOutcome TuiSession::handle_composer_input(ComposerInputPhase phase, runt
                                         renderer_.transcript().has_selection(), phase);
   if (!result.handled)
     return TuiInputOutcome::Pass;
-  presentation_state_.publish_composer_feedback(result);
+  if (result.status)
+    presentation_state_.publish_status(*result.status);
   if (result.beep)
     terminal_context_.beep();
   // Composer owns editing but not these collaborators. Execute its value

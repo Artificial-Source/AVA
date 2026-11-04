@@ -1,3 +1,4 @@
+// Applies TUI-thread draft edits, preserving cursor, undo and pasted-text boundaries.
 #include "sys.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
@@ -18,8 +19,10 @@ constexpr std::size_t kPasteMarkerByteThreshold = 2000;
 
 std::string trim_ascii_copy(std::string_view text)
 {
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+    text.remove_prefix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+    text.remove_suffix(1);
   return std::string(text);
 }
 
@@ -524,6 +527,8 @@ std::size_t next_atomic_word_cursor(ComposerDraftState const& draft)
   return cursor;
 }
 
+// TUI thread: remove an owned draft range and record undo/kill history before
+// mutation. Return whether bytes changed; repair a UTF-8 join before returning.
 bool erase_range(ComposerDraftState& draft, std::size_t start, std::size_t end, ComposerKillSequence kill_direction)
 {
   start = clamp_composer_draft_cursor_to_atomic_boundary(draft, start);
@@ -544,7 +549,8 @@ bool erase_range(ComposerDraftState& draft, std::size_t start, std::size_t end, 
   }
   shift_paste_markers_for_erase(draft, start, end);
   draft.text.erase(start, end - start);
-  draft.cursor = start;
+  // Removing a separator can join previously malformed bytes into one character.
+  draft.cursor = clamp_composer_draft_cursor(draft.text, start);
   return true;
 }
 
@@ -654,6 +660,8 @@ bool replace_composer_draft(ComposerDraftState& draft, std::string text, std::si
   return true;
 }
 
+// TUI thread: replace the selected byte range while retaining undo and paste
+// ownership. Borrow replacement only for the call; return whether a replacement was performed.
 bool replace_composer_draft_range(ComposerDraftState& draft, std::size_t start, std::size_t end, std::string_view replacement)
 {
   start = clamp_composer_draft_cursor_to_atomic_boundary(draft, start);
@@ -665,10 +673,13 @@ bool replace_composer_draft_range(ComposerDraftState& draft, std::size_t start, 
   record_undo(draft);
   shift_paste_markers_for_replace(draft, start, end, replacement.size());
   draft.text.replace(start, end - start, replacement);
-  draft.cursor = start + replacement.size();
+  // The replacement endpoint may now lie inside a character completed by the suffix.
+  draft.cursor = clamp_composer_draft_cursor(draft.text, start + replacement.size());
   return true;
 }
 
+// TUI thread: insert call-scoped text into the owned draft, coalescing compatible
+// typing undo entries. Return whether nonempty text was inserted with a valid cursor.
 bool insert_composer_draft_text(ComposerDraftState& draft, std::string_view text)
 {
   if (text.empty())
@@ -689,7 +700,8 @@ bool insert_composer_draft_text(ComposerDraftState& draft, std::string_view text
 
   shift_paste_markers_for_insert(draft, draft.cursor, text.size());
   draft.text.insert(draft.cursor, text);
-  draft.cursor += text.size();
+  // A starter inserted before an orphan continuation can complete one character.
+  draft.cursor = clamp_composer_draft_cursor(draft.text, draft.cursor + text.size());
   draft.coalesce_typing_undo = insert_text_is_coalesceable_typing(text);
   return true;
 }
@@ -758,6 +770,8 @@ bool jump_composer_draft_to_character(ComposerDraftState& draft, std::string_vie
   return true;
 }
 
+// TUI thread: apply one editor action to caller-owned state and its undo history.
+// Report the action's edit result; tracking metadata can reset even on false.
 bool apply_composer_draft_action(ComposerDraftState& draft, TuiAction action)
 {
   // Every action starts on a compact cluster / paste-marker boundary. Malformed orphan bytes remain addressable.
@@ -879,6 +893,9 @@ bool apply_composer_draft_action(ComposerDraftState& draft, TuiAction action)
       draft.yank_start = start;
       draft.yank_end = draft.cursor;
       draft.yank_ring_index = 0;
+      // YankPop needs the raw inserted span, even if its endpoint lies inside a
+      // newly completed character. Only the visible cursor is normalized.
+      draft.cursor = clamp_composer_draft_cursor(draft.text, draft.cursor);
       return true;
     }
     case TuiAction::YankPop: {
@@ -900,6 +917,8 @@ bool apply_composer_draft_action(ComposerDraftState& draft, TuiAction action)
       draft.yank_start = start;
       draft.yank_end = draft.cursor;
       draft.yank_ring_index = next_ring_index;
+      // Keep the raw replacement span for the next cycle before moving the cursor.
+      draft.cursor = clamp_composer_draft_cursor(draft.text, draft.cursor);
       return true;
     }
     case TuiAction::Submit:

@@ -116,7 +116,8 @@ TuiInputOutcome ActiveRunInput::handle_surface_input(runtime_input::RuntimeInput
 
 bool ActiveRunInput::apply_composer_result(ComposerInputResult result)
 {
-  presentation_state_.publish_composer_feedback(result);
+  if (result.status)
+    presentation_state_.publish_status(*result.status);
   if (result.beep)
     terminal_context_.beep();
   return result.handled;
@@ -426,7 +427,6 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
     if (!draft.text.empty())
     {
       static_cast<void>(action_controller_.clear_draft_for_interrupt());
-      presentation_state_.publish_completion(draft_state_);
       return render_outcome(renderer_.render());
     }
     run_.request_close_after_submit();

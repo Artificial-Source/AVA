@@ -79,7 +79,8 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
   // Completion owns a click before the transcript or draft underneath it. Keep
   // feedback here; the session requests the frame after this dispatch stage.
   auto apply_feedback = [&](ComposerInputResult result) {
-    presentation_.publish_composer_feedback(result);
+    if (result.status)
+      presentation_.publish_status(*result.status);
     if (result.beep)
       terminal_context.beep();
     return result.handled;

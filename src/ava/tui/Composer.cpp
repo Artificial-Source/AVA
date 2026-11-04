@@ -729,9 +729,8 @@ void Composer::project_completion(ComposerSnapshot& snapshot) const
   snapshot.slash_palette_suppressed = slash_palette_suppressed_;
   snapshot.path_completion_force_active = path_completion_force_active_;
 }
-void Composer::project(ComposerSnapshot& snapshot)
+void Composer::project(ComposerSnapshot& snapshot) const
 {
-  draft_.cursor = clamp_composer_draft_cursor(draft_.text, draft_.cursor);
   project_completion(snapshot);
   snapshot.draft_scroll_offset = draft_scroll_offset_;
   auto const selection = selection_bounds();

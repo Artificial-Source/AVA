@@ -1,6 +1,10 @@
+// Run editor and feature suites under one Application-owned terminal.
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "tests/tui_composer_test_suites.h"
+
+// Check edit-time cursor validity and immediate interrupt publication.
+void run_tui_composer_invariant_tests();
 
 // Direct selector/summary contracts use the same initialized test-thread terminal.
 void run_tui_feature_owner_tests();
@@ -29,6 +33,7 @@ void run_tui_composer_tests()
   run_tui_completion_tests();
   run_tui_keybinding_tests();
   run_tui_composer_dispatch_tests();
+  run_tui_composer_invariant_tests();
   run_tui_prompt_stash_tests();
   run_tui_modal_tests_part_2();
   run_tui_permission_tests_part_2();

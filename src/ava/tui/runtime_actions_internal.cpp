@@ -174,7 +174,11 @@ bool RuntimeActionController::clear_draft_for_interrupt()
 {
   draft_state_.reset_interaction();
   presentation_state_.publish_status({});
-  return draft_state_.apply_action(TuiAction::ClearInput);
+  auto const changed = draft_state_.apply_action(TuiAction::ClearInput);
+  // Empty text may still have selection or completion state to reset. Publish
+  // the whole edit before callers decide whether Interrupt should also close.
+  presentation_state_.publish_composer(draft_state_);
+  return changed;
 }
 
 bool RuntimeActionController::open_external_editor()

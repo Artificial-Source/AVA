@@ -50,6 +50,14 @@ so timer handles, input callbacks and features disappear before the objects
 they borrow. Do not reorder those declarations without checking every borrow.
 Neither the session nor a registered callback target may move.
 
+Composer edits establish a valid cursor before returning. `project()` only copies
+editor fields into the screen. `RuntimeActionController::clear_draft_for_interrupt()`
+publishes the full edit before its caller decides what to do next. Run display
+updates use separate operations for a frame, live progress and a final summary.
+An empty live update clears current activity and todos; an omitted final summary
+preserves those facts. Neither updates the detached sidebar until its viewport
+owner prepares a frame.
+
 | Owner | Responsibility and owned state |
 | --- | --- |
 | `TuiSession` | Composition, loop order, control decisions and transitions between owners. |

@@ -339,7 +339,7 @@ void RuntimePresentationState::publish_status(std::string status)
 {
   snapshot_.status = std::move(status);
 }
-void RuntimePresentationState::publish_composer(Composer& composer)
+void RuntimePresentationState::publish_composer(Composer const& composer)
 {
   composer.project(snapshot_);
 }
@@ -579,27 +579,36 @@ std::optional<std::size_t> RuntimePresentationState::toggle_latest_thinking_deta
     ++snapshot_.transcript_generation;
   return index;
 }
-void RuntimePresentationState::publish_processing(bool processing)
+void RuntimePresentationState::publish_run_frame(bool processing, std::optional<std::size_t> frame, std::optional<std::string> status) noexcept
 {
   snapshot_.processing = processing;
+  if (frame)
+    snapshot_.spinner_frame = *frame;
+  if (status)
+    snapshot_.status = std::move(*status);
 }
-void RuntimePresentationState::publish_spinner(std::size_t frame)
+void RuntimePresentationState::publish_run_progress(TuiEventState const& state)
 {
-  snapshot_.spinner_frame = frame;
+  snapshot_.queued_messages = state.queued_messages;
+  sidebar_.activity = state.activity;
+  sidebar_.todos = state.todos;
+  merge_modified_files(state.modified_files);
 }
-void RuntimePresentationState::publish_run_activity(std::vector<SidebarActivityItem> activity)
+void RuntimePresentationState::publish_run_summary(TuiEventState const& state, std::vector<ToolTimelineItem> const& tools)
 {
-  sidebar_.activity = std::move(activity);
+  // A final command result can omit these facts. Empty final values preserve the
+  // prior display, unlike an empty live update that replaces the current facts.
+  if (!state.activity.empty())
+    sidebar_.activity = state.activity;
+  if (!state.todos.empty())
+    sidebar_.todos = state.todos;
+  auto files = state.modified_files;
+  for (auto const& tool : tools)
+    for (auto const& path : tool.changed_paths)
+      files.push_back(SidebarModifiedFile{.path = path});
+  merge_modified_files(files);
 }
-void RuntimePresentationState::publish_run_todos(std::vector<agent::TodoItem> todos)
-{
-  sidebar_.todos = std::move(todos);
-}
-void RuntimePresentationState::publish_queued_messages(std::vector<QueuedMessageItem> messages)
-{
-  snapshot_.queued_messages = std::move(messages);
-}
-void RuntimePresentationState::publish_modified_files(std::vector<SidebarModifiedFile> const& files)
+void RuntimePresentationState::merge_modified_files(std::vector<SidebarModifiedFile> const& files)
 {
   for (auto const& file : files)
     if (!std::ranges::any_of(sidebar_.modified_files, [&](auto const& existing) { return existing.path == file.path; }))
@@ -645,11 +654,6 @@ void RuntimePresentationState::invalidate_transcript_layout()
 void RuntimePresentationState::clear_local_feedback()
 {
   snapshot_.local_command_feedback.reset();
-}
-void RuntimePresentationState::publish_composer_feedback(ComposerInputResult const& result)
-{
-  if (result.status)
-    snapshot_.status = *result.status;
 }
 
 }  // namespace ava::tui
