@@ -199,7 +199,8 @@ int TuiFrontEnd::run()
   return session.run(std::bind_front(&RuntimeBeforeShutdownGuard::invoke, &before_shutdown));
 }
 
-// Load startup bindings into TUI-owned state and return only formatted failure status.
+// TUI thread between dispatch steps: replace the map in place so existing const
+// borrows stay valid. Presentation refreshes the associated hints after this call.
 void TuiFrontEnd::apply_key_bindings(TuiKeyBindings bindings)
 {
   key_bindings_ = std::move(bindings);
@@ -215,6 +216,7 @@ std::array<std::string, 3> TuiFrontEnd::read_settings_model_labels()
   return {provider.value, model.value, reasoning.value};
 }
 
+// Load startup bindings into TUI-owned state and return only formatted failure status.
 std::string TuiFrontEnd::load_key_bindings()
 {
   std::string keybind_status;
