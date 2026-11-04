@@ -100,7 +100,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
   auto const control_epoch = TuiTimer::Clock::now();
   action_controller_.attach_loop(loop_, control_epoch);
   branch_summary_.attach_loop(loop_);
-  subagent_workspace_.attach_loop(loop_, renderer_);
+  subagent_workspace_.attach_loop(loop_);
   mermaid_presentation_.attach_loop(loop_);
   control_timer_.repeat(kControlObservationInterval, control_epoch);
 }
@@ -762,14 +762,16 @@ void TuiSession::service_presentations()
     loop_.request_stop();
     return;
   }
-  if (subagent_workspace_.take_render_failure())
+  // Workspace discovery remains eligible during host prompts. Read frontend
+  // state in this application phase, then schedule a frame only for a change.
+  if (subagent_workspace_.service_if_due() && !renderer_.request_render())
   {
     apply_input_outcome(TuiInputOutcome::Failure);
     return;
   }
   // A host prompt freezes these display changes until it retires. Skip the
   // service calls themselves so completion and reload flags remain pending.
-  // Workspace failures still end the session even while the prompt owns input.
+  // Workspace failures above still end the session while the prompt owns input.
   if (prompt_coordinator_.has_active())
     return;
   if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)

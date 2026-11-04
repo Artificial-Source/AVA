@@ -171,7 +171,9 @@ The normal order in `TuiSession::run` is:
 3. **Application updates.** Consume up to 256 active-run events, handle completion,
    and update feature presentation. An open host prompt holds provider events,
    Mermaid completions and display-settings reloads until the prompt retires.
-   Their pending work stays queued; workspace rendering failures still stop the loop.
+   Their pending work stays queued. Workspace discovery still runs here while a
+   host prompt is open; it requests a frame only when its view changes. A failed
+   frame request still stops the loop.
 4. **Input.** Poll up to 32 input results. A discarded control reply consumed input
    and counts toward that budget; it does not mean the input buffer is empty.
    Check signals again after decoding before dispatching a retained key.

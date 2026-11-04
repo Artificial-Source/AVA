@@ -313,3 +313,18 @@ waits for the real resolver futures after forwarding each notification. It prove
 the queue has the last request shares before testing callback destruction. The
 wrapper is otherwise inert. Callback probes retain their futures until the outer
 operation unlocks; bounded guards turn a regression into a failed isolated case.
+
+## Final self-review: workspace timer boundary
+
+The workspace timer now records discovery eligibility only. Session calls
+`service_if_due()` in application servicing, then requests rendering when that
+operation reports a changed view. This removes the workspace's renderer borrow
+and deferred rendering-failure flag. Service remains before the host-prompt
+guard; workspace updates retain their existing eligibility. The timer still
+runs every 150 ms, missed ticks coalesce, and open/close clear stale due work.
+
+The workspace regression first failed because the old timer read frontend data.
+It now checks unchanged call counts and projection during timer dispatch, then
+checks the original updates after explicit application service. The existing
+unchanged-result no-redraw check remains. Added cases cover coalesced ticks,
+closure and replacement of a selector while a read is pending.

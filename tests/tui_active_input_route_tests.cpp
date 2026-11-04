@@ -285,7 +285,7 @@ void run_tui_active_input_route_tests()
   ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, composer, renderer, selectors, sessions, attachments);
   actions.attach_loop(loop);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
-  workspace.attach_loop(loop, renderer);
+  workspace.attach_loop(loop);
   ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
   mermaid.attach_loop(loop);

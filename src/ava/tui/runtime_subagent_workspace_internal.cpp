@@ -3,7 +3,6 @@
 #include "SelectorHost.h"
 #include "TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
-#include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 
@@ -70,23 +69,23 @@ RuntimeSubagentWorkspaceController::~RuntimeSubagentWorkspaceController()
   close();
 }
 
-void RuntimeSubagentWorkspaceController::attach_loop(TuiEventLoop& loop, RuntimeRenderer& renderer)
+void RuntimeSubagentWorkspaceController::attach_loop(TuiEventLoop& loop)
 {
   discovery_timer_ = loop.member_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
-  renderer_ = &renderer;
   if (active())
     discovery_timer_.repeat(kPollInterval);
 }
 
-bool RuntimeSubagentWorkspaceController::take_render_failure() noexcept
+bool RuntimeSubagentWorkspaceController::service_if_due()
 {
-  return std::exchange(render_failed_, false);
+  // Take eligibility before frontend calls so another application pass cannot
+  // repeat the same discovery. Only changed views ask Session for a new frame.
+  return std::exchange(discovery_due_, false) && refresh();
 }
 
 void RuntimeSubagentWorkspaceController::discover_progress(Clock::time_point)
 {
-  if (refresh() && !renderer_->request_render())
-    render_failed_ = true;
+  discovery_due_ = true;
 }
 
 bool RuntimeSubagentWorkspaceController::active() const noexcept
@@ -142,6 +141,7 @@ void RuntimeSubagentWorkspaceController::publish()
 
 bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
 {
+  discovery_due_ = false;
   mode_ = Mode::Selector;
   job_id_.clear();
   known_generation_.reset();
@@ -172,6 +172,7 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
 void RuntimeSubagentWorkspaceController::close()
 {
   discovery_timer_.cancel();
+  discovery_due_ = false;
   mode_ = Mode::Closed;
   selector_ = {};
   workspace_ = {};

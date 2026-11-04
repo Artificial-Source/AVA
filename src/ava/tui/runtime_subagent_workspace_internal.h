@@ -15,7 +15,6 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 class SelectorHost;
-class RuntimeRenderer;
 class TuiEventLoop;
 
 // Owned TUI-thread dispatch result returned to session routing; no borrowed data survives the synchronous
@@ -33,7 +32,7 @@ struct RuntimeSubagentWorkspaceInputResult
 };
 
 // Session-owned TUI-thread selector/inspector presentation for application-owned jobs. Frontend, projection,
-// selector host, attached renderer, and loop outlive it. Discovery runs only while open; close/destruction
+// selector host and attached loop outlive it. Discovery runs only while open; close/destruction
 // cancels it before releasing view data and never stops backend jobs.
 class RuntimeSubagentWorkspaceController final
 {
@@ -52,12 +51,13 @@ class RuntimeSubagentWorkspaceController final
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
-  // Loop and renderer outlive this stable owner; attached polling only runs from
-  // its member timer and requests invalidation without painting. Attach the
-  // renderer's loop mode before attaching this feature.
-  void attach_loop(TuiEventLoop& loop, RuntimeRenderer& renderer);
-  // TUI thread: consume a failure latched by timer-driven invalidation so session control handles it once.
-  [[nodiscard]] bool take_render_failure() noexcept;
+  // TUI setup: register the discovery timer at this stable address. The loop
+  // outlives this owner; callbacks only mark a read due, never call the frontend.
+  void attach_loop(TuiEventLoop& loop);
+  // TUI application stage: consume pending discovery once, even after several
+  // timer ticks. Return true only when visible state changed and needs a frame.
+  // Service before the host-prompt guard; workspace discovery remains eligible.
+  [[nodiscard]] bool service_if_due();
   // TUI thread: initialize a fresh job list or unavailable placeholder, publish it, and start discovery
   // cadence.
   [[nodiscard]] bool open_selector(Clock::time_point now = Clock::now());
@@ -80,7 +80,7 @@ class RuntimeSubagentWorkspaceController final
   [[nodiscard]] std::optional<std::uint64_t> known_generation() const noexcept;
 
   // Workspace messages and selector checkpoints contain arbitrary user text;
-  // the borrowed projection/renderer must not become generated debug output.
+  // the borrowed projection must not become generated debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
@@ -119,8 +119,8 @@ class RuntimeSubagentWorkspaceController final
   // TUI thread discovery: refresh list first, inspect only after a successful list read, then publish once if
   // changed.
   [[nodiscard]] bool refresh();
-  // TUI timer callback: refresh presentation and request invalidation; latch renderer failure without painting
-  // inline.
+  // TUI timer callback: mark one application-stage read due. Several ticks
+  // coalesce; no frontend call, view mutation or rendering happens here.
   void discover_progress(Clock::time_point now);
 
   // Borrowed application adapter outlives the controller; supplies path-free job snapshots and explicit job
@@ -148,10 +148,9 @@ class RuntimeSubagentWorkspaceController final
   bool refresh_unavailable_ = false;
   // TUI-thread guard preventing inspection against an unavailable latest list; reset on fresh open/close.
   bool last_list_refresh_succeeded_ = true;
-  // Borrowed after attach_loop; renderer must be attached first and outlive controller/timer callbacks.
-  RuntimeRenderer* renderer_ = nullptr;
-  // TUI timer sets when invalidation fails; application stage consumes through take_render_failure.
-  bool render_failed_ = false;
+  // TUI timer sets this while open; application service consumes it once.
+  // Opening or closing clears stale work so it cannot refresh a different view.
+  bool discovery_due_ = false;
   // TUI-thread periodic refresh registration; canceled on close and destroyed before borrowed owners can
   // retire.
   TuiTimer discovery_timer_;
