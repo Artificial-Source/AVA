@@ -342,55 +342,58 @@ TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput co
   auto result = selectors_.dispatch(input, selector_input_, settings_, session_selector_);
   // Dispatch has already resolved selector-local state. Apply its owned result
   // before requesting a frame, so no intermediate selector state is painted.
-  using Request = SelectorDispatchRequest;
-  switch (result.request)
+  if (auto* draft = std::get_if<SelectorDraftCompletion>(&result))
   {
-    case Request::None:
-      break;
-    case Request::Models:
-      static_cast<void>(action_controller_.open_model_selector());
-      break;
-    case Request::ScopedModels:
-      static_cast<void>(action_controller_.open_scoped_model_selector());
-      break;
-    case Request::Reasoning:
-      static_cast<void>(action_controller_.open_reasoning_selector(false));
-      break;
-    case Request::CurrentReasoning:
-      if (!action_controller_.open_reasoning_selector(true))
+    draft_state_.accept_completion(std::move(draft->command), std::string::npos);
+    presentation_state_.publish_status(std::move(draft->status));
+  }
+  else if (auto* draft = std::get_if<SelectorDraftCommand>(&result))
+    draft_state_.draft_command(std::move(draft->command));
+  else if (auto* opened = std::get_if<SelectorOpenedSession>(&result))
+    settle_opened_session(std::move(opened->feedback));
+  else if (auto* error = std::get_if<SelectorSessionError>(&result))
+  {
+    // A failed backend action may already have changed sessions. Reconcile first.
+    static_cast<void>(synchronize_committed_session());
+    presentation_state_.publish_status(std::move(error->feedback));
+    terminal_context_.beep();
+  }
+  else if (auto* summary = std::get_if<SelectorParentSummary>(&result))
+  {
+    if (stop_for_branch_summary(branch_summary_.start(std::move(summary->previous_view), summary->selected_index, summary->selected_source)))
+      return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
+  }
+  else
+  {
+    using Request = SelectorDispatchRequest;
+    switch (std::get<Request>(result))
+    {
+      case Request::None:
+        break;
+      case Request::Models:
+        static_cast<void>(action_controller_.open_model_selector());
+        break;
+      case Request::ScopedModels:
+        static_cast<void>(action_controller_.open_scoped_model_selector());
+        break;
+      case Request::Reasoning:
+        static_cast<void>(action_controller_.open_reasoning_selector(false));
+        break;
+      case Request::CurrentReasoning:
+        if (!action_controller_.open_reasoning_selector(true))
+          return TuiInputOutcome::Failure;
+        break;
+      case Request::Hotkeys:
+        selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
+        presentation_state_.publish_status("keybindings opened");
+        renderer_.show_live_tail(LiveTailReason::Requested);
+        break;
+      case Request::RenderFailed:
         return TuiInputOutcome::Failure;
-      break;
-    case Request::Hotkeys:
-      selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
-      presentation_state_.publish_status("keybindings opened");
-      renderer_.show_live_tail(LiveTailReason::Requested);
-      break;
-    case Request::DraftCompletion:
-      draft_state_.accept_completion(std::move(result.text), std::string::npos);
-      presentation_state_.publish_status(std::move(result.status));
-      break;
-    case Request::DraftCommand:
-      draft_state_.draft_command(std::move(result.text));
-      break;
-    case Request::OpenedSession:
-      settle_opened_session(std::move(result.text));
-      break;
-    case Request::SessionError:
-      static_cast<void>(synchronize_committed_session());
-      presentation_state_.publish_status(std::move(result.text));
-      terminal_context_.beep();
-      break;
-    case Request::SummarizeParent:
-      // Host returns an owned prior view only for this request, after validating its row.
-      ASSERT(result.previous_view);
-      if (stop_for_branch_summary(branch_summary_.start(std::move(*result.previous_view), result.selected_index, result.text)))
-        return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
-      break;
-    case Request::RenderFailed:
-      return TuiInputOutcome::Failure;
-    case Request::Beep:
-      terminal_context_.beep();
-      break;
+      case Request::Beep:
+        terminal_context_.beep();
+        break;
+    }
   }
   return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
 }

@@ -5,6 +5,7 @@
 #include "tests/support/test_harness.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SettingsDialog.h"
+#include "ava/tui/SelectorDispatchResult.h"
 #include "ava/tui/runtime_state_internal.h"
 // clang-format on
 
@@ -195,6 +196,29 @@ void test_editor_results_hide_content()
          "generated draft command omits both command text and feedback even when populated");
 }
 
+// Each selector payload hides its strings; the saved-view payload exposes only its row index.
+void test_selector_results_hide_content()
+{
+  using namespace ava::tui;
+  std::string const secret = "private-selector-payload-sentinel";
+  SelectorDraftCompletion const completion{.command = secret, .status = secret};
+  SelectorDraftCommand const command{.command = secret};
+  SelectorOpenedSession const opened{.feedback = secret};
+  SelectorSessionError const error{.feedback = secret};
+  SelectListView previous;
+  previous.title = secret;
+  SelectorParentSummary const summary{.selected_source = secret, .previous_view = std::move(previous), .selected_index = 7};
+  auto const logged_summary = render_member<decltype(summary)>(summary);
+  expect(render_member<decltype(completion)>(completion).find(secret) == std::string::npos &&
+             render_member<decltype(command)>(command).find(secret) == std::string::npos &&
+             render_member<decltype(opened)>(opened).find(secret) == std::string::npos &&
+             render_member<decltype(error)>(error).find(secret) == std::string::npos && logged_summary.find(secret) == std::string::npos,
+         "selector result printers omit command, feedback, source identity and saved view text");
+  expect(logged_summary.find("selected_index:7") != std::string::npos, "summary diagnostic retains its non-content row position");
+  SelectorDispatchResult const result = summary;
+  expect(render_member<decltype(result)>(result).find(secret) == std::string::npos, "printing the selector result variant cannot expose its owned payload");
+}
+
 } // namespace
 
 // Exercise generated raw-pointer privacy and preserve neighboring value/reference behavior.
@@ -208,4 +232,5 @@ void run_debug_pointer_security_tests()
   test_owned_string_and_reference_semantics();
   test_archive_action_hides_session_id();
   test_editor_results_hide_content();
+  test_selector_results_hide_content();
 }

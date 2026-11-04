@@ -1882,8 +1882,8 @@ bool test_settings_archive_restores_preview_and_selector_storage()
   // Check immediately after host dispatch, while all owners still exist. A later
   // destructor or synchronize_selector() must not be what repairs the preview.
   auto const result = selectors.dispatch({.event = {.key = ava::tui::terminal::Key::CtrlD}, .text = {}}, classifier, settings, sessions);
-  bool const closed = result.request == ava::tui::SelectorDispatchRequest::None && presentation.screen().show_images && !settings.is_open() &&
-                      selectors.kind() == ava::tui::ActiveSelectList::None && !selectors.view() && !presentation.screen().select_list &&
+  bool const closed = std::get<ava::tui::SelectorDispatchRequest>(result) == ava::tui::SelectorDispatchRequest::None && presentation.screen().show_images &&
+                      !settings.is_open() && selectors.kind() == ava::tui::ActiveSelectList::None && !selectors.view() && !presentation.screen().select_list &&
                       presentation.screen().status == "view canceled";
   expect(closed, "Archive dispatch immediately closes nested Settings, restores Images On and publishes cancellation status");
   return previewed && one_view && closed;

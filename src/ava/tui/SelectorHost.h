@@ -2,6 +2,7 @@
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
+#include "SelectorDispatchResult.h"
 #include "runtime_state_internal.h"
 #include "ava/debug/print_members_on.h"
 
@@ -13,43 +14,6 @@ class SelectorInputController;
 namespace runtime_input {
 struct RuntimeInput;
 }
-
-// Call-scoped requests from selector policy to Session's cross-owner coordination.
-enum class SelectorDispatchRequest
-{
-  None, // The owning selector completed the action.
-  Models, // Open model selection after Settings has retired.
-  ScopedModels, // Open scoped model selection after Settings has retired.
-  Reasoning, // Open reasoning choices from Settings.
-  CurrentReasoning, // Open reasoning choices for the just-selected model.
-  Hotkeys, // Replace Settings with the keybinding selector.
-  DraftCompletion, // Replace editor text using completion semantics.
-  DraftCommand, // Replace editor text and reset its command-drafting interaction.
-  OpenedSession, // Reconcile committed identity before publishing success feedback.
-  SessionError, // Reconcile committed identity before publishing error feedback.
-  SummarizeParent, // Start a separately owned branch-summary operation.
-  RenderFailed, // Painting failed before a synchronous frontend operation.
-  Beep, // The feature already published the reason; Session emits the bell.
-};
-
-// SelectorHost returns this owned value to Session on the TUI thread. It survives
-// selector replacement because no row or string view escapes; its request determines
-// which payload fields apply. Destruction releases only the copied handoff data.
-struct SelectorDispatchResult
-{
-  // Session performs only the requested cross-owner transition.
-  SelectorDispatchRequest request = SelectorDispatchRequest::None;
-  // Draft, committed-session feedback, or selected summary identity, according to request.
-  std::string text = {};
-  // Feature-selected feedback accompanies DraftCompletion, avoiding command-string tests.
-  std::string status = {};
-  // A parent summary retains the previous selector to restore it when finished.
-  std::optional<SelectListView> previous_view = std::nullopt;
-  // Selection identity within previous_view; meaningful only for SummarizeParent.
-  std::size_t selected_index = 0;
-  // Selector text may contain paths or prompt excerpts and must not be debug streamed.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
 
 // Session owns this TUI-thread coordinator of selector input and view changes.
 // Presentation outlives it and holds the single view; renderer and features borrow

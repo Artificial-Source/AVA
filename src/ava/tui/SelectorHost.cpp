@@ -137,19 +137,19 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
   {
     auto result = settings.resolve(classified);
     if (auto* draft = std::get_if<DraftCommand>(&result))
-      return {.request = Request::DraftCompletion, .text = std::move(draft->command), .status = std::move(draft->status)};
+      return SelectorDraftCompletion{.command = std::move(draft->command), .status = std::move(draft->status)};
     switch (std::get<SettingsDialogRequest>(result))
     {
       case SettingsDialogRequest::None:
         return {};
       case SettingsDialogRequest::Models:
-        return {.request = Request::Models};
+        return Request::Models;
       case SettingsDialogRequest::ScopedModels:
-        return {.request = Request::ScopedModels};
+        return Request::ScopedModels;
       case SettingsDialogRequest::Reasoning:
-        return {.request = Request::Reasoning};
+        return Request::Reasoning;
       case SettingsDialogRequest::Hotkeys:
-        return {.request = Request::Hotkeys};
+        return Request::Hotkeys;
     }
   }
   // Summary preparation needs an owned restoration checkpoint because progress replaces
@@ -161,7 +161,7 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
     if (!item || !item->enabled || item->value.empty())
     {
       presentation_.publish_status("parent summary is unavailable from this row");
-      return {.request = Request::Beep};
+      return Request::Beep;
     }
     // Copy only when transferring this selector into the summary operation. Ordinary
     // selection changes keep the host's single row allocation in place.
@@ -169,8 +169,7 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
     prior.query = std::move(classified.query);
     prior.selected_item_index = classified.selected_item_index;
     auto identity = item->value;
-    return {
-        .request = Request::SummarizeParent, .text = std::move(identity), .previous_view = std::move(prior), .selected_index = classified.selected_item_index};
+    return SelectorParentSummary{.selected_source = std::move(identity), .previous_view = std::move(prior), .selected_index = classified.selected_item_index};
   }
   else if (kind() == ActiveSelectList::Session &&
            (classified.action == Action::CycleSort || classified.action == Action::ToggleNamedFilter || classified.action == Action::TogglePathDisplay ||
@@ -179,13 +178,13 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
   else if (kind() == ActiveSelectList::Session && (classified.action == Action::Rename || classified.action == Action::Label))
   {
     if (auto command = sessions.draft_command(classified))
-      return {.request = Request::DraftCommand, .text = std::move(*command)};
+      return SelectorDraftCommand{.command = std::move(*command)};
   }
   else if (kind() == ActiveSelectList::Session && (classified.action == Action::BranchParent || classified.action == Action::BranchChild))
   {
     if (auto result = sessions.navigate_branch(classified))
-      return *result ? SelectorDispatchResult{.request = Request::OpenedSession, .text = std::move(**result)}
-                     : SelectorDispatchResult{.request = Request::SessionError, .text = result->error().format()};
+      return *result ? SelectorDispatchResult{SelectorOpenedSession{.feedback = std::move(**result)}}
+                     : SelectorDispatchResult{SelectorSessionError{.feedback = result->error().format()}};
   }
   else if (classified.action == Action::Archive || classified.action == Action::ArchiveNoninvasive)
   {
@@ -202,8 +201,8 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
   else if (classified.action == Action::Resolve && kind() == ActiveSelectList::Session)
   {
     auto result = sessions.resolve(classified);
-    return result ? SelectorDispatchResult{.request = Request::OpenedSession, .text = std::move(*result)}
-                  : SelectorDispatchResult{.request = Request::SessionError, .text = result.error().format()};
+    return result ? SelectorDispatchResult{SelectorOpenedSession{.feedback = std::move(*result)}}
+                  : SelectorDispatchResult{SelectorSessionError{.feedback = result.error().format()}};
   }
   else
   {
@@ -215,9 +214,9 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
     if (auto const* request = std::get_if<SelectorInputRequest>(&result))
     {
       if (*request == SelectorInputRequest::RenderFailed)
-        return {.request = Request::RenderFailed};
+        return Request::RenderFailed;
       if (*request == SelectorInputRequest::OpenReasoning)
-        return {.request = Request::CurrentReasoning};
+        return Request::CurrentReasoning;
     }
     else
     {
@@ -225,11 +224,11 @@ SelectorDispatchResult SelectorHost::dispatch(runtime_input::RuntimeInput const&
       switch (kind)
       {
         case SelectorInputTextKind::DraftCommand:
-          return {.request = Request::DraftCompletion, .text = std::move(text), .status = "keybinding edit command drafted"};
+          return SelectorDraftCompletion{.command = std::move(text), .status = "keybinding edit command drafted"};
         case SelectorInputTextKind::OpenedSession:
-          return {.request = Request::OpenedSession, .text = std::move(text)};
+          return SelectorOpenedSession{.feedback = std::move(text)};
         case SelectorInputTextKind::ReconcileSessionError:
-          return {.request = Request::SessionError, .text = std::move(text)};
+          return SelectorSessionError{.feedback = std::move(text)};
       }
     }
   }

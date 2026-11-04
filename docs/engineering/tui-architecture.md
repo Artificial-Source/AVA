@@ -123,6 +123,12 @@ Failures after the join produce a nonzero session outcome. The frontend's outer
 shutdown guard covers exits that never reach
 the session's normal exit path.
 
+Selector input returns an owned `SelectorDispatchResult` variant. Each
+alternative carries only its needed fields; a parent summary always carries the
+view it will restore. `TuiSession::handle_selector_input` applies that result
+after selector cleanup and before requesting paint. Session success and error
+both reconcile the backend's committed identity before displaying feedback.
+
 ## Debug output
 
 Print TUI owners on the TUI thread. Generated printers show reference and raw

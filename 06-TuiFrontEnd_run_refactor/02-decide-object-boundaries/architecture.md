@@ -172,6 +172,24 @@ That bounded printer permits generated printing of the containing `ActiveRun`.
 `ComposerInputResult::status` and both `DraftCommand` strings directly spell
 `NoLogString`, which the generator omits. Their remaining metadata can print.
 `MemberReference` now lives in its matching header and preserves address-only
-reference handling through the existing helper include. The selector result's
-printing change belongs with its variant conversion: its current saved
-`SelectListView` has no safe content printer and must not gain one just for logging.
+reference handling through the existing helper include. Selector result text is
+also annotated. Its saved-view alternative has a handwritten row-index printer;
+the copied `SelectListView` never enters diagnostics.
+
+
+## Final R16 result layout
+
+`ComposerInputResult`, `DraftCommand`, `InputPollResult` and
+`SelectorDispatchResult` have matching headers. `RuntimeInput` also has its own
+header so polling results do not depend on the reader-function declarations.
+The enum associated with each result stays beside it.
+
+`SelectorDispatchResult` is a variant: payload-free requests use an enum, while
+five records own the fields needed for draft completion, command drafting,
+session success, session error or parent summary. These five records share the
+result header as a deliberate layout exception: they form one result contract,
+with one producer (`SelectorHost`) and one consumer (`TuiSession`). None is a
+new feature owner. A summary always carries its saved view, so a summary request
+without restoration data cannot be constructed through the old field mismatch.
+Session reconciliation still precedes success/error feedback; draft completion
+and command drafting retain their different reset rules.
