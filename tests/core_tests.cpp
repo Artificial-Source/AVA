@@ -220,10 +220,20 @@ constexpr std::array<std::string_view, 12> kKeyboardCases{
 constexpr std::array<std::string_view, 2> kMouseCases{"context_lifecycle", "handoff_lifecycle"};
 constexpr std::array<std::string_view, 5> kColorCases{"srgb_round_trip", "osc4_protocol", "mutable_palette", "xterm_indexed", "portable_pairs"};
 constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_color", "screen", "tmux", "kitty", "wezterm"};
-constexpr std::array<std::string_view, 11> kComposerRenderingCases{
-    "search_tail",         "changed_session",          "session_transition",  "atomic_search",           "message_navigation",
-    "detached_completion", "message_navigation_empty", "display_reload_poll", "display_reload_overview", "prompt_security",
-    "paste_security"};
+// Each prompt-wakeup case gets its own terminal and independent readiness state.
+constexpr std::array<std::string_view, 13> kComposerRenderingCases{"search_tail",
+                                                                   "changed_session",
+                                                                   "session_transition",
+                                                                   "atomic_search",
+                                                                   "message_navigation",
+                                                                   "detached_completion",
+                                                                   "message_navigation_empty",
+                                                                   "display_reload_poll",
+                                                                   "display_reload_overview",
+                                                                   "prompt_security",
+                                                                   "paste_security",
+                                                                   "prompt_completion_wakeup_permission",
+                                                                   "prompt_completion_wakeup_question"};
 // Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
 constexpr std::array<std::string_view, 17> kSessionCases{"turn_order",
                                                          "frame_deadline",

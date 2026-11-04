@@ -201,8 +201,10 @@ class RuntimePromptCoordinator final
   [[nodiscard]] PromptServiceOutcome handle_question_input(runtime_input::RuntimeInput const& input);
   // TUI thread with permission claim: clear view and retire timers/callbacks before
   // request completion wakes the worker whose stack those callbacks may borrow.
+  // Then wake the loop so deferred features can resume without a worker event.
   [[nodiscard]] PromptServiceOutcome complete_permission(PermissionResult result);
-  // TUI thread with question claim: apply the same retire-before-wake order for answers.
+  // TUI thread with question claim: retire callbacks before releasing the worker,
+  // then wake the loop to resume features held while the question was open.
   [[nodiscard]] PromptServiceOutcome complete_question(QuestionResult result);
   // TUI thread with claim: apply cancellation policy after the caller checked auto
   // resolution. Shutdown abandons directly and avoids interactive audit allocation.
@@ -277,7 +279,8 @@ class RuntimePromptCoordinator final
   WheelBurstGovernor wheel_governor_;
   // TUI-only quiet-period deadline set after navigation and cleared on non-wheel input/retirement.
   std::optional<TuiTimer::Clock::time_point> wheel_suppression_deadline_;
-  // Weak wake handle; notify the loop only after enqueueing a request or recording cancellation.
+  // Weak wake handle; notify after enqueueing, cancellation, or completion so the
+  // next application turn can acquire prompts or resume features they had held.
   TuiWakeup wakeup_;
   // TUI registration marks automatic discovery due every 100 ms while a question
   // offers it. The borrowed loop and stable target outlive both registrations.

@@ -884,6 +884,155 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
   return passed;
 }
 
+// Completing either host prompt must wake the loop before a deferred plugin or spinner waits for an unrelated timer.
+bool test_prompt_completion_wakes_deferred_plugin(bool permission)
+{
+  EventLoopFixture event_loop;
+  auto& loop = event_loop.loop();
+  auto& context = ava::core::Application::instance().terminal_context();
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
+  std::promise<void> finish_run;
+  auto run_release = finish_run.get_future();
+  std::string invocation_id;
+  std::promise<std::optional<ava::tui::TuiPluginUiEndpoint>> endpoint_promise;
+  auto endpoint_future = endpoint_promise.get_future();
+  tui_test_support::TuiFrontEndFixture frontend;
+  // The endpoint future publishes the ID as well. All pointed-to objects outlive
+  // the frontend, ActiveRun and its joined worker; the provider emits no events.
+  frontend.hooks().on_submit = [id = &invocation_id, endpoint = &endpoint_promise, release = &run_release](std::string const&,
+                                                                                                           ava::tui::TuiSubmitContext submit_context) {
+    *id = submit_context.request_id;
+    endpoint->set_value(submit_context.plugin_ui);
+    expect(release->wait_until(ava::tests::now_plus_seconds(30)) == std::future_status::ready, "wakeup fixture explicitly releases the held provider");
+    return ava::tui::TuiSubmitResult{};
+  };
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  ava::tui::PendingAttachments attachments(presentation);
+  ava::tui::TuiSessionGrantRegistry grants;
+  ava::tui::Composer composer;
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  renderer.attach_loop(loop);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
+  ava::tui::SelectorHost selectors(presentation);
+  ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
+  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, loop);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
+  plugin_ui.attach_loop(loop);
+  ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
+  ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
+  ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
+  ava::tui::ActiveRun active_run(loop, *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid, attachments,
+                                 context);
+  // Every early return releases the provider before ActiveRun's destructor joins it.
+  auto release_run = at_scope_end([finish = &finish_run] { finish->set_value(); });
+  if (!ava::tests::require(active_run.start("/plugin run demo choose {}"), "start held run for prompt completion wake"))
+    return false;
+  // start installs an inbox audit sink. Disable it afterward so an audit event
+  // cannot supply the notification that this regression is intended to require.
+  prompts.set_audit_sink({});
+  if (!ava::tests::require(endpoint_future.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                           "held provider publishes its plugin endpoint"))
+    return false;
+  auto endpoint = endpoint_future.get();
+  if (!ava::tests::require(endpoint.has_value(), "held run has a plugin UI endpoint"))
+    return false;
+
+  // Move the initial spinner tick past the setup watchdog, then clear its frame.
+  // Stay before plugin expiry even when debugging stretches test timeouts. No
+  // control timer or host request exists yet, and the provider remains held.
+  auto const setup_deadline = std::min(ava::tests::now_plus_seconds(2), endpoint->deadline - std::chrono::seconds(2));
+  if (!ava::tests::require(std::chrono::steady_clock::now() < setup_deadline, "plugin deadline leaves time for wakeup setup"))
+    return false;
+  loop.service_due(setup_deadline + std::chrono::seconds(1));
+  if (!ava::tests::require(renderer.paint_for_handoff(), "clear setup frame before measuring notifications"))
+    return false;
+  loop.wait(ava::tui::TuiWaitMode::ReadyOnly);
+  LoopWaitDeadline fallback;
+  auto timeout = loop.member_timer(fallback, &LoopWaitDeadline::expire);
+  timeout.arm_at(setup_deadline);
+  auto prompt_worker = ava::core::make_async(
+      "wake_host_prompt", [permission, permission_resolver = prompts.permission_resolver(), question_resolver = prompts.question_resolver()] {
+        if (permission)
+        {
+          ava::permissions::PermissionPrompt prompt;
+          prompt.operation = ava::permissions::Operation::RunCommand;
+          prompt.mode = ava::core::Mode::Build;
+          prompt.command = "echo permission";
+          prompt.tool_name = "bash";
+          return permission_resolver(prompt).has_value();
+        }
+        ava::agent::QuestionPrompt prompt{.header = "Wake question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
+        return question_resolver(prompt).has_value();
+      });
+  // Close request admission before the future can join, including early failures.
+  auto cancel_prompt = at_scope_end([owner = &prompts] { owner->shutdown(); });
+  // Queue visibility alone is insufficient: a worker can be paused before notify.
+  // This unconditional wait consumes the sole host-enqueue notification first.
+  loop.wait(ava::tui::TuiWaitMode::Block);
+  loop.service_due();
+  timeout.cancel();
+  if (!ava::tests::require(!fallback.expired && !loop_wait_failed(loop) && prompts.has_pending_requests(),
+                           "host enqueue wakes setup before any timer and leaves its request pending"))
+    return false;
+  static_cast<void>(active_run.consume());
+  if (!ava::tests::require(prompts.has_active(), "real run consumption claims the host prompt and stops its spinner"))
+    return false;
+  auto const paused_frame = presentation.screen().spinner_frame;
+
+  std::promise<void> enqueued;
+  auto enqueue_ready = enqueued.get_future();
+  plugin_ui.set_after_enqueue_for_test([ready = &enqueued] { ready->set_value(); });
+  // The observer promise survives the plugin future; remove its borrow before destruction.
+  auto clear_observer = at_scope_end([ui = &plugin_ui] { ui->set_after_enqueue_for_test({}); });
+  ava::tui::TuiPluginUiRequest request;
+  request.binding = {.plugin_id = "demo", .command = "choose", .invocation_id = invocation_id};
+  request.request_id = "wake-deferred-modal";
+  request.kind = ava::tui::TuiPluginUiKind::Select;
+  request.title = "Deferred choice";
+  request.options = {{.id = "chosen", .label = "Choose me", .description = {}}};
+  auto plugin_worker = ava::core::make_async("wake_plugin_prompt",
+                                             [endpoint = *endpoint, request] { return endpoint.present(request, endpoint.deadline, [] { return false; }); });
+  auto cancel_plugin = at_scope_end([ui = &plugin_ui] { ui->cancel_active(); });
+  if (!ava::tests::require(enqueue_ready.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                           "deferred plugin finishes enqueue notification before it is drained"))
+    return false;
+  // The enqueue observer runs after notify. Drain it now, while the host prompt
+  // still prevents consume from polling the plugin or restarting the spinner.
+  loop.wait(ava::tui::TuiWaitMode::ReadyOnly);
+  static_cast<void>(active_run.consume());
+  if (!ava::tests::require(prompts.has_active() && !presentation.screen().plugin_ui_modal && !active_run.has_pending_updates(),
+                           "host prompt holds plugin presentation without other runnable work"))
+    return false;
+  if (!ava::tests::require(prompts.input_drained(), "discard typeahead before the deliberate host answer"))
+    return false;
+  timeout.arm_at(std::min(ava::tests::now_plus_seconds(2), endpoint->deadline - std::chrono::seconds(1)));
+  ava::tui::runtime_input::RuntimeInput enter;
+  enter.event.key = ava::tui::terminal::Key::Enter;
+  auto const answer = active_run.handle_modal_input(enter);
+  if (!ava::tests::require(answer && *answer && !prompts.has_active() && !active_run.has_pending_updates(),
+                           "host answer completes without a provider result, audit event or run-stop wake"))
+    return false;
+  // Do not manually consume, notify, or finish the provider here. Only prompt
+  // completion should wake this wait; falling through to the watchdog is failure.
+  loop.wait(ava::tui::TuiWaitMode::Block);
+  loop.service_due();
+  timeout.cancel();
+  bool const woke = !fallback.expired && !loop_wait_failed(loop);
+  expect(woke, "answering a host prompt wakes the loop before the fallback timer");
+  static_cast<void>(active_run.consume());
+  bool const displayed = presentation.screen().plugin_ui_modal && presentation.screen().plugin_ui_modal->request_id == "wake-deferred-modal";
+  loop.service_due(std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
+  bool const resumed = presentation.screen().spinner_frame == paused_frame + 1;
+  static_cast<void>(plugin_ui.handle_input(enter.event));
+  cancel_plugin.once();
+  auto const reply = join_released_worker(plugin_worker, "deferred wake plugin");
+  cancel_prompt.once();
+  bool const host_answered = join_released_worker(prompt_worker, "wake host prompt");
+  release_run.once();
+  static_cast<void>(active_run.shutdown());
+  return woke && displayed && resumed && host_answered && reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen";
+}
+
 // Attached prompt rendering deferred paint failure and previously let shutdown replace Io with cancellation.
 bool test_attached_prompt_render_failure_returns_io()
 {
@@ -2194,6 +2343,11 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
            "queued/sidebar/draft/selection/search/scroll and "
            "frozen presentation state through their owners, applies the new session/model/reasoning/todos, preserves application-scoped jobs, and leaves an "
            "unchanged-session transcript intact");
+  }
+  else if (test_case == "prompt_completion_wakeup_permission" || test_case == "prompt_completion_wakeup_question")
+  {
+    expect(test_prompt_completion_wakes_deferred_plugin(test_case == "prompt_completion_wakeup_permission"),
+           "host answer wakes deferred plugin presentation and restarts the spinner without unrelated work");
   }
   else if (test_case == "session_transition")
   {

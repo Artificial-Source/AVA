@@ -614,6 +614,9 @@ PromptServiceOutcome RuntimePromptCoordinator::complete_permission(PermissionRes
   clear_prompt_projection();
   auto request = retire_active_callbacks();
   std::get<std::shared_ptr<PendingPermissionRequest>>(request)->complete(std::move(result));
+  // Deferred plugin dialogs and spinner restart need an application turn even
+  // when the released worker produces no event. Wake only after retiring the prompt.
+  wakeup_.notify();
   return PromptServiceOutcome::Completed;
 }
 
@@ -622,6 +625,9 @@ PromptServiceOutcome RuntimePromptCoordinator::complete_question(QuestionResult 
   clear_prompt_projection();
   auto request = retire_active_callbacks();
   std::get<std::shared_ptr<PendingQuestionRequest>>(request)->complete(std::move(result));
+  // A question can hold the same deferred work as a permission prompt. Do not
+  // rely on the worker or the control timer to schedule its next application turn.
+  wakeup_.notify();
   return PromptServiceOutcome::Completed;
 }
 
