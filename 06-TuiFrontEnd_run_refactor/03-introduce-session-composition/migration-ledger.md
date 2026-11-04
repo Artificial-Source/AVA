@@ -1,46 +1,39 @@
-# 06 migration ledger
+# TUI migration ledger
 
-## Current status after the review of ab5189c
+## Current status after the final review round
 
-The review fixes supersede the implementation checkpoints below. Start with
-[the TUI architecture guide](../../docs/engineering/tui-architecture.md) to change
-the code. [The current handoff](../11-review-design-and-close-migration/refactor-handoff.md) records each finding,
-its commit, member-comment counts and final validation evidence.
+The listed findings and an additional prompt callback locking correction are
+implemented through `42d8d6c3`. The five complete-diff self-reviews and final
+validation are still in progress. Start with
+[the TUI architecture guide](../../docs/engineering/tui-architecture.md).
+[Merge notes and the full finding report](../11-review-design-and-close-migration/refactor-handoff.md)
+record commits, security bounds, comment counts, test evidence and remaining
+limits. Those two documents supersede the historical checkpoints below.
 
-The maintainer chose named feature publication with const screen/sidebar views,
-retained Runtime class names, and a plain 100 ms control wake. No signal-handler
-policy, terminal-thread assertion, utils submodule or backend authority changed.
+| Area | Current code and checks |
+| --- | --- |
+| Session loop | Control → due timers → application updates → input → paint → wait. Input has a 32-result fairness budget. Close-after-submit drains and discards bytes. The nominal 100 ms timer only wakes; control/display repeats share an origin. Tests observe the actual control deadline, timeout and callback. |
+| Active run and shutdown | `ActiveRun` owns its optional operation and joined worker; `ActiveRunInput` owns run-specific keys. Final completion drains the finite backlog before publishing its outcome. Release failure logs, latches and terminates before a possibly blocked join; later cleanup errors preserve a nonzero outcome. |
+| Host prompts | Claimed requests retain their claim until callbacks retire. Stale input is quarantined, paste cannot trigger answers, and prompt/result handoffs perform real paints. Pending permissions deny or interrupt on signals, HUP, I/O failure and exceptions. Ready automatic question answers keep baseline cancellation precedence. Host prompts hold provider/plugin/spinner/Mermaid/display updates as required. Callback copying and last-owner retirement happen outside prompt mutexes; closed queues reject new claims. |
+| Screen and editor | Per-feature operations publish to private state; readers receive const views. Correlated run/frame/progress values are grouped. Draft mutations publish themselves; projection is const. Composer phase methods and an edit-action table serve idle and active input with their original ordering. |
+| Selectors and frontend | `SelectorDispatchResult` is a variant of owned outcomes. Five narrow action interfaces expose only feature needs; concrete backend methods remain protected. Keybinding reload calls `apply_key_bindings`. Settings Archive goes through host dispatch and restores the preview. |
+| Runtime lifetimes | Renderer and plugin UI require a real loop during construction. Timer targets and loop ordering are explicit. Weak wake tokens retain only wait resources during notification, never a destroyed feature owner. |
+| Test boundaries | No fixture-only loop modes, legacy input readers, painted-cache getter or other listed test-only production readers remain. Tests observe real drawing through a scoped call-through wrapper and feature behavior through published values. Tool merging is internal to its owning reducer. |
+| Security and diagnostics | Changed render paths use terminal-text sanitation. Plugin binding identity bypasses are fixed. Raw pointer diagnostics show addresses only; sensitive strings remain omitted. Callback invocation/retirement and worker joins happen outside transport locks. Baseline queue capacities are preserved and unbounded local queues are explicitly reported. |
+| Documentation | Newcomer guide, glossary, concrete extension steps and per-member contracts describe current behavior. The handoff distinguishes mechanical comment coverage from semantic review. |
 
-| Review work | Current implementation | Commits |
-| --- | --- | --- |
-| B1, B7–B10 | A host prompt holds plugin requests, provider projection and spinner advancement. Prompt paint failure publishes Io before cleanup. One claimed request controls callback retirement; shutdown guards each cleanup step and records failures. Settings cancellation restores preview, handled signals consume retained keys, and selector selection publication avoids row copies. | `74f5209f`, `489ef88c`, `93ffdcb9`, `89b25738`, `2babd336` |
-| B2–B6 | Input distinguishes Empty, Discarded and Input. One turn is control → due timers → application updates → input → paint → wait. Paint consumes its deadline in that turn. The control callback only wakes. Mermaid completions notify; only Busy admission/drain results schedule 100 ms then at most 250 ms retries. | `c5b53a93`, `ed44489e`, `996918eb`, `cd62a2f1` |
-| D1, D2, D4, D5 | State has named feature publication and const views. Renderer owns viewport mutation. Composer, selectors and command output own their algorithms. Existing frontend action callbacks are public; protected storage stays protected, without feature friendships. | `6051b1c3`, `1bc3c6b9`, `baced10b` |
-| D3, D9 | ActiveRunInput owns ordinary run keys; ActiveRun owns one optional Operation. Completion joins, closes publication, drains the finite backlog in 256-event chunks and settles in one call. No Finalizing phase, UI mutex, redundant queue mutex or test-only production polling mode remains. | `2f5b7b52`, `7ad1c02f` |
-| D6–D8, D10 | Plugin transport state is private. Reference printing exposes type/address only; wake printing never locks its weak pointer. View helper classes have separate files; PendingRequest is a shared template. The ineffective wait-state disable gate is deleted. | `325b618f`, `6640df77`, `519b78d7`, `afecb8c7`, `1898d64d` |
-| C | Newcomer guide and comments explain member purpose, ownership, threads and ordering. Corrected misleading lifecycle and timing comments; removed one unused frontend declaration. | `711f4a83` |
-| T1–T5 | Direct owner tests and nine isolated real-session cases cover merge branches, publication, budgets, ordering, readiness, closure, signals and I/O failure. | `7d6c5990` |
+The 100 ms timer is an observation cadence, not a maximum signal-response time.
+Escape defaults to 100 ms per continuation read; paste uses one second per read.
+Synchronous callbacks and final-event drainage can delay the next control stage.
+No terminal-thread assertion, ncurses threading rule, signal policy, utils code,
+RPC contract, backend decision or production dependency changed.
 
-The 100 ms control period is a nominal observation cadence, not a response bound.
-Escape continuation defaults to 100 ms; paste continuation uses one second.
-These are per-read limits, not whole-input decoding limits. The old 50 ms Escape
-claim was wrong. A synchronous callback or a large final receipt backlog can
-also delay control. See the guide for timer and worker lifetime requirements.
-
-Build and focused checks passed for every review group; each group was pushed
-and independently reviewed. The handoff distinguishes current final-suite
-results from earlier environment observations. Compilation is not behavior proof.
-
-### Final validation after the review
-
-The BetaTest/debug build passes. The reviewed branch's full run has 165 passes,
-46 failures and 31 skips; local ec4143e has 154 passes, the same 46 failures and
-the same 31 skips. All 11 added CTests pass. Each enabled tmux run fails all 23
-scenarios before a usable UI; both suspend/resume captures report missing
-libdw.so.1. No new failing test names appear, but terminal smoke behavior remains
-unverified here. See the current handoff and its JSON evidence manifest for
-commands, causes that were actually established, runner cleanup and the reference
-machine comparison. The full suite and tmux suite ran once per revision.
+The dev build and every focused group passed. The first final-code full run has
+189 passes, the same 46 failure names as local baseline, and 31 skips. The tmux
+suite cannot reach usable screens because child processes cannot load
+`libdw.so.1`; no child-environment policy workaround was made. Sanitizer refresh,
+repeat checks, final self-review and the final merge check are recorded in the
+handoff as they finish. Compilation does not establish behavioral correctness.
 
 ## Historical implementation checkpoints through ab5189c
 

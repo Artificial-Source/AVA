@@ -1,372 +1,415 @@
-# Issue #93 review handoff
+# TUI refactor handoff
 
 ## Merge notes
 
-The final review round is **in progress**. This is initial sanitizer evidence for
-commit `5ee43632`, after R1, S1/R18, S2 and S3. The remaining R findings, final
-self-review and final validation are not complete. This branch is not yet
-reported as ready to merge.
+The requested finding groups are implemented through `42d8d6c3`. Final
+verification also found and fixed callback copying and destruction under prompt
+mutexes. All groups have passed focused tests and independent review. The five
+complete-diff reviews and subsequent validation are still pending. This is not
+yet a merge-ready declaration.
 
-The second review is preserved in
-[review-astra-d48292c.md](../review-astra-d48292c.md). The first-review handoff
-below is historical until the final report replaces it.
+Start with [the TUI architecture guide](../../docs/engineering/tui-architecture.md).
+The preserved [second review](../review-astra-d48292c.md) defines R1–R20;
+[the first review](../review-astra-ab5189c.md) is background. The original
+[maintainer requirements](../handoff.md#maintainer-design-requirements-apply-throughout-this-objective) remain
+subject to the explicit final-round decisions recorded below.
 
-### Initial S4 validation
+### Finding status
 
-Both sanitizer presets built successfully with GCC 16, `BetaTest` and
-`EnableDebug=ON` in this cloud environment on 2026-11-04. Tests used
-`LANG=C.UTF-8 LC_ALL=C.UTF-8`, two jobs and no live-provider credentials.
-No sanitizer suppressions or application child-environment changes were added.
+“Fixed” means the implementation and focused review are complete. The validation
+section separately states what was exercised and what the environment prevented.
 
-| Check at `5ee43632` | Result |
+| Finding | Status and commits | Result |
+| --- | --- | --- |
+| R1 | Fixed — `0d162cfe` | Close-after-submit decodes and discards bytes while its worker finishes; a held-worker session test bounds loop turns. |
+| R2 | Fixed — `7104bd58`, `457b9c79` | Correct return-value, timing, ownership and shutdown comments; distinguish scheduling from successful drawing. |
+| R3 | Fixed — `f610d6ce`, `f866a139` | Glossary, concrete extension steps, ordinary language, consolidated comments, and final-result names replace ambiguous terminal-result names. |
+| R4 | Fixed — `4b2b9914` | Completing a host prompt wakes the loop after the worker can resume, so queued plugin work is reconsidered. |
+| R5 | Deferred — no finding supplied | The second review skips R5. There is no identified change to implement. |
+| R6 | Fixed — `d8e0d872` | The 100 ms control and 500 ms display timers share one origin and keep their phase when skipping missed ticks. |
+| R7 | Fixed — `2903c8dc` | The branch-summary timer records due work; application servicing performs the backend poll. |
+| R8 | Fixed — `f6758348` | Every latched terminal-render failure reaches active-prompt failure before shutdown. |
+| R9 | Fixed — `659b20cc`, `e93ac4d8`, `1aec9ceb` | Release failures are logged and latched, then terminate before a potentially blocked join; post-join cleanup errors preserve a nonzero outcome. Returned queue errors are retained too. |
+| R10 | Fixed — `86ff8a55` | Queued interruption rejects misuse on a claimed request; claim completion/retirement retains borrowed callback lifetime. |
+| R11 | Fixed — `a3c00acb`, `b20acb78` | Hold Mermaid completions and display reloads during host prompts, retain due work, and require an attached completion notifier. |
+| R12 | Fixed — `b573ff9a` | Group run/frame/progress publications, publish draft mutations at their owner, and make projection const. |
+| R13 | Fixed — `6c71f0e0` | Composer owns phase methods and an ordered edit-action table; active input reuses that policy with its existing precedence. |
+| R14 | Fixed — `5544a51c`, `8c4cdf0b` | Five narrow interfaces expose feature actions; concrete backend methods stay protected; keybindings use `apply_key_bindings`. |
+| R15 | Fixed — `6617a980`, `b78d9235`, `d93b9b36`, `6dc63489` | Raw pointers print addresses only; safe metadata remains printable, sensitive owned strings are omitted, and `MemberReference` has its own header. |
+| R16 | Fixed — `d93b9b36`, `6dc63489`, `be8e3aaa`, `e3ec4ea7`, `9091c2d1`, `52c1339b` | Typed selector variants, matching result headers, real loop ownership, removal of test-only readers/modes and internal tool merging. Case-only filenames stay by maintainer decision. |
+| R17 | Fixed — `5af19561` | Archive travels through `SelectorHost::dispatch` with a nested Settings preview and restores it. |
+| R18 | Fixed — `155a018b`, `02f2559d`, `0d162cfe` | Active signal exit 130, retained-key rejection, permission HUP interrupted audit and close-after-submit tests. |
+| R19 | Fixed — `5f26e69f` | Bounded waits, predicate gates and fixture timer postponement replace fragile spins or unbounded test waits. |
+| R20 | Fixed — `640c4b49` | Seed the live count, make unchanged-workspace timing independent of machine speed, and observe the real control timeout and callback. |
+| S1 | Fixed — `155a018b`, `02f2559d`, `f6758348`, `42d8d6c3` | Typeahead quarantine, paste rejection, real prompt/result paints, fail-closed cancellation and unlocked callable copying/retirement. |
+| S2 | Fixed — `70bac50d` | Sanitize plugin binding identities in width and visible-text paths; adversarial controls are covered by regression tests. |
+| S3 | Fixed — `5ee43632` | Preserve baseline queue limits, invoke Mermaid callbacks outside locks, and reserve result storage before removing completions. Local unbounded queues are reported below. |
+| S4 | Fixed validation work — `a431d68f`, `c90bb262`; final reruns pending | Both sanitizer runtimes work here. Initial runs had no sanitizer report, but known environment failures prevent complete execution. Final-code results are recorded below when finished. |
+| S5 | Fixed — `6617a980` | Raw C-string, object, incomplete, array and function pointers cannot print pointed-to content. |
+
+The maintainer explicitly retained the 100 ms control timer, Runtime names,
+per-feature screen publication and the Composer/composer filenames. Signals,
+terminal-thread assertions, ncurses threading, utils, RPC and backend decisions
+were not changed. No production dependency was added. No unresolved instruction
+conflict required a new user-visible behavior choice.
+
+### Security checks and limits
+
+Permission and question paths were traced from `ActiveRunInbox` and resolver
+queues through `PendingRequest`, `RuntimePromptCoordinator`, `ActiveRun`,
+`TuiSession` and terminal decoding. The checks cover queued and claimed requests,
+typeahead before presentation, retained input during acquisition, pasted shortcuts,
+automatic session grants, normal answers, Escape, signals, HUP, notification and
+render failures, exceptions and shutdown. A visible prompt first drains stale
+input; an allow/answer is released only after its required real paint succeeds.
+Pending permissions deny or return an interruption/error on exit. A ready
+automatic question answer retains baseline precedence during ordinary cancellation;
+shutdown retires its callbacks without invoking that automatic answer.
+An unrecoverable release failure
+terminates the process and may deliver no result; it cannot justify allowing
+the operation. Claim retirement precedes releasing a worker
+whose stack may contain a callback. Audit callable copying/destruction and question
+construction/retirement now happen outside their mutexes. Five regressions failed
+on the prior code and pass after the fix, including cancellation racing construction
+and last-owner retirement reentering the closed queue. SIGINT's existing draft-clearing policy stays.
+
+Screen paths were traced through feature publications, `CommandOutput`, status
+and provider errors, transcript/tool rendering, plugin messages/modals/docks,
+selector titles and file/session/config labels. Publication stores owned display
+values; the existing terminal-text/render helpers sanitize them at rendering.
+The new bypass found was a plugin binding identity used directly for display and
+width. Both paths now sanitize it. Tests include SGR, OSC 52 and BEL controls.
+Debug tests verify that pointer addresses and safe metadata remain available
+without printing strings or invoking pointed-to content printers.
+
+| Queue or buffer | Bound and baseline comparison |
 | --- | --- |
-| ASan/UBSan full suite | 176 passed, 46 failed, 31 skipped; 253 total; 207.90 seconds. |
-| TSan preset | Three passed; ACP failed on its known MCP-helper startup problem. |
-| TSan requested TUI selection | All 29 passed, including active-run signals, permission HUP, stale input and paste cases. |
-| Additional TSan checks | `tui_composer` and `mermaid_notifications` passed; `mermaid_render` retained its helper startup failures. |
+| ActiveRunInbox event FIFO | No local item/byte admission cap, unchanged. Drain 256 is a fairness budget, not capacity. One separate final-result slot. |
+| Permission and question queues | No local queue cap, unchanged. One active claimed prompt; blocking producers do not establish a local capacity guarantee. |
+| Plugin UI | 63 ordinary queued records plus up to 63 in a detached poll batch, with one interactive modal reservation. Validated text is 8 KiB/request, widget lines 32 and displayed widgets four. Baseline limits preserved. |
+| Mermaid coordinator | 32 undrained identities across queued/active/completed work; source 64 KiB, accepted result 256 KiB. Cache: 128 sources and 4 MiB accepted output; retained sources have their separate size budget. Detached drain storage is additional. |
+| Mermaid TUI | 128 retained records, 4 MiB accepted output, at most 32 pending backend requests. Scanning can temporarily inspect the full transcript. Baseline limits preserved. |
+| Startup replay | 64 decoded events. Paste text is at most 1 MiB and stored twice per event, so the event-count cap alone is not a small byte bound. Internal enqueue has no independent byte cap; production decoding supplies it. |
+| Decoder | Paste storage 1 MiB per copy, escape sequence 16 KiB. A truncated-paste tail keeps only a discard flag and closing-marker position. Native read 4096 bytes. |
+| Keyboard negotiation | Two 50 ms collection phases; no total byte cap, unchanged. |
+| Input turn | 32 decoded/discarded results. A result can contain multiple continuation reads; this is not a wall-time or retained-memory bound. |
 
-No ASan, LeakSanitizer, UBSan or TSan diagnostic appeared in the captured test
-output. There are therefore no third-party sanitizer stacks or suppressions to
-record. This is not a claim that the failing subprocess paths were exercised:
-some helpers cannot load `libdw.so.1` under the existing child environment.
+These are local limits, not a global bound on memory. Adding hard event/prompt
+queue limits requires an overflow policy; silently dropping tool results or
+permission requests would change behavior beyond this task.
 
-The ASan/UBSan failure **names** exactly match this environment's previously
-recorded `ec4143e` dev baseline: 154 passed, the same 46 failed, and 31 skipped
-out of 231. Both ACP and `mermaid_render` belong to that baseline failure set.
-These results differ from the reviewer's seven environment failures. Compiler
-output also contains GCC optimizer warnings from existing standard-library
-regex/optional code; they are not sanitizer reports.
+### Validation
 
-Reproduce the initial commands after activating the local compiler/runtime
-setup:
+Evidence date: 2026-11-04. Environment: GCC 16, `BetaTest`, `EnableDebug=ON`,
+UTF-8 locale. No live-provider tests or credentials were enabled. All groups built
+through `scripts/build.sh`; header changes first generated print members.
+Changed C++ was formatted and diffs checked before commits. clang-tidy and
+clang-tidy-22 are not installed, so that optional analysis could not run.
+
+| Check | Current result |
+| --- | --- |
+| Dev build through `42d8d6c3` | Passed without new warnings; 48 focused callback/session/shutdown/documentation checks passed. |
+| Full dev suite before final self-review | 189 passed, 46 failed, 31 skipped; 266 total. Failure names exactly match the local `ec4143e` baseline. |
+| Local baseline `ec4143e` | 154 passed, the same 46 failed, 31 skipped; 231 total. |
+| Local pre-final-round `d48292c` | 165 passed, the same 46 failed, 31 skipped; 242 total. |
+| Reviewer reference | Seven environment failures and 23/23 tmux passes on both baseline and pre-final branch. This cloud environment differs; comparisons use its separately built baseline. |
+| tmux before final self-review | 23/23 scenarios failed before usable screens; captured loader error: missing `libdw.so.1`. Terminal smoke behavior could not be exercised. |
+| TUI/plugin repeat 20 before final self-review | 54/54 tests passed every repetition: 1,080 successful executions, 269.74 seconds. |
+| ASan/UBSan at `640c4b49` before final self-review | Build clean; full suite 191 passed, the baseline 46 failure names, 31 skipped; 268 total. No ASan, LeakSanitizer or UBSan diagnostic. |
+| TSan before final callback correction | Preset 3 passed/1 known ACP helper failure; requested TUI 35/35 and additional composer/notification tests 2/2 passed. No TSan diagnostic. Final rerun pending. |
+| Final self-review and subsequent validation | Pending. |
+| Merge with freshly fetched origin/develop | `640c4b49` merges cleanly with `d1b6db7b` in a throwaway merge tree. Repeat after final review; branch itself is not merged or rebased. |
+
+The failed subprocess paths are not proven safe by the passing tests. This
+machine's existing child environment prevents some helpers from loading
+`libdw.so.1`; no loader-policy workaround or sanitizer suppression was added.
+The tmux runner also retained a lock because PID 1 had not reaped a terminated
+client. Manual recovery verified the runner was absent and its process group
+contained only a zombie before removing that stale lock.
+
+Required validation commands, with `LANG=C.UTF-8 LC_ALL=C.UTF-8`:
 
 ```sh
-export LANG=C.UTF-8 LC_ALL=C.UTF-8
+scripts/build.sh --target generate-print-members
+scripts/build.sh
+scripts/run-tests.sh
+AVA_TUI_TMUX_SMOKE=1 scripts/run-tests.sh --jobs 4 -R '^ava_tui\.tmux_smoke_'
+ctest --test-dir build -R '^ava_tests\.(tui_.*|plugin_ui)' --repeat until-fail:20 -j4
 cmake --preset sanitize
 scripts/build.sh --build-dir build-sanitize --jobs 2
 scripts/run-tests.sh --build-dir build-sanitize --jobs 2
-
 cmake --preset tsan
 scripts/build.sh --build-dir build-tsan --jobs 2 --target ava_tests
-CTEST_PARALLEL_LEVEL=2 ctest --preset tsan
-CTEST_PARALLEL_LEVEL=2 ctest --test-dir build-tsan --output-on-failure \
-  -R '^ava_tests\.(tui_event_loop|tui_pending_requests|tui_session\..*|plugin_ui|tui_permission|tui_composer_rendering.*)$'
-scripts/run-tests.sh --build-dir build-tsan --jobs 2 \
-  -R '^ava_tests\.(tui_composer|mermaid_render|mermaid_notifications)$'
+ctest --preset tsan
+ctest --test-dir build-tsan -R '^ava_tests\.(tui_event_loop|tui_pending_requests|tui_session\..*|plugin_ui|tui_permission|tui_composer_rendering.*)$'
 ```
 
-The additional selection matters because permission/input unit tests are inside
-`tui_composer`, and the preset does not include the changed Mermaid callbacks.
-Local logs are `/workspace/ava-tools/final-S4-sanitize-*.log` and
-`/workspace/ava-tools/final-S4-tsan-*.log`; the failure-name comparison is
-`final-S4-asan-comparison.json` in the same directory.
+No sanitizer diagnostic was observed in the runs above, so there are no
+third-party sanitizer stacks or suppressions to list. TSan compilation exposed
+a new GCC 16 initializer-list warning in the yank regression; `c90bb262` removed
+the temporary initializer list while preserving both values and all assertions.
+Two pre-existing compiler warnings remain in TSan's optimized build:
+`pending_attachment_graphic` reports `Iterm2ImageOptions::name` as possibly
+uninitialized, and `bound_read_authority` reports an optional shared pointer as
+possibly uninitialized. The former function body and the latter file are unchanged
+from `ec4143e`; both appeared in the first S4 build. They are compiler warnings,
+not sanitizer runtime reports. No warning or sanitizer suppression was added.
+Final runs must be inspected separately; compilation is not behavioral proof.
 
-Repeat these checks on the completed code after final self-review. Full dev,
-tmux, repeat-test and final merge results remain outstanding.
+### Final self-review
 
-## First-review handoff (historical)
+Five fresh reviewers will inspect the complete `ec4143e..HEAD` diff. Their
+results and every correction will be recorded here before handoff:
 
-This is the current implementation and validation handoff for
-`astra/06-TuiFrontEnd_run_refactor`. It supersedes the pre-review handoff at
-`ab5189c`. The comparison baseline is `ec4143e`. The review was copied unchanged
-and committed first as `0ff46d60`; see
-[the review](../../06-TuiFrontEnd_run_refactor/review-astra-ab5189c.md).
-No pull request was opened.
-
-For a newcomer, start with [TUI architecture](../../docs/engineering/tui-architecture.md).
-That guide describes ownership, loop turns, threads, prompts, plugins and how to
-add keys, selectors and timers. The earlier
-[migration ledger](../03-introduce-session-composition/migration-ledger.md) separates current conclusions from
-historical implementation checkpoints. Older 06 artifacts are history where
-they disagree with current source or the review.
-
-## Decisions and boundaries
-
-The three maintainer decisions are implemented: keep Runtime class names,
-replace writable screen/sidebar access with named feature publication and const
-views, and retain the 100 ms control timer as a plain wake. No new decision is
-needed to complete this review. The control interval is nominal; synchronous
-callbacks and per-read decoding can delay observation. Escape continuation uses
-100 ms by default, paste continuation one second. There is no 50 ms guarantee.
-
-Terminal-thread assertions, ncurses thread ownership, signal-handler policy,
-utils, RPC and backend permissions/session/provider/process authority are
-unchanged. Mermaid gained completion notification plumbing, without moving its
-worker or process authority into the TUI.
-
-## Current ownership and ordering
-
-`TuiFrontEnd::run` owns startup policy and outer terminal guards. It constructs
-one stable `TuiSession`; frontend and Context outlive it. Session members are
-ordered by dependency. Features and their timer handles are destroyed before
-the collaborators they borrow. Session owns composition and transitions, while
-Composer, selectors, SettingsDialog, CommandOutput and ActiveRunInput own their
-feature algorithms. Five narrow feature interfaces expose the required actions while the concrete
-frontend declarations stay protected. Their virtual calls retain application
-validation; protected configuration storage is not exposed through friendship.
-
-RuntimePresentationState owns screen/sidebar projections. Features publish
-coherent changes through named operations; readers borrow const views only on
-the TUI thread. SelectorHost owns its kind and view; selection-only changes do
-not copy all rows. RuntimeRenderer owns mutable viewport, caches and scheduling;
-its public transcript view is const. Completion matching is a const calculation
-on prepared input and caches, with no Composer/navigation ownership cycle.
-
-A normal turn is control → due timers → application updates → input → paint →
-wait. Live updates have a 256-event budget; input has a 32-result budget including
-discarded protocol replies. A full batch stays runnable with ReadyOnly; exhausted
-work uses Block. Painting checks current time and consumes its frame deadline;
-there is no second timer or application pass after painting. Handled signals
-consume retained input in both idle and active paths. Known HUP/error closes
-admission, drains buffered input without dispatch and exits without another wait.
-
-ActiveRun owns an optional Operation with worker, inbox, reducer and request
-capabilities. Ordinary keys belong to ActiveRunInput. A published terminal
-result lets complete retire prompt/plugin callbacks, join, authorize receipts,
-apply committed identity, finish queues, retire inbox admission, discard stale
-session events and drain accepted final events before settlement in the same
-call. Final draining uses chunks of 256 but can lengthen one turn. There is no
-Finalizing phase or redundant terminal-published flag. Inbox owns the single
-queue mutex; the TUI-only UI mutex has been removed.
-
-A visible host prompt freezes spinner/provider projection and holds plugin UI
-until its claim retires. A claim keeps worker-borrowing callbacks valid until
-retirement, even if cancellation is already recorded. Failed deferred painting
-answers the active prompt with Io before general cleanup. Shutdown continues
-through independent guarded cleanup failures and records bounded diagnostics.
-
-Timers never decode input, paint, claim signals or recursively service the loop.
-The control callback is empty. Spinner repeats at 120 ms only while appropriate;
-frames coalesce at 16 ms; branch, workspace and display discovery keep their
-250/150/500 ms periods. Mermaid completion uses shared readiness plus weak wake;
-only Busy work schedules a retry, starting at 100 ms and capped at 250 ms. A copied
-notifier may survive unregistration, but captures no presentation owner.
-
-TuiWakeup uses generated printing without locking its weak pointer. Reference
-printers expose type/address, never borrowed contents. TuiWaitState opts out
-because utils EventLoop has no printer. Its shared producer pin protects waiter
-resources only; it neither joins workers nor protects other borrowed objects.
-The ineffective disable flag is gone.
-
-## Finding status
-
-Every implementation group was built, formatted, checked, pushed and reviewed
-by an independent agent. The latest test group passed independent review.
-The documentation group also passed independent review. The validation update
-below reports the executed final comparison.
-
-| Finding | Status | Commit | Result |
-| --- | --- | --- | --- |
-| B1 | Fixed | `74f5209f` | Hold plugin UI while the host prompt owns input. |
-| B2 | Fixed | `c5b53a93` | Charge discarded native input to the budget and keep draining. |
-| B3 | Fixed | `ed44489e` | Use one six-stage turn; paint consumes its frame deadline. |
-| B4 | Fixed | `996918eb` | Keep the maintainer-approved 100 ms wake and document latency. |
-| B5 | Fixed | `cd62a2f1` | Use completion notifications and bounded Busy retries for Mermaid. |
-| B6 | Fixed | `996918eb` | Make the control timer callback a plain wake. |
-| B7 | Fixed | `489ef88c` | Complete a failed visible prompt with Io before shutdown. |
-| B8 | Fixed | `89b25738` | Guard independent cleanup steps and report failures. |
-| B9 | Fixed | `93ffdcb9` | Remove the duplicate claim and retire callbacks before worker release. |
-| B10 | Fixed | `2babd336` | Restore preview cancellation, retained-key consumption, prompt freeze, buffered close input and interrupted audit behavior; avoid selector row copies. |
-| D1 | Fixed | `1bc3c6b9` | Named feature publication plus const screen/sidebar views. |
-| D2 | Fixed | `1bc3c6b9` | Const transcript view; renderer owns semantic mutations. |
-| D3 | Fixed | `7ad1c02f` | Separate ActiveRunInput, private optional Operation and same-call completion. |
-| D4 | Fixed | `1bc3c6b9`, `baced10b` | Move editing/selector/output algorithms into their owners; document dispatch order. |
-| D5 | Fixed | `6051b1c3`, `1bc3c6b9` | Remove feature friendships; expose existing action callbacks and invariant transition operations. |
-| D6 | Fixed | `519b78d7` | Encapsulate synchronized plugin transport state. |
-| D7 | Fixed | `afecb8c7`, `1898d64d` | Safe reference/weak printing and honest remaining opt-outs. |
-| D8 | Fixed | `6640df77` | Separate view helper files, final noncopyable Composer, shared PendingRequest template. |
-| D9 | Fixed | `2f5b7b52` | Delete unused APIs, duplicate synchronization and test-only modes; remove Composer/navigation cycle. |
-| D10 | Fixed | `325b618f` | Delete ineffective disable gate; explain actual shared-pin lifetime. |
-| C | Fixed | `711f4a83` | Document files, classes, members, mechanisms and extension paths. |
-| T1 | Fixed | `7d6c5990` | Seed a Canceled pending card through the production-used merge helper. |
-| T2 | Fixed | `7d6c5990` | Verify real provider updates precede buffered input at a frame deadline. |
-| T3 | Fixed | `7d6c5990` | Wait on publication predicates and real notifications, with a bounded timeout. |
-| T4 | Fixed | `7d6c5990` | Exercise actual session budgets, wait policy, closing, signals and notification failure. |
-| T5 | Fixed | `7d6c5990` | Direct owner tests plus loop, plugin/prompt and timer-contract coverage from earlier fixes. |
-
-B4 is fixed according to the maintainer's explicit decision; no direct signal
-wake was added. B10 includes intentional baseline corrections requested by the
-review. Other behavior follows the baseline. No unresolved instruction conflict
-required a different behavior choice.
-
-## Member comment audit
-
-Compared with ec4143e, the final source has 54 new classes/structs, including
-nested values and test fixtures. The table counts declared functions, data,
-nested types and enum values; it excludes debug marker macros and duplicate
-out-of-line definitions. Each declaration has a mechanism, thread or lifetime
-comment, interpreted with the enclosing class contract. Counts do not substitute
-for review of whether the explanation is true. Substantially changed existing
-owners were also documented and independently reviewed.
-
-| New class or struct | Commented / total members | Use |
+| Angle | Result | What it caught |
 | --- | --- | --- |
-| `MemberReference` | 3/3 | Production |
-| `ActiveRun` | 54/54 | Production |
-| `ActiveRun::Operation` | 12/12 | Production |
-| `ActiveRunEvents` | 29/29 | Production |
-| `ActiveRunInbox` | 31/31 | Production |
-| `ActiveRunInput` | 35/35 | Production |
-| `ActiveRunOutcome` | 11/11 | Production |
-| `BranchSummaryOperation` | 30/30 | Production |
-| `CommandOutput` | 3/3 | Production |
-| `ComposerInputResult` | 4/4 | Production |
-| `Composer` | 81/81 | Production |
-| `PendingAttachments` | 9/9 | Production |
-| `PendingRequest` | 16/16 | Production |
-| `SelectorDispatchResult` | 5/5 | Production |
-| `SelectorHost` | 17/17 | Production |
-| `SelectorInputController` | 12/12 | Production |
-| `SessionSelector` | 17/17 | Production |
-| `SessionTransitionCoordinator` | 13/13 | Production |
-| `DraftCommand` | 2/2 | Production |
-| `SettingsDialog` | 24/24 | Production |
-| `Spinner` | 12/12 | Production |
-| `TranscriptUpdate` | 5/5 | Production |
-| `TranscriptView` | 50/50 | Production |
-| `TuiEventLoop` | 29/29 | Production |
-| `TuiInputDispatcher` | 6/6 | Production |
-| `TuiSession` | 65/65 | Production |
-| `TuiTimer` | 16/16 | Production |
-| `TuiTimerRegistration` | 15/15 | Production |
-| `TuiWaitState` | 13/13 | Production |
-| `TuiWakeup` | 4/4 | Production |
-| `InputPollResult` | 2/2 | Production |
-| `ComposerDispatchFixture` | 8/8 | Test fixture |
-| `EventLoopFixture` | 5/5 | Test fixture |
-| `PromptPublicationDeadline` | 2/2 | Test fixture |
-| `EventLoopPipe` | 9/9 | Test fixture |
-| `TimerRecorder` | 3/3 | Test fixture |
-| `SpinnerFrames` | 3/3 | Test fixture |
-| `MutatingTimerPair` | 12/12 | Test fixture |
-| `RearmingTimer` | 9/9 | Test fixture |
-| `FeatureOwnerFixture` | 17/17 | Test fixture |
-| `B5BridgeState` | 7/7 | Test fixture |
-| `B5AttachedMermaidFixture` | 12/12 | Test fixture |
-| `RuntimeOwnerPipe` | 6/6 | Test fixture |
-| `WakeDeadline` | 3/3 | Test fixture |
-| `Turn` | 7/7 | Test fixture |
-| `SessionProbe` | 19/19 | Test fixture |
-| `ProbeScope` | 5/5 | Test fixture |
-| `StreamRedirect` | 8/8 | Test fixture |
-| `SessionInput` | 5/5 | Test fixture |
-| `SessionSignals` | 3/3 | Test fixture |
-| `WorkerGate` | 10/10 | Test fixture |
-| `ReleaseWorker` | 3/3 | Test fixture |
-| `TranscriptViewFixture` | 5/5 | Test fixture |
-| `WaitStatePipe` | 11/11 | Test fixture |
+| Correctness, threads and lifetimes | Pending | Pending. |
+| Security, bounds and debug output | Pending | Pending. |
+| Design and repository rules | Pending | Pending. |
+| Comments and newcomer readability | Pending | Pending. |
+| Tests and timing | Pending | Pending. |
 
-## Validation
+Earlier group reviews caught unsafe default termination diagnostics, an
+explicit-only death test accidentally registered in an aggregate, missing
+marker inclusion, uninitialized diagnostic metadata, stale attachment comments
+and public test-helper state. Each was corrected and reviewed again.
 
-The existing development build uses BetaTest, EnableDebug=ON, GCC 16 and four
-jobs. Every review commit compiles with `scripts/build.sh`. The baseline has
-also been built in `/workspace/ava-base` with the same configuration. Tests use
-`LANG=C.UTF-8 LC_ALL=C.UTF-8` and `/workspace/ava-tools/activate.sh`.
+### Size and language measurements
 
-Focused tests passed after each group. The final T1–T5 group has passing results
-for all 13 selected CTests, including nine isolated actual Session cases. Two
-new fixture mistakes were corrected before commit: the canonical default
-reasoning label is `unknown`, and the prompt-paint test must inject the checked
-flush error because ncurses can consume a `/dev/full` write error before that
-flush. Existing test expectations were not weakened.
+Measurements use `d48292c` before the final round and current source after it.
+Term counts are case-insensitive whole words across `src/ava/tui` .h/.cpp/.cxx
+files, including identifiers when they match a whole word. Setter counts are
+`publish_*` bodies containing one assignment statement. Public method counts
+include overloads, exclude macros and use the concrete `TuiFrontEnd` declaration.
+They do not count inherited interface methods as newly declared public methods.
+For reproduction, run the same measurement in checkouts of both revisions.
+Use `rg -i -o --no-filename '\bauthority\b' src/ava/tui -g '*.h' -g '*.cpp' -g '*.cxx' | wc -l`
+and substitute the other two terms. For setters, identify each
+`RuntimePresentationState::publish_*` definition, remove comments, and count
+bodies consisting of one assignment and one semicolon. For public methods, use
+Universal Ctags 5.9.0 JSON with `--fields=+a --kinds-C++=+p --language-force=C++`;
+count function/prototype tags whose scope is `ava::tui::TuiFrontEnd` and access
+is public. Preserve overloads as separate tags.
 
-The Session tests call real production stages through test-only GNU linker
-wrappers. They observe ordering and use actual queues, input decoding and waits;
-only scoped I/O faults and boundary synchronization are injected. These tests
-are not a substitute for terminal smoke coverage. The direct WaitState tests
-make no latency or wake-cause claim.
+| Measure | Before | After |
+| --- | ---: | ---: |
+| authority | 164 | 6 |
+| receipt | 30 | 2 |
+| chrome | 35 | 8 |
+| One-assignment publish methods | 19 | 14 |
+| Public TuiFrontEnd methods | 62 | 34 |
 
-Documentation/printer checks passed in the C group (11 passes, one Linux package
-skip because debug/libcwd builds are not distributable). Logs live under
-`/workspace/ava-tools/review-*.log`; these workspace logs are evidence, not portable
-repository dependencies.
+Remaining one-assignment methods publish individual feature views or independent
+display values. Correlated run/frame/progress updates are grouped. Interface
+upcasts narrow what a collaborator receives; they are not a security boundary.
 
-### Final comparison in this cloud environment
+### C++ Core Guidelines review
 
-The final code at `7e5d9b43` and baseline `ec4143e` were each tested once with the
-full suite, then once with the opt-in tmux suite. Later commits only record these
-results. Both development builds pass. The exact failure/skip sets, added tests,
-configuration and evidence paths are saved in [review-validation.json](review-validation.json).
+The requested CP.2, CP.20, CP.22, CP.26, CP.42, R.1, F.52, F.53, C.2, C.9,
+C.131, E.12 and I.11 sections were read with the repository safety rules taking
+precedence. Changes and checks arising from that audit:
 
-| Run | Passed | Failed | Skipped | Total |
-| --- | ---: | ---: | ---: | ---: |
-| Reviewed branch, full suite | 165 | 46 | 31 | 242 |
-| Local ec4143e, full suite | 154 | 46 | 31 | 231 |
-| Reviewed branch, tmux enabled | 0 | 23 | 0 | 23 |
-| Local ec4143e, tmux enabled | 0 | 23 | 0 | 23 |
+- CP.22: Mermaid notifier invocation and retirement, bridge callback/worker
+  shutdown, and search dispatch could execute unknown code while locked.
+  Final verification also found audit endpoint copy/destruction, question
+  construction and queued last-owner destruction under prompt mutexes.
+  Snapshot or decide under lock, then copy, invoke, retire or join unlocked.
+  Recheck question queue closure after copying, and refuse claims once closed.
+- E.12: fallible result-vector allocation in a noexcept Mermaid bridge drain
+  could terminate unexpectedly. Reserve before removing completed results and
+  return the explicit failure while preserving retryable work.
+- C.2/C.9/C.131: public raw screen mutation, loosely typed selector results,
+  fixture-only getters/modes, duplicated edit policy and overly broad frontend
+  actions were replaced with owned feature operations and narrow interfaces.
+- R.1/CP.26/I.11: active shutdown previously could join after failing to release
+  a waiting worker. Release steps are now explicit; failure logs, latches and
+  terminates before that join, as the maintainer required. RAII still owns the
+  thread and resources on ordinary paths.
+- F.53/CP.2: the plugin close/poll race test used a UI owner across threads. The
+  TUI now owns polling; the worker retains only its copied endpoint and scoped,
+  synchronized gate. No terminal operation moves to a worker.
+- CP.42: request waits retain the result-and-retired-claim predicate. New test
+  gates use predicates and deadlines; they do not infer completion from sleeps.
 
-Full-suite failure and skip sets match exactly. All 11 added CTests pass: the
-loop/request suites plus nine isolated Session cases. There are no new failing
-CTest names in this comparison. That is evidence against an added failure, not
-proof that an existing failure cannot mask a regression.
+The audit did not find a new raw owning-pointer transfer or detached production
+thread in the changed paths. Existing local queue unboundedness is reported,
+not disguised as compliance with a global bounded-memory requirement.
 
-The full runners exited 8. Of their failed entries, 31 report missing procfs
-child-enumeration files; the isolated-environment check explicitly reports
-missing `librhash.so.1`. Other failures include helper startup, readiness and
-assertion failures. Matching the baseline does not prove a single cause for all
-46 failures, so they remain failures in this report.
+### User-visible changes and follow-ups
 
-Both tmux runs fail before a usable UI. Suspend/resume captures explicitly show
-missing `libdw.so.1`; the remaining cases report early pane exit. No socket-path
-length error occurred. CTest recorded 23 failures on each build, and each runner
-then exited 2 because an unreaped zombie client kept its worker process group
-visible. Both stale locks were removed only after the runner PIDs were absent,
-the remaining group members were zombies, and no live test/build workers
-remained. No runner policy or test was changed.
+Users receive the listed bug fixes: stale keys and pasted shortcuts cannot
+answer host prompts; prompt/result paint failures fail closed; close-after-submit
+input cannot spin; signal/HUP and shutdown outcomes remain reliable; plugin
+labels cannot inject terminal controls; prompt hold/resume and Settings Archive
+behavior follow the required ordering. Other editor precedence, settings,
+selectors, transcript behavior and backend decisions stay at baseline behavior.
 
-The reviewer's seven environment failures and 23 passing tmux scenarios were
-not reproduced in this cloud environment. These local tmux results cannot
-validate terminal behavior; a runtime-compatible environment is still needed
-for that evidence. No environment failures were repaired as part of this review.
+| Follow-up | Reason and rough size |
+| --- | --- |
+| Composer.h/composer.h and .cpp case collision | Retained explicitly by the maintainer. A later coordinated rename for case-insensitive filesystems is small. |
+| Hard limits for event/prompt queues | Baseline queues have no local cap. Designing fail-closed overflow/backpressure semantics is a separate medium-sized policy change. |
+| Cloud child runtime libraries | Complete subprocess/tmux execution needs standard runtime availability without changing child-environment policy; environment work, small to medium. |
+| R5 | No finding was supplied; no implementation estimate is possible. |
 
-Commands, after activation and UTF-8 locale setup, were:
+No additional maintainer design decision is currently required. Three remaining
+places may confuse a newcomer:
+
+1. `Composer` edits the draft while lowercase `composer` renders screen values.
+   Their names differ only by case, deliberately retained for this round.
+2. A render request does not paint immediately. End-of-turn paint and synchronous
+   prompt/ownership handoffs have different guarantees; read the renderer and
+   prompt contracts together before changing ordering.
+3. A host prompt can hold a worker's callback while withholding provider, plugin,
+   Mermaid and display updates. Request completion and callback retirement are
+   separate lifetime steps; a result alone does not permit destroying its owner.
+
+### Member comment coverage
+
+The table covers all 101 new named classes/structs compared with `ec4143e`, including
+nested values and test fixtures. Counts include declared functions, data, nested
+types and the values of directly nested enums. Nested classes have separate rows.
+Counts exclude debug macros and duplicate out-of-line definitions,
+and accept the requested single comment for a deleted-operator group. A class's
+thread/lifetime contract supplies context for its members. Mechanical coverage
+is checked separately from comment truth and usefulness in the readability review.
+
+The inventory uses Universal Ctags 5.9.0. Run the following on existing changed
+C++ files from `git diff --name-only ec4143e..HEAD` in the current tree and on
+those paths that exist in an `ec4143e` checkout:
 
 ```sh
-# In /workspace/AVA:
-scripts/run-tests.sh --output-junit /workspace/ava-tools/review-final-full.xml
-AVA_TUI_TMUX_SMOKE=1 scripts/run-tests.sh --jobs 4 -R '^ava_tui\.tmux_smoke_' \
-  --output-junit /workspace/ava-tools/review-final-tmux.xml
-
-# In /workspace/ava-base:
-scripts/run-tests.sh --output-junit /workspace/ava-tools/review-baseline-full.xml
-AVA_TUI_TMUX_SMOKE=1 scripts/run-tests.sh --jobs 4 -R '^ava_tui\.tmux_smoke_' \
-  --output-junit /workspace/ava-tools/review-baseline-tmux.xml
+ctags --sort=no --output-format=json --fields=+nKeSa \
+  --kinds-C++=csmfptge --language-force=C++ -f - <changed-files>
 ```
 
-Current/baseline full runs took
-71.96/67.33 seconds; tmux took 8.14/8.18 seconds. No full-suite or tmux rerun was
-used to replace these outcomes.
+Compare defined named class/struct tags by qualified name after removing Ctags'
+anonymous-namespace hash. Exclude forward declarations and anonymous compiler
+names. Keep source-local definitions; exclude out-of-line definitions when a
+header declaration already supplies the member. Count prototypes, inline member
+functions, fields, nested types and directly nested enum values. The mechanical
+comment check accepts a comment on the declaration line or immediately before
+it, ignoring blank lines, template/attribute lines and grouped deleted operators.
+This adjacency heuristic cannot prove comment quality; the separate review
+checks the explanation and its accuracy. Existing owners listed below are
+selected by substantial refactor changes, not merely by appearing in a changed
+file.
 
-## Historical validation before this review
+| New class or struct | Commented / total | Location |
+| --- | ---: | --- |
+| `ava_utils::MemberPointer` | 3/3 | `src/ava/debug/MemberPointer.h` |
+| `ava_utils::MemberReference` | 3/3 | `src/ava/debug/MemberReference.h` |
+| `ava::tui::ActiveRun` | 54/54 | `src/ava/tui/ActiveRun.h` |
+| `ava::tui::ActiveRun::Operation` | 13/13 | `src/ava/tui/ActiveRun.h` |
+| `ava::tui::ActiveRunEvents` | 29/29 | `src/ava/tui/ActiveRunEvents.h` |
+| `ava::tui::ActiveRunInbox` | 32/32 | `src/ava/tui/ActiveRunInbox.h` |
+| `ava::tui::ActiveRunInput` | 35/35 | `src/ava/tui/ActiveRunInput.h` |
+| `ava::tui::ActiveRunOutcome` | 14/14 | `src/ava/tui/ActiveRunOutcome.h` |
+| `ava::tui::BranchSummaryActions` | 7/7 | `src/ava/tui/BranchSummaryActions.h` |
+| `ava::tui::BranchSummaryOperation` | 30/30 | `src/ava/tui/BranchSummaryOperation.h` |
+| `ava::tui::CommandOutput` | 3/3 | `src/ava/tui/CommandOutput.h` |
+| `ava::tui::Composer` | 94/94 | `src/ava/tui/Composer.h` |
+| `ava::tui::ComposerInputResult` | 4/4 | `src/ava/tui/ComposerInputResult.h` |
+| `ava::tui::DraftCommand` | 2/2 | `src/ava/tui/DraftCommand.h` |
+| `ava::tui::runtime_input::InputPollResult` | 2/2 | `src/ava/tui/InputPollResult.h` |
+| `ava::tui::PendingAttachments` | 9/9 | `src/ava/tui/PendingAttachments.h` |
+| `ava::tui::PendingRequest` | 16/16 | `src/ava/tui/PendingRequest.h` |
+| `ava::tui::SelectorDraftCompletion` | 2/2 | `src/ava/tui/SelectorDispatchResult.h` |
+| `ava::tui::SelectorDraftCommand` | 1/1 | `src/ava/tui/SelectorDispatchResult.h` |
+| `ava::tui::SelectorOpenedSession` | 1/1 | `src/ava/tui/SelectorDispatchResult.h` |
+| `ava::tui::SelectorSessionError` | 1/1 | `src/ava/tui/SelectorDispatchResult.h` |
+| `ava::tui::SelectorParentSummary` | 4/4 | `src/ava/tui/SelectorDispatchResult.h` |
+| `ava::tui::SelectorHost` | 17/17 | `src/ava/tui/SelectorHost.h` |
+| `ava::tui::SelectorInputActions` | 12/12 | `src/ava/tui/SelectorInputActions.h` |
+| `ava::tui::SelectorInputController` | 12/12 | `src/ava/tui/SelectorInputController.h` |
+| `ava::tui::SessionSelector` | 17/17 | `src/ava/tui/SessionSelector.h` |
+| `ava::tui::SessionSelectorActions` | 12/12 | `src/ava/tui/SessionSelectorActions.h` |
+| `ava::tui::SessionTransitionCoordinator` | 13/13 | `src/ava/tui/SessionTransitionCoordinator.h` |
+| `ava::tui::SettingsDialog` | 24/24 | `src/ava/tui/SettingsDialog.h` |
+| `ava::tui::SettingsDialogActions` | 7/7 | `src/ava/tui/SettingsDialogActions.h` |
+| `ava::tui::Spinner` | 12/12 | `src/ava/tui/Spinner.h` |
+| `ava::tui::TranscriptUpdate` | 5/5 | `src/ava/tui/TranscriptUpdate.h` |
+| `ava::tui::TranscriptView` | 47/47 | `src/ava/tui/TranscriptView.h` |
+| `ava::tui::TuiEventLoop` | 29/29 | `src/ava/tui/TuiEventLoop.h` |
+| `ava::tui::TuiInputDispatcher` | 6/6 | `src/ava/tui/TuiInputDispatcher.h` |
+| `ava::tui::TuiSession` | 66/66 | `src/ava/tui/TuiSession.h` |
+| `ava::tui::TuiSessionActions` | 5/5 | `src/ava/tui/TuiSessionActions.h` |
+| `ava::tui::TuiTimer` | 16/16 | `src/ava/tui/TuiTimer.h` |
+| `ava::tui::TuiTimerRegistration` | 15/15 | `src/ava/tui/TuiTimerRegistration.h` |
+| `ava::tui::TuiWaitState` | 13/13 | `src/ava/tui/TuiWaitState.h` |
+| `ava::tui::TuiWakeup` | 4/4 | `src/ava/tui/TuiWakeup.h` |
+| `ava::tui::runtime_input::InputReplay` | 4/4 | `src/ava/tui/runtime_input.cpp` |
+| `PrintablePointee` | 2/2 | `tests/debug_pointer_security_tests.cpp` |
+| `NotificationWatchdog` | 6/6 | `tests/mermaid_notification_tests.cpp` |
+| `NotificationGate` | 5/5 | `tests/mermaid_notification_tests.cpp` |
+| `CompletionLog` | 5/5 | `tests/mermaid_notification_tests.cpp` |
+| `NotificationBridge` | 6/6 | `tests/mermaid_notification_tests.cpp` |
+| `AllocationFaultState` | 2/2 | `tests/mermaid_notification_tests.cpp` |
+| `ScopedAllocationFault` | 5/5 | `tests/mermaid_notification_tests.cpp` |
+| `tui_test_support::ScopedScreenDrawObserver` | 12/12 | `tests/support/ScopedScreenDrawObserver.h` |
+| `tui_test_support::TuiEventLoopFixture` | 5/5 | `tests/support/TuiEventLoopFixture.h` |
+| `SummaryBackendFixture` | 6/6 | `tests/tui_branch_summary_timer_tests.cpp` |
+| `SummaryTimerFixture` | 17/17 | `tests/tui_branch_summary_timer_tests.cpp` |
+| `ComposerDispatchFixture` | 9/9 | `tests/tui_composer_dispatch_tests.cpp` |
+| `ComposerPolicyFixture` | 9/9 | `tests/tui_composer_policy_tests.cpp` |
+| `EventLoopFixture` | 5/5 | `tests/tui_composer_rendering_tests.cpp` |
+| `LoopWaitDeadline` | 2/2 | `tests/tui_composer_rendering_tests.cpp` |
+| `test_display_reload_shares_control_deadlines::TickCounter` | 2/2 | `tests/tui_composer_rendering_tests.cpp` |
+| `EventLoopPipe` | 9/9 | `tests/tui_event_loop_tests.cpp` |
+| `TimerRecorder` | 3/3 | `tests/tui_event_loop_tests.cpp` |
+| `SpinnerFrames` | 3/3 | `tests/tui_event_loop_tests.cpp` |
+| `MutatingTimerPair` | 12/12 | `tests/tui_event_loop_tests.cpp` |
+| `RearmingTimer` | 9/9 | `tests/tui_event_loop_tests.cpp` |
+| `FeatureOwnerFixture` | 17/17 | `tests/tui_feature_owner_tests.cpp` |
+| `InputPipe` | 7/7 | `tests/tui_mermaid_contract_tests.cpp` |
+| `B5BridgeState` | 7/7 | `tests/tui_mermaid_tests.cpp` |
+| `B5AttachedMermaidFixture` | 12/12 | `tests/tui_mermaid_tests.cpp` |
+| `NativePasteInput` | 12/12 | `tests/tui_paste_security_tests.cpp` |
+| `ResolverWorker` | 5/5 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `ReentryProbe` | 20/20 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `ReentryScope` | 5/5 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `AuditTarget` | 9/9 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `ConstructionGate` | 12/12 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `DestructionProbe` | 13/13 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `QuestionTarget` | 9/9 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `EnqueueDeadline` | 3/3 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `PromptFixture` | 10/10 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `QueuedReleaseProbe` | 7/7 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `QueuedReleaseScope` | 5/5 | `tests/tui_prompt_callback_lock_tests.cpp` |
+| `PromptDeadlockWatchdog` | 6/6 | `tests/tui_prompt_security_tests.cpp` |
+| `EventLoopFixture` | 5/5 | `tests/tui_prompt_security_tests.cpp` |
+| `PublicationDeadline` | 2/2 | `tests/tui_prompt_security_tests.cpp` |
+| `PromptWorker` | 7/7 | `tests/tui_prompt_security_tests.cpp` |
+| `PromptSecurityFixture` | 13/13 | `tests/tui_prompt_security_tests.cpp` |
+| `RuntimeOwnerPipe` | 6/6 | `tests/tui_runtime_owner_tests.cpp` |
+| `WakeDeadline` | 3/3 | `tests/tui_runtime_owner_tests.cpp` |
+| `Turn` | 11/11 | `tests/tui_session_tests.cpp` |
+| `SessionProbe` | 31/31 | `tests/tui_session_tests.cpp` |
+| `ProbeScope` | 5/5 | `tests/tui_session_tests.cpp` |
+| `StreamRedirect` | 8/8 | `tests/tui_session_tests.cpp` |
+| `SessionInput` | 7/7 | `tests/tui_session_tests.cpp` |
+| `SessionSignals` | 3/3 | `tests/tui_session_tests.cpp` |
+| `WorkerGate` | 10/10 | `tests/tui_session_tests.cpp` |
+| `ReleaseWorker` | 3/3 | `tests/tui_session_tests.cpp` |
+| `ShutdownProbe` | 14/14 | `tests/tui_shutdown_tests.cpp` |
+| `ProbeScope` | 5/5 | `tests/tui_shutdown_tests.cpp` |
+| `InputPipe` | 7/7 | `tests/tui_shutdown_tests.cpp` |
+| `ReleaseWorker` | 5/5 | `tests/tui_shutdown_tests.cpp` |
+| `InputReadDeadline` | 3/3 | `tests/tui_terminal_input_tests.cpp` |
+| `TranscriptViewFixture` | 5/5 | `tests/tui_transcript_view_tests.cpp` |
+| `WaitStatePipe` | 11/11 | `tests/tui_wait_state_tests.cpp` |
 
-The original goal-11 run configured 233 tests: 114 passed, 88 failed and 31
-skipped. Subsequent setup corrections and focused reruns cleared the documentation
-link failure and 40 terminal failures, leaving 47 without a passing follow-up
-at ab5189c. Those are historical observations, not the result of this review.
-The ledger retains their commands and causes; the complete original per-test
-table is preserved in the ab5189c version of this handoff.
+Substantially changed existing production owners are also covered. Their
+member counts are listed separately so additions are not confused with existing
+class declarations.
 
-The reviewer separately observed the same seven environment failures on ec4143e
-and ab5189c, with all 23 tmux scenarios passing on each. Because this cloud
-environment differs, the final comparison must use a local ec4143e build too.
-
-## Remaining limits and newcomer questions
-
-No maintainer decision is blocking. Three places still require careful reading:
-
-1. Receipt authority differs from event arrival. A command's local tool output
-   can be visible without entering the conversation transcript. Read
-   ActiveRunEvents with the completion sequence and its tests before changing it.
-2. A prompt result and release of its UI claim are separate events. A worker may
-   remain blocked after a result exists because a callback still borrows its
-   request. PendingRequest and coordinator comments explain that ordering.
-3. Screen, cached layout and drawn selection are distinct views. Detached
-   scrolling deliberately preserves old drawn authority while updates accumulate.
-   Read TranscriptView with renderer preparation before changing selection logic.
-
-Preserved limits found while documenting code: automatic reuse of a session
-permission grant retains the baseline render-result handling; it has no visible
-prompt claim. The pre-existing noexcept Mermaid bridge drain can terminate on
-allocation failure, and identity wrap skips zero without a collision proof.
-Those are outside the requested findings and were not silently changed. The
-100 ms control cadence and finite final backlog also do not bound wall time.
+| Existing owner | Commented / total |
+| --- | ---: |
+| `ava::tui::TuiFrontEnd` | 70/70 |
+| `ava::tui::RuntimePresentationState` | 77/77 |
+| `ava::tui::RuntimeRenderer` | 61/61 |
+| `ava::tui::RuntimePromptCoordinator` | 69/69 |
+| `ava::tui::RuntimePluginUiCoordinator` | 18/18 |
+| `ava::tui::RuntimeNavigationController` | 30/30 |
+| `ava::tui::RuntimeSubmitController` | 17/17 |
+| `ava::tui::RuntimeMermaidPresentationController` | 39/39 |
+| `ava::tui::RuntimeSubagentWorkspaceController` | 43/43 |
