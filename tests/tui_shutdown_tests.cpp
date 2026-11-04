@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -29,8 +30,10 @@ namespace {
 
 // Private exception text must never appear in fixed shutdown diagnostics.
 constexpr char kPrivateFailure[] = "R9_PRIVATE_PROMPT_AND_CREDENTIAL_SENTINEL";
+// Completion throws this first; a later release error must not expose it either.
+constexpr char kPrivateOuterFailure[] = "R9_PRIVATE_OUTER_COMPLETION_SENTINEL";
 
-// TUI-only selected failure; queue receipts exercise the recoverable path.
+// Chosen on the TUI thread before launch; the worker only reads this immutable choice.
 enum class Fault
 {
   QueueReceipts, // Fail after join, so Session must retain a nonzero cleanup outcome.
@@ -38,6 +41,7 @@ enum class Fault
   QueuedPrompts, // Fail while releasing requests that the TUI has not displayed.
   ActivePrompt, // Fail while retiring callbacks for the displayed host prompt.
   PluginWaiters, // Fail at the last release step before a worker join is permitted.
+  OuterException, // Fail a release from complete()'s catch of an earlier private error.
 };
 
 // Emit complete fixed markers before a possible abort; no test content is logged.
@@ -183,6 +187,8 @@ Fault selected_fault()
     return Fault::ActivePrompt;
   if (std::string_view(value) == "plugin_waiters")
     return Fault::PluginWaiters;
+  if (std::string_view(value) == "outer_exception")
+    return Fault::OuterException;
   throw std::runtime_error("unknown shutdown test fault");
 }
 
@@ -205,7 +211,8 @@ void test_outcome()
   expect(!continuing.break_loop() && !continuing.cleanup_failed(), "cleanup modifier leaves its source value unchanged");
 }
 
-// Run real shutdown from public Session, with a held worker and one injected fault.
+// Exercise real Session shutdown with a held worker, or completion that throws
+// before cleanup also fails. The latter protects enclosing exception content.
 void test_cleanup()
 {
   InputPipe input;
@@ -213,7 +220,7 @@ void test_cleanup()
   probe.fault = selected_fault();
   if (probe.fault != Fault::QueueReceipts)
   {
-    // An intentional default-handler abort must not leave a large core artifact.
+    // Intentional fatal termination must not leave a large core artifact.
     rlimit const no_core{0, 0};
     if (::setrlimit(RLIMIT_CORE, &no_core) != 0)
       throw std::system_error(errno, std::generic_category(), "disable shutdown test core dump");
@@ -227,12 +234,16 @@ void test_cleanup()
     ava::tui::TuiActiveRunQueues queues;
     queues.finish = [state](bool stopped) -> ava::core::VoidResult {
       ++state->queue_finishes;
-      expect(stopped && state->worker_returned.load(), "queue receipts execute after stop and worker join");
+      expect((stopped || state->fault == Fault::OuterException) && state->worker_returned.load(),
+             "queue receipts execute after stop or ordinary completion, after worker join");
       marker("R9_QUEUE_FINISH\n");
-      throw std::runtime_error(kPrivateFailure);
+      throw std::runtime_error(state->fault == Fault::OuterException ? kPrivateOuterFailure : kPrivateFailure);
     };
     state->armed = true;
-    state->loop->request_stop();
+    // Let the outer-error case reach real complete(); the others enter shutdown
+    // while the worker is held, independently of provider completion timing.
+    if (state->fault != Fault::OuterException)
+      state->loop->request_stop();
     return queues;
   };
   frontend.hooks().on_submit = [state = &probe](std::string const&, ava::tui::TuiSubmitContext) {
@@ -240,7 +251,7 @@ void test_cleanup()
     state->entered.set_value();
     // This fallback also bounds a manually launched child. The supervisor normally
     // kills/reaps a join regression first; either path is a test failure.
-    if (state->release_future.wait_until(ava::tests::now_plus_seconds(30)) != std::future_status::ready)
+    if (state->fault != Fault::OuterException && state->release_future.wait_until(ava::tests::now_plus_seconds(30)) != std::future_status::ready)
       marker("R9_WORKER_FALLBACK\n");
     state->worker_returned.store(true);
     marker("R9_WORKER_RETURNED\n");
@@ -299,7 +310,7 @@ extern "C" void shutdown_wrap_attach(ava::tui::RuntimePluginUiCoordinator* coord
     shutdown_probe->loop = &loop;
 }
 
-// Establish the held-worker handshake before any fault can trigger termination.
+// Establish either a held worker or complete()'s enclosing catch before faulting.
 extern "C" bool shutdown_wrap_stop(ava::tui::ActiveRunInbox* inbox)
 {
   auto* probe = shutdown_probe;
@@ -307,7 +318,14 @@ extern "C" bool shutdown_wrap_stop(ava::tui::ActiveRunInbox* inbox)
   {
     probe->cleaning = true;
     ++probe->attempts[0];
-    if (probe->entered_future.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready)
+    if (probe->fault == Fault::OuterException)
+    {
+      // This is an actual complete() catch, after the first queue callback threw.
+      // Observing current_exception does not replace or clear that outer error.
+      bool const inside_completion_catch = std::current_exception() && probe->queue_finishes == 1 && probe->worker_returned.load();
+      marker(inside_completion_catch ? "R9_OUTER_EXCEPTION_ACTIVE\n" : "R9_OUTER_EXCEPTION_MISSING\n");
+    }
+    else if (probe->entered_future.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready)
       marker("R9_WORKER_HELD\n");
     else
       marker("R9_WORKER_MISSING\n");
@@ -326,7 +344,7 @@ extern "C" void shutdown_wrap_queued(ava::tui::RuntimePromptCoordinator* coordin
   {
     ++probe->attempts[1];
     marker("R9_STAGE_QUEUED\n");
-    if (probe->fault == Fault::QueuedPrompts)
+    if (probe->fault == Fault::QueuedPrompts || probe->fault == Fault::OuterException)
       throw std::runtime_error(kPrivateFailure);
   }
   shutdown_real_queued(coordinator);
@@ -346,7 +364,8 @@ extern "C" ava::tui::PromptServiceOutcome shutdown_wrap_active(ava::tui::Runtime
   return shutdown_real_active(coordinator, reason);
 }
 
-// Only the recoverable scenario releases its worker; fatal scenarios stay held.
+// Release a held worker only on the recoverable path. The outer-error case
+// already joined during complete(); other fatal scenarios must remain held.
 extern "C" void shutdown_wrap_plugin(ava::tui::RuntimePluginUiCoordinator* coordinator)
 {
   auto* probe = shutdown_probe;

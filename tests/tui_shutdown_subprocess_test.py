@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supervise real TUI shutdown failures, including expected default termination."""
+"""Supervise real TUI shutdown failures, including expected fatal termination."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from timeout_support import test_timeout
 
 # An exception's content must never reach stderr, including terminate's handler.
 PRIVATE_SENTINEL = b"R9_PRIVATE_PROMPT_AND_CREDENTIAL_SENTINEL"
+# This error is still current when complete() invokes shutdown from its catch.
+OUTER_SENTINEL = b"R9_PRIVATE_OUTER_COMPLETION_SENTINEL"
 # Every release stage is attempted before termination, even after an earlier fault.
 STAGE_MARKERS = (
     b"R9_STAGE_STOP\n", b"R9_STAGE_QUEUED\n",
@@ -27,6 +29,7 @@ FAULT_STAGES = {
     "queued_prompts": b"queued prompts",
     "active_prompt": b"active prompt",
     "plugin_waiters": b"plugin waiters",
+    "outer_exception": b"queued prompts",
 }
 
 
@@ -68,9 +71,13 @@ def run_case(executable: Path, root: Path, fault: str) -> None:
 
     diagnostic = b"TUI shutdown cleanup failed at " + FAULT_STAGES[fault] + b"\n"
     require(output.count(diagnostic) == 1, f"{fault}: missing or repeated fixed diagnostic: {output!r}")
-    require(PRIVATE_SENTINEL not in output, f"{fault}: exception content leaked to stderr")
-    require(b"R9_WORKER_WAITING\n" in output and b"R9_WORKER_HELD\n" in output,
-            f"{fault}: child did not establish its held-worker handshake: {output!r}")
+    require(PRIVATE_SENTINEL not in output and OUTER_SENTINEL not in output, f"{fault}: exception content leaked to stderr")
+    if fault == "outer_exception":
+        require(output.count(b"R9_OUTER_EXCEPTION_ACTIVE\n") == 1,
+                f"{fault}: shutdown did not run inside the real completion catch: {output!r}")
+    else:
+        require(b"R9_WORKER_WAITING\n" in output and b"R9_WORKER_HELD\n" in output,
+                f"{fault}: child did not establish its held-worker handshake: {output!r}")
     require(b"R9_WORKER_MISSING\n" not in output and b"R9_WORKER_FALLBACK\n" not in output,
             f"{fault}: worker synchronization or fallback fired: {output!r}")
     positions = []
@@ -88,10 +95,19 @@ def run_case(executable: Path, root: Path, fault: str) -> None:
                 f"{fault}: post-join cleanup happened out of order: {output!r}")
     else:
         require(process.returncode == -signal.SIGABRT,
-                f"{fault}: expected default terminate/SIGABRT, got {process.returncode}: {output!r}")
-        for forbidden in (b"R9_WORKER_RETURNED\n", b"R9_QUEUE_FINISH\n", b"R9_INBOX_RETIRED\n", b"R9_SESSION_EXIT_1\n"):
+                f"{fault}: expected terminate/SIGABRT, got {process.returncode}: {output!r}")
+        forbidden_markers = (b"R9_INBOX_RETIRED\n", b"R9_SESSION_EXIT_1\n")
+        if fault == "outer_exception":
+            # This worker completed normally before queue finish threw. Require
+            # that sequence, separately from the four held-worker death cases.
+            for marker in (b"R9_WORKER_RETURNED\n", b"R9_QUEUE_FINISH\n"):
+                require(output.count(marker) == 1 and output.index(marker) < positions[0],
+                        f"{fault}: completion did not precede catch-triggered shutdown: {output!r}")
+        else:
+            forbidden_markers += (b"R9_WORKER_RETURNED\n", b"R9_QUEUE_FINISH\n")
+        for forbidden in forbidden_markers:
             require(forbidden not in output,
-                    f"{fault}: termination occurred after worker return or post-join cleanup: {forbidden!r}: {output!r}")
+                    f"{fault}: fatal shutdown continued past its release boundary: {forbidden!r}: {output!r}")
 
 
 def main() -> int:

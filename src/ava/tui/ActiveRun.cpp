@@ -31,6 +31,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <future>
@@ -618,10 +619,14 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
   released &= cleanup("active prompt", [this] { static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown)); });
   released &= cleanup("plugin waiters", [this] { plugin_ui_.finish_submission(); });
   // A failed release can leave a worker blocked forever. After logging and
-  // recording failure, terminate instead of joining that worker. Terminate
-  // outside the cleanup catch, after its caught exception has been discarded.
+  // recording failure, terminate instead of joining that worker. An enclosing
+  // completion catch may still hold private exception text, so use an abort-only
+  // handler. Change the process handler only when termination is already required.
   if (!released)
+  {
+    std::set_terminate([]() noexcept { std::abort(); });
     std::terminate();
+  }
   cleanup("worker join", [this] {
     if (operation_->worker.valid())
       operation_->worker.get();
