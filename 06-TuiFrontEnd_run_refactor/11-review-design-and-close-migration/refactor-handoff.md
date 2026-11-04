@@ -1,5 +1,71 @@
 # Issue #93 review handoff
 
+## Merge notes
+
+The final review round is **in progress**. This is initial sanitizer evidence for
+commit `5ee43632`, after R1, S1/R18, S2 and S3. The remaining R findings, final
+self-review and final validation are not complete. This branch is not yet
+reported as ready to merge.
+
+The second review is preserved in
+[review-astra-d48292c.md](../review-astra-d48292c.md). The first-review handoff
+below is historical until the final report replaces it.
+
+### Initial S4 validation
+
+Both sanitizer presets built successfully with GCC 16, `BetaTest` and
+`EnableDebug=ON` in this cloud environment on 2026-11-04. Tests used
+`LANG=C.UTF-8 LC_ALL=C.UTF-8`, two jobs and no live-provider credentials.
+No sanitizer suppressions or application child-environment changes were added.
+
+| Check at `5ee43632` | Result |
+| --- | --- |
+| ASan/UBSan full suite | 176 passed, 46 failed, 31 skipped; 253 total; 207.90 seconds. |
+| TSan preset | Three passed; ACP failed on its known MCP-helper startup problem. |
+| TSan requested TUI selection | All 29 passed, including active-run signals, permission HUP, stale input and paste cases. |
+| Additional TSan checks | `tui_composer` and `mermaid_notifications` passed; `mermaid_render` retained its helper startup failures. |
+
+No ASan, LeakSanitizer, UBSan or TSan diagnostic appeared in the captured test
+output. There are therefore no third-party sanitizer stacks or suppressions to
+record. This is not a claim that the failing subprocess paths were exercised:
+some helpers cannot load `libdw.so.1` under the existing child environment.
+
+The ASan/UBSan failure **names** exactly match this environment's previously
+recorded `ec4143e` dev baseline: 154 passed, the same 46 failed, and 31 skipped
+out of 231. Both ACP and `mermaid_render` belong to that baseline failure set.
+These results differ from the reviewer's seven environment failures. Compiler
+output also contains GCC optimizer warnings from existing standard-library
+regex/optional code; they are not sanitizer reports.
+
+Reproduce the initial commands after activating the local compiler/runtime
+setup:
+
+```sh
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+cmake --preset sanitize
+scripts/build.sh --build-dir build-sanitize --jobs 2
+scripts/run-tests.sh --build-dir build-sanitize --jobs 2
+
+cmake --preset tsan
+scripts/build.sh --build-dir build-tsan --jobs 2 --target ava_tests
+CTEST_PARALLEL_LEVEL=2 ctest --preset tsan
+CTEST_PARALLEL_LEVEL=2 ctest --test-dir build-tsan --output-on-failure \
+  -R '^ava_tests\.(tui_event_loop|tui_pending_requests|tui_session\..*|plugin_ui|tui_permission|tui_composer_rendering.*)$'
+scripts/run-tests.sh --build-dir build-tsan --jobs 2 \
+  -R '^ava_tests\.(tui_composer|mermaid_render|mermaid_notifications)$'
+```
+
+The additional selection matters because permission/input unit tests are inside
+`tui_composer`, and the preset does not include the changed Mermaid callbacks.
+Local logs are `/workspace/ava-tools/final-S4-sanitize-*.log` and
+`/workspace/ava-tools/final-S4-tsan-*.log`; the failure-name comparison is
+`final-S4-asan-comparison.json` in the same directory.
+
+Repeat these checks on the completed code after final self-review. Full dev,
+tmux, repeat-test and final merge results remain outstanding.
+
+## First-review handoff (historical)
+
 This is the current implementation and validation handoff for
 `astra/06-TuiFrontEnd_run_refactor`. It supersedes the pre-review handoff at
 `ab5189c`. The comparison baseline is `ec4143e`. The review was copied unchanged
