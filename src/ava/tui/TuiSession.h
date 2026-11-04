@@ -44,7 +44,7 @@ class TuiSession final
  public:
   // TUI thread: construct once after terminal initialization. Members may register
   // timers while being built, but run() alone dispatches them after construction.
-  // All borrowed arguments must outlive the session.
+  // Frontend and Context outlive the session; status text is copied during initialization.
   TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line);
   // TUI thread: stop new worker requests and join active work while all feature
   // owners are still alive. This also covers exceptions and early run returns.
@@ -61,8 +61,8 @@ class TuiSession final
   // otherwise 0.
   [[nodiscard]] int run(std::function<bool()> const& before_shutdown);
 
-  // Owned Composer, ActiveRun and presentation members deliberately opt out of
-  // printing because they retain user content; this aggregate cannot print them.
+  // Owned Composer and presentation members retain user content and deliberately
+  // opt out of printing; this aggregate must not traverse those values.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:

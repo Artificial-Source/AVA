@@ -64,9 +64,8 @@ class NativePasteInput final
     std::clearerr(stream_);
   }
 
-  // One fixture owns descriptor restoration and its two pipe endpoints.
+  // One fixture retains its pipe endpoints and restores the borrowed descriptor on destruction.
   NativePasteInput(NativePasteInput const&) = delete;
-  // An installed native endpoint cannot transfer between fixture lifetimes.
   NativePasteInput& operator=(NativePasteInput const&) = delete;
 
   // TUI thread: install complete, seekable bytes without a producer that might

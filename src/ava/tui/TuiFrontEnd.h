@@ -155,19 +155,17 @@ class TuiFrontEnd : public frontend::FrontEnd,
   // Persists and applies a recognized display command or settings action on the TUI thread.
   virtual core::Result<TuiLocalDisplaySettingsResult> on_local_display_settings_action(std::string_view action) override = 0;
 
-  // Runs after the composer loop exits while curses is still active. Application-scoped
-  // workers that can notify this runtime must be canceled and joined here.
-  // TUI thread after active-run cleanup, while the terminal is still usable.
-  // Join application-owned discovery/summary work before the frontend can die.
+  // TUI thread after active-run cleanup, while the terminal is still usable:
+  // cancel and join application-owned discovery/summary workers that can notify
+  // this runtime before the frontend and its notification targets can die.
   virtual void on_before_tui_shutdown() = 0;
 
   // Reset session-selector preferences and return the current application-owned session view.
   virtual SelectListView session_selector_view() override = 0;
   // Snapshot project trust for settings presentation without exposing operations that change trust.
   virtual ProjectTrustSnapshot read_project_trust() const override = 0;
-  // Create queue callables bound to event_sink and the specific backend run.
-  // TUI thread before launch: bind queue capabilities to this submission.
-  // Returned callbacks can be used by its worker until finish/retirement.
+  // TUI thread before launch: create queue callbacks bound to event_sink and
+  // this backend submission. Its worker may use them until finish/retirement.
   virtual TuiActiveRunQueues create_active_run_queues(ava::event::EventEnvelopeSink event_sink) const = 0;
   // Execute submitted with request-local context and return presentation-only output.
   // Submission worker: context owns this request's endpoints. The frontend

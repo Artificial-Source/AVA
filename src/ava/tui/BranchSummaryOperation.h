@@ -61,7 +61,7 @@ class BranchSummaryOperation final
   BranchSummaryOperation& operator=(BranchSummaryOperation const&) = delete;
 
   // TUI thread: register a timer that only marks discovery due. The loop outlives this
-  // stable operation; attach the renderer before service_if_due can request a frame.
+  // stable operation and the already-constructed renderer used by service_if_due.
   void attach_loop(TuiEventLoop& loop);
   // TUI application stage: read one pending backend snapshot, or return no value.
   // Several timer ticks require only one read. The returned outcome is handled before
@@ -112,7 +112,8 @@ class BranchSummaryOperation final
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole modal storage, replaced by progress and restored when finished.
   SelectorHost& selectors_;
-  // Borrowed from Session; renderer; attach its loop before snapshot servicing requests a frame.
+  // Session's already-constructed renderer outlives this operation; application
+  // servicing requests frames through it after applying a changed snapshot.
   RuntimeRenderer& renderer_;
   // Terminal outlives this owner and supplies TUI-thread modal rejection bells.
   terminal::Context& terminal_context_;

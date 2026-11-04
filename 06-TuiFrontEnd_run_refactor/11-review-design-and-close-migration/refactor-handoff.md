@@ -2,11 +2,12 @@
 
 ## Merge notes
 
-The requested finding groups are implemented through `42d8d6c3`. Final
+The requested finding groups are implemented through `12108a7b`. Final
 verification also found and fixed callback copying and destruction under prompt
-mutexes. All groups have passed focused tests and independent review. The five
-complete-diff reviews and subsequent validation are still pending. This is not
-yet a merge-ready declaration.
+mutexes. The five complete-diff reviews found a workspace timer-stage violation, public
+decoder state and stale or repeated comments. Corrections and closure reviews
+are in progress, followed by final validation. This is not yet a merge-ready
+declaration.
 
 Start with [the TUI architecture guide](../../docs/engineering/tui-architecture.md).
 The preserved [second review](../review-astra-d48292c.md) defines R1–R20;
@@ -27,7 +28,7 @@ section separately states what was exercised and what the environment prevented.
 | R4 | Fixed — `4b2b9914` | Completing a host prompt wakes the loop after the worker can resume, so queued plugin work is reconsidered. |
 | R5 | Deferred — no finding supplied | The second review skips R5. There is no identified change to implement. |
 | R6 | Fixed — `d8e0d872` | The 100 ms control and 500 ms display timers share one origin and keep their phase when skipping missed ticks. |
-| R7 | Fixed — `2903c8dc` | The branch-summary timer records due work; application servicing performs the backend poll. |
+| R7 | Fixed — `2903c8dc`, `d866ea6f` | Branch-summary and workspace timers record due work; application servicing performs frontend reads. Workspace retains its 150 ms cadence and prompt eligibility. |
 | R8 | Fixed — `f6758348` | Every latched terminal-render failure reaches active-prompt failure before shutdown. |
 | R9 | Fixed — `659b20cc`, `e93ac4d8`, `1aec9ceb` | Release failures are logged and latched, then terminate before a potentially blocked join; post-join cleanup errors preserve a nonzero outcome. Returned queue errors are retained too. |
 | R10 | Fixed — `86ff8a55` | Queued interruption rejects misuse on a claimed request; claim completion/retirement retains borrowed callback lifetime. |
@@ -36,7 +37,7 @@ section separately states what was exercised and what the environment prevented.
 | R13 | Fixed — `6c71f0e0` | Composer owns phase methods and an ordered edit-action table; active input reuses that policy with its existing precedence. |
 | R14 | Fixed — `5544a51c`, `8c4cdf0b` | Five narrow interfaces expose feature actions; concrete backend methods stay protected; keybindings use `apply_key_bindings`. |
 | R15 | Fixed — `6617a980`, `b78d9235`, `d93b9b36`, `6dc63489` | Raw pointers print addresses only; safe metadata remains printable, sensitive owned strings are omitted, and `MemberReference` has its own header. |
-| R16 | Fixed — `d93b9b36`, `6dc63489`, `be8e3aaa`, `e3ec4ea7`, `9091c2d1`, `52c1339b` | Typed selector variants, matching result headers, real loop ownership, removal of test-only readers/modes and internal tool merging. Case-only filenames stay by maintainer decision. |
+| R16 | Fixed — `d93b9b36`, `6dc63489`, `be8e3aaa`, `e3ec4ea7`, `9091c2d1`, `52c1339b`, `12108a7b` | Private decoder transitions, typed selector variants, matching result headers, real loop ownership, removal of test-only readers/modes and internal tool merging. Case-only filenames stay by maintainer decision. |
 | R17 | Fixed — `5af19561` | Archive travels through `SelectorHost::dispatch` with a nested Settings preview and restores it. |
 | R18 | Fixed — `155a018b`, `02f2559d`, `0d162cfe` | Active signal exit 130, retained-key rejection, permission HUP interrupted audit and close-after-submit tests. |
 | R19 | Fixed — `5f26e69f` | Bounded waits, predicate gates and fixture timer postponement replace fragile spins or unbounded test waits. |
@@ -158,16 +159,16 @@ Final runs must be inspected separately; compilation is not behavioral proof.
 
 ### Final self-review
 
-Five fresh reviewers will inspect the complete `ec4143e..HEAD` diff. Their
-results and every correction will be recorded here before handoff:
+Five fresh reviewers inspected the complete `ec4143e..6a2b7d1c` diff.
+Closure reviews will verify the corrections before final validation:
 
 | Angle | Result | What it caught |
 | --- | --- | --- |
-| Correctness, threads and lifetimes | Pending | Pending. |
-| Security, bounds and debug output | Pending | Pending. |
-| Design and repository rules | Pending | Pending. |
-| Comments and newcomer readability | Pending | Pending. |
-| Tests and timing | Pending | Pending. |
+| Correctness, threads and lifetimes | Closure pending | Workspace timer performed frontend reads during timer dispatch; `d866ea6f` moves them to application servicing. |
+| Security, bounds and debug output | Initial PASS; delta review pending | No new security defect. Verified host-prompt boundaries and baseline queue limits. |
+| Design and repository rules | Closure pending | Persistent InputReplay exposed mutable fields and lacked a layout exception; `12108a7b` fixes both. |
+| Comments and newcomer readability | Closure pending | Stale printer/thread/attachment descriptions, repeated contracts and per-operator filler; corrections in progress. |
+| Tests and timing | Closure pending | Workspace test expected frontend calls during timers; new regression separates timer and application stages and preserves visible assertions. |
 
 Earlier group reviews caught unsafe default termination diagnostics, an
 explicit-only death test accidentally registered in an aggregate, missing
@@ -219,7 +220,7 @@ precedence. Changes and checks arising from that audit:
   could terminate unexpectedly. Reserve before removing completed results and
   return the explicit failure while preserving retryable work.
 - C.2/C.9/C.131: public raw screen mutation, loosely typed selector results,
-  fixture-only getters/modes, duplicated edit policy and overly broad frontend
+  public decoder fields, fixture-only getters/modes, duplicated edit policy and overly broad frontend
   actions were replaced with owned feature operations and narrow interfaces.
 - R.1/CP.26/I.11: active shutdown previously could join after failing to release
   a waiting worker. Release steps are now explicit; failure logs, latches and
@@ -337,7 +338,7 @@ file.
 | `ava::tui::TuiTimerRegistration` | 15/15 | `src/ava/tui/TuiTimerRegistration.h` |
 | `ava::tui::TuiWaitState` | 13/13 | `src/ava/tui/TuiWaitState.h` |
 | `ava::tui::TuiWakeup` | 4/4 | `src/ava/tui/TuiWakeup.h` |
-| `ava::tui::runtime_input::InputReplay` | 4/4 | `src/ava/tui/runtime_input.cpp` |
+| `ava::tui::runtime_input::InputReplay` | 11/11 | `src/ava/tui/runtime_input.cpp` |
 | `PrintablePointee` | 2/2 | `tests/debug_pointer_security_tests.cpp` |
 | `NotificationWatchdog` | 6/6 | `tests/mermaid_notification_tests.cpp` |
 | `NotificationGate` | 5/5 | `tests/mermaid_notification_tests.cpp` |
@@ -412,4 +413,4 @@ class declarations.
 | `ava::tui::RuntimeNavigationController` | 30/30 |
 | `ava::tui::RuntimeSubmitController` | 17/17 |
 | `ava::tui::RuntimeMermaidPresentationController` | 39/39 |
-| `ava::tui::RuntimeSubagentWorkspaceController` | 43/43 |
+| `ava::tui::RuntimeSubagentWorkspaceController` | 42/42 |

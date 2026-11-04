@@ -55,7 +55,7 @@ class RuntimeMermaidPresentationController final
   ~RuntimeMermaidPresentationController();
 
   // The attached loop outlives this stable owner and its registration.
-  // Attach the renderer first so discovery requests only batch invalidation.
+  // The already-constructed renderer outlives this owner and batches its frame requests.
   // A nonempty bridge must support notifier registration, including while disabled.
   void attach_loop(TuiEventLoop& loop);
   // TUI application stage: reconcile records, drain results before submitting work, update accepted diagram layout, refresh
@@ -186,14 +186,14 @@ class RuntimeMermaidPresentationController final
   // input and painting must not shorten retry_at_.
   bool bridge_busy_ = false;
   // TUI timer publishes eligibility here; application-stage servicing consumes it before any bridge call.
-  bool retry_due_ = false;  // Set by the timer, consumed by service_if_changed.
+  bool retry_due_ = false;
   // TUI-thread next Busy delay: 100 ms initially, 250 ms thereafter; successful/nonbusy service resets it.
-  std::chrono::milliseconds retry_delay_{100};  // First contention 100 ms, subsequent 250 ms.
+  std::chrono::milliseconds retry_delay_{100};
   // TUI-thread absolute contention deadline; unrelated transcript/input changes cannot shorten this backoff.
-  std::optional<TuiTimer::Clock::time_point> retry_at_;  // Present until a retry is eligible.
+  std::optional<TuiTimer::Clock::time_point> retry_at_;
   // TUI-owned one-shot Busy wake; canceled before unregistering bridge callbacks so no retry targets a retired
   // controller.
-  TuiTimer retry_timer_;  // Canceled before bridge callbacks are unregistered at shutdown.
+  TuiTimer retry_timer_;
 };
 
 }  // namespace ava::tui

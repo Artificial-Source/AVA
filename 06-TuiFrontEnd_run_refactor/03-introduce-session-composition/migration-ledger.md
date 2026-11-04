@@ -3,8 +3,9 @@
 ## Current status after the final review round
 
 The listed findings and an additional prompt callback locking correction are
-implemented through `42d8d6c3`. The five complete-diff self-reviews and final
-validation are still in progress. Start with
+implemented through `12108a7b`. Complete-diff reviewers found additional timer,
+decoder encapsulation and comment gaps. Their corrections and closure reviews
+are in progress before final validation. Start with
 [the TUI architecture guide](../../docs/engineering/tui-architecture.md).
 [Merge notes and the full finding report](../11-review-design-and-close-migration/refactor-handoff.md)
 record commits, security bounds, comment counts, test evidence and remaining

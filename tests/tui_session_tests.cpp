@@ -201,9 +201,8 @@ class ProbeScope final
   explicit ProbeScope(SessionProbe& probe) : previous_(std::exchange(session_probe, &probe)) { }
   // Restore before destroying the borrowed probe; workers never use this pointer.
   ~ProbeScope() { session_probe = previous_; }
-  // Instrumentation scope ownership cannot be duplicated.
+  // One guard keeps the borrowed probe installed until wrapped operations finish.
   ProbeScope(ProbeScope const&) = delete;
-  // A scope cannot be rebound while wrappers are executing.
   ProbeScope& operator=(ProbeScope const&) = delete;
 
   // Internal-linkage RAII guard deliberately avoids generated traversal.
@@ -232,9 +231,8 @@ class StreamRedirect final
       expect(::dup2(saved_.get(), ::fileno(stream_)) >= 0, "restore Context stream descriptor");
     std::clearerr(stream_);
   }
-  // One guard owns the saved descriptor and its restoration obligation.
+  // One guard owns the saved descriptor and restores the same borrowed FILE on destruction.
   StreamRedirect(StreamRedirect const&) = delete;
-  // Restoration cannot transfer to a different borrowed FILE.
   StreamRedirect& operator=(StreamRedirect const&) = delete;
   // Replace the endpoint without changing the FILE or the fd registered with epoll.
   void replace(int descriptor)

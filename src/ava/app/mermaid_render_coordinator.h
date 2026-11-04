@@ -102,12 +102,11 @@ struct MermaidRenderCoordinatorStats
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Application-owned single-worker renderer; frontend consumption uses completion
-// notifications, and queue methods remain separate from helper execution.
-// Application-owned worker and synchronized request/result queues. Public queue operations may run from caller
-// threads but perform no helper I/O; mutex acquisition may wait. Only the worker owns helper execution. The
-// application serializes shutdown/destruction, stops external calls, and joins the worker before Impl storage
-// is destroyed.
+// Application-owned renderer with one worker and synchronized request/result queues.
+// Public queue operations may run on caller threads but perform no helper I/O;
+// mutex acquisition may wait. The worker owns helper execution and notifies
+// frontend consumers of completion. The application serializes shutdown/destruction,
+// stops external calls and joins the worker before Impl storage is destroyed.
 class MermaidRenderCoordinator final
 {
  public:
@@ -118,9 +117,8 @@ class MermaidRenderCoordinator final
   // resources are destroyed.
   ~MermaidRenderCoordinator();
 
-  // A single owner controls worker lifetime and queue/configuration authority.
+  // One owner keeps the worker, callback targets and synchronized queues alive until shutdown.
   MermaidRenderCoordinator(MermaidRenderCoordinator const&) = delete;
-  // Prevent replacement of a running worker's callback target and synchronization state.
   MermaidRenderCoordinator& operator=(MermaidRenderCoordinator const&) = delete;
 
   // Caller thread: under queue lock, replace a changed epoch and retire old queue/results/cache; wake active

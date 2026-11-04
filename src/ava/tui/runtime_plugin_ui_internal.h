@@ -70,7 +70,7 @@ class RuntimePluginUiCoordinator final
   // TUI thread: validate geometry, consume a finite transport batch, then retire the
   // timer if requests are closed. Host conflicts reject modal views; dock updates still apply.
   [[nodiscard]] TuiPluginUiPollResult poll(bool host_modal_conflict);
-  // Main-thread geometry guard shared by resize, poll/render, and input dispatch.
+  // TUI-thread geometry guard shared by resize, poll/render, and input dispatch.
   // Unfittable plugin surfaces invalidate their binding, resolve any modal as
   // Cancel, and are removed from the snapshot.
   [[nodiscard]] bool cancel_unfittable_surfaces();

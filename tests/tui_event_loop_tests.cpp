@@ -113,9 +113,8 @@ class MutatingTimerPair final
       : action_(action), first_(loop.member_timer(*this, &MutatingTimerPair::first_tick)), second_(loop.member_timer(*this, &MutatingTimerPair::second_tick))
   {
   }
-  // Copying would leave callbacks pointing at the wrong owner.
+  // Both registrations retain this stable callback target until their handles retire.
   MutatingTimerPair(MutatingTimerPair const&) = delete;
-  // Preserve callback identity until both handles retire.
   MutatingTimerPair& operator=(MutatingTimerPair const&) = delete;
 
   // Give both registrations one deadline so either dispatch order exercises invalidation.
@@ -164,9 +163,8 @@ class RearmingTimer final
  public:
   // Register before arming; the borrowed loop outlives this owner and its handle.
   explicit RearmingTimer(TuiEventLoop& loop) : timer_(loop.member_timer(*this, &RearmingTimer::tick)) { }
-  // A copied owner could not inherit the original callback target safely.
+  // The registration keeps this callback target stable throughout the self-rearm scenario.
   RearmingTimer(RearmingTimer const&) = delete;
-  // Keep registration identity fixed throughout the self-rearm scenario.
   RearmingTimer& operator=(RearmingTimer const&) = delete;
 
   // Test thread: begin repeating before the callback deliberately replaces its cadence.

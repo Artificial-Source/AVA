@@ -32,9 +32,8 @@ class MermaidTuiBridge final : public std::enable_shared_from_this<MermaidTuiBri
   // Application setup thread: construct a coordinator at epoch one; shared ownership is required because
   // exported callbacks keep the adapter alive. Coordinator creation failure throws core::Error.
   [[nodiscard]] static std::shared_ptr<MermaidTuiBridge> create(MermaidDisplaySettings const& settings);
-  // Preserve one synchronized application adapter and epoch authority for all exported callbacks.
+  // Exported callbacks share one stable adapter and coordinator until their references retire.
   MermaidTuiBridge(MermaidTuiBridge const&) = delete;
-  // Do not replace coordinator ownership beneath callbacks holding this adapter alive.
   MermaidTuiBridge& operator=(MermaidTuiBridge const&) = delete;
   // Final owning thread after callback references retire: idempotently shut down and join application worker
   // before member teardown.

@@ -516,9 +516,8 @@ class QueuedReleaseScope final
   explicit QueuedReleaseScope(QueuedReleaseProbe& probe) : previous_(std::exchange(queued_release_probe, &probe)) { }
   // Nested teardown cannot retain the just-finished case's stack borrow.
   ~QueuedReleaseScope() { queued_release_probe = previous_; }
-  // One restoration obligation cannot be copied.
+  // One guard restores the wrapper's borrowed probe before that probe can be destroyed.
   QueuedReleaseScope(QueuedReleaseScope const&) = delete;
-  // A live wrapper scope cannot be rebound.
   QueuedReleaseScope& operator=(QueuedReleaseScope const&) = delete;
   // Internal-linkage RAII scope deliberately opts out of generated printing.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
