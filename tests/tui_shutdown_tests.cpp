@@ -37,6 +37,8 @@ constexpr char kPrivateOuterFailure[] = "R9_PRIVATE_OUTER_COMPLETION_SENTINEL";
 enum class Fault
 {
   QueueReceipts, // Fail after join, so Session must retain a nonzero cleanup outcome.
+  QueueReturnedError, // Return a queue error during shutdown, without throwing.
+  CompletionReturnedError, // Return the same error during ordinary completion.
   StopRequest, // Fail before cancellation, leaving the worker's stop flag unchanged.
   QueuedPrompts, // Fail while releasing requests that the TUI has not displayed.
   ActivePrompt, // Fail while retiring callbacks for the displayed host prompt.
@@ -79,7 +81,7 @@ struct ShutdownProbe
   std::array<unsigned, 4> attempts{};
   // Queue finish must run exactly once after the worker has returned.
   unsigned queue_finishes = 0;
-  // Real inbox retirement must still happen after queue finish throws.
+  // Real inbox retirement must still happen after queue finish throws or returns an error.
   unsigned inbox_retirements = 0;
 
   // Release before Session destruction on any ordinary exception path.
@@ -179,6 +181,10 @@ Fault selected_fault()
   auto const* value = std::getenv("AVA_TUI_SHUTDOWN_FAULT");
   if (!value || std::string_view(value) == "queue_receipts")
     return Fault::QueueReceipts;
+  if (std::string_view(value) == "queue_returned_error")
+    return Fault::QueueReturnedError;
+  if (std::string_view(value) == "completion_returned_error")
+    return Fault::CompletionReturnedError;
   if (std::string_view(value) == "stop_request")
     return Fault::StopRequest;
   if (std::string_view(value) == "queued_prompts")
@@ -190,6 +196,18 @@ Fault selected_fault()
   if (std::string_view(value) == "outer_exception")
     return Fault::OuterException;
   throw std::runtime_error("unknown shutdown test fault");
+}
+
+// These cases reach complete() before shutdown; other workers stay held until release.
+bool uses_completion_path(Fault fault)
+{
+  return fault == Fault::OuterException || fault == Fault::CompletionReturnedError;
+}
+
+// Post-join failures return to Session; pre-join release failures must terminate.
+bool returns_after_cleanup(Fault fault)
+{
+  return fault == Fault::QueueReceipts || fault == Fault::QueueReturnedError || fault == Fault::CompletionReturnedError;
 }
 
 // Pure-value regression: composition cannot discard cleanup, signal, or I/O state.
@@ -212,13 +230,14 @@ void test_outcome()
 }
 
 // Exercise real Session shutdown with a held worker, or completion that throws
-// before cleanup also fails. The latter protects enclosing exception content.
+// before cleanup also fails. Returned queue errors must also preserve exit status 1;
+// the enclosing-exception case protects private content during fatal cleanup.
 void test_cleanup()
 {
   InputPipe input;
   ShutdownProbe probe;
   probe.fault = selected_fault();
-  if (probe.fault != Fault::QueueReceipts)
+  if (!returns_after_cleanup(probe.fault))
   {
     // Intentional fatal termination must not leave a large core artifact.
     rlimit const no_core{0, 0};
@@ -234,15 +253,17 @@ void test_cleanup()
     ava::tui::TuiActiveRunQueues queues;
     queues.finish = [state](bool stopped) -> ava::core::VoidResult {
       ++state->queue_finishes;
-      expect((stopped || state->fault == Fault::OuterException) && state->worker_returned.load(),
+      expect((stopped || uses_completion_path(state->fault)) && state->worker_returned.load(),
              "queue receipts execute after stop or ordinary completion, after worker join");
       marker("R9_QUEUE_FINISH\n");
+      if (state->fault == Fault::QueueReturnedError || state->fault == Fault::CompletionReturnedError)
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, kPrivateFailure));
       throw std::runtime_error(state->fault == Fault::OuterException ? kPrivateOuterFailure : kPrivateFailure);
     };
     state->armed = true;
-    // Let the outer-error case reach real complete(); the others enter shutdown
+    // Let completion cases reach real complete(); the others enter shutdown
     // while the worker is held, independently of provider completion timing.
-    if (state->fault != Fault::OuterException)
+    if (!uses_completion_path(state->fault))
       state->loop->request_stop();
     return queues;
   };
@@ -251,7 +272,7 @@ void test_cleanup()
     state->entered.set_value();
     // This fallback also bounds a manually launched child. The supervisor normally
     // kills/reaps a join regression first; either path is a test failure.
-    if (state->fault != Fault::OuterException && state->release_future.wait_until(ava::tests::now_plus_seconds(30)) != std::future_status::ready)
+    if (!uses_completion_path(state->fault) && state->release_future.wait_until(ava::tests::now_plus_seconds(30)) != std::future_status::ready)
       marker("R9_WORKER_FALLBACK\n");
     state->worker_returned.store(true);
     marker("R9_WORKER_RETURNED\n");
@@ -271,11 +292,14 @@ void test_cleanup()
     ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
     ReleaseWorker release(probe);
     int const status = session.run([] { return true; });
-    expect(probe.fault == Fault::QueueReceipts, "pre-join release failure must terminate instead of returning from shutdown");
-    expect(status == 1, "post-join queue finish exception returns session exit status 1");
+    expect(returns_after_cleanup(probe.fault), "pre-join release failure must terminate instead of returning from shutdown");
+    expect(status == 1, "post-join queue finish exception or returned error gives session exit status 1");
     marker(status == 1 ? "R9_SESSION_EXIT_1\n" : "R9_SESSION_WRONG_EXIT\n");
   }
-  expect(probe.attempts == std::array<unsigned, 4>{1, 1, 1, 1}, "shutdown attempts each release stage once");
+  if (probe.fault == Fault::CompletionReturnedError)
+    expect(probe.attempts == std::array<unsigned, 4>{}, "ordinary completion needs no exceptional shutdown release pass");
+  else
+    expect(probe.attempts == std::array<unsigned, 4>{1, 1, 1, 1}, "shutdown attempts each release stage once");
   expect(probe.queue_finishes == 1 && probe.inbox_retirements == 1 && probe.worker_returned.load(),
          "post-join failure still retires inbox and cannot repeat queue completion during destruction");
 }
@@ -377,15 +401,15 @@ extern "C" void shutdown_wrap_plugin(ava::tui::RuntimePluginUiCoordinator* coord
       throw std::runtime_error(kPrivateFailure);
   }
   shutdown_real_plugin(coordinator);
-  if (probe && probe->cleaning && probe->fault == Fault::QueueReceipts)
+  if (probe && probe->cleaning && (probe->fault == Fault::QueueReceipts || probe->fault == Fault::QueueReturnedError))
     probe->release_worker();
 }
 
-// Real inbox retirement proves cleanup continued beyond the thrown queue receipt.
+// Real inbox retirement proves cleanup continued beyond a throwing or returned queue error.
 extern "C" void shutdown_wrap_retire(ava::tui::ActiveRunInbox* inbox)
 {
   shutdown_real_retire(inbox);
-  if (shutdown_probe && shutdown_probe->cleaning)
+  if (shutdown_probe && (shutdown_probe->cleaning || (shutdown_probe->armed && shutdown_probe->fault == Fault::CompletionReturnedError)))
   {
     ++shutdown_probe->inbox_retirements;
     shutdown_probe->cleaning = false;

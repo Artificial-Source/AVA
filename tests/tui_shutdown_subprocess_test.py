@@ -25,6 +25,8 @@ STAGE_MARKERS = (
 # Environment selectors map only to production's fixed, non-content stage labels.
 FAULT_STAGES = {
     "queue_receipts": b"queue receipts",
+    "queue_returned_error": b"queue receipts",
+    "completion_returned_error": b"queue receipts",
     "stop_request": b"stop request",
     "queued_prompts": b"queued prompts",
     "active_prompt": b"active prompt",
@@ -69,24 +71,30 @@ def run_case(executable: Path, root: Path, fault: str) -> None:
         stderr.seek(0)
         output = stderr.read()
 
-    diagnostic = b"TUI shutdown cleanup failed at " + FAULT_STAGES[fault] + b"\n"
+    # Returned errors protect the same exit/lifetime guarantees as exceptions.
+    returned_error = fault in ("queue_returned_error", "completion_returned_error")
+    prefix = b"TUI cleanup failed at " if returned_error else b"TUI shutdown cleanup failed at "
+    diagnostic = prefix + FAULT_STAGES[fault] + b"\n"
     require(output.count(diagnostic) == 1, f"{fault}: missing or repeated fixed diagnostic: {output!r}")
     require(PRIVATE_SENTINEL not in output and OUTER_SENTINEL not in output, f"{fault}: exception content leaked to stderr")
     if fault == "outer_exception":
         require(output.count(b"R9_OUTER_EXCEPTION_ACTIVE\n") == 1,
                 f"{fault}: shutdown did not run inside the real completion catch: {output!r}")
-    else:
+    elif fault != "completion_returned_error":
         require(b"R9_WORKER_WAITING\n" in output and b"R9_WORKER_HELD\n" in output,
                 f"{fault}: child did not establish its held-worker handshake: {output!r}")
     require(b"R9_WORKER_MISSING\n" not in output and b"R9_WORKER_FALLBACK\n" not in output,
             f"{fault}: worker synchronization or fallback fired: {output!r}")
     positions = []
     for stage in STAGE_MARKERS:
+        if fault == "completion_returned_error":
+            require(stage not in output, f"{fault}: ordinary completion unexpectedly entered shutdown cleanup: {output!r}")
+            continue
         require(output.count(stage) == 1, f"{fault}: release stage missing or repeated: {stage!r}: {output!r}")
         positions.append(output.index(stage))
     require(positions == sorted(positions), f"{fault}: release stages ran out of order: {output!r}")
 
-    if fault == "queue_receipts":
+    if fault == "queue_receipts" or returned_error:
         require(process.returncode == 0, f"{fault}: ordinary regression assertions failed: {output!r}")
         require(b"R9_SESSION_EXIT_1\n" in output, f"{fault}: Session did not return exit status 1: {output!r}")
         for marker in (b"R9_WORKER_RETURNED\n", b"R9_QUEUE_FINISH\n", b"R9_INBOX_RETIRED\n"):

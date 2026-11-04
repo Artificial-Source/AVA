@@ -111,6 +111,8 @@ ActiveRunOutcome ActiveRun::exit_outcome() const
     outcome = outcome.with_terminal_write_failure();
   if (active() && operation_->terminal_signal_received)
     outcome = outcome.with_terminal_signal();
+  if (active() && operation_->completion_failed)
+    outcome = outcome.with_cleanup_failure();
   return outcome;
 }
 
@@ -485,8 +487,11 @@ void ActiveRun::finish_queues()
   {
     if (auto finished = operation_->active_queues->finish(operation_->inbox->stop_requested()); !finished)
     {
-      presentation_state_.publish_status(finished.error().format());
+      // Keep failure before preparing feedback, which may throw. Diagnostics
+      // name only the stage because the backend error can contain private text.
       operation_->completion_failed = true;
+      std::fprintf(stderr, "TUI cleanup failed at queue receipts\n");
+      presentation_state_.publish_status(finished.error().format());
     }
   }
 }
@@ -633,6 +638,10 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
       operation_->worker.get();
   });
   cleanup("queue receipts", [this] { finish_queues(); });
+  // A returned error does not enter cleanup's catch. Preserve it alongside any
+  // earlier exception failure before resetting the operation below.
+  if (operation_->completion_failed)
+    outcome = outcome.with_cleanup_failure();
   cleanup("audit retirement", [this] { prompt_coordinator_.set_audit_sink(nullptr); });
   cleanup("inbox retirement", [this] {
     if (operation_->inbox)

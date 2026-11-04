@@ -680,7 +680,7 @@ add_test(
 if(Python3_Interpreter_FOUND)
   # A fresh supervised process makes intentional shutdown termination observable
   # without risking an unbounded worker join in the ordinary test runner.
-  foreach(AVA_SHUTDOWN_FAULT IN ITEMS queue_receipts stop_request queued_prompts active_prompt plugin_waiters outer_exception)
+  foreach(AVA_SHUTDOWN_FAULT IN ITEMS queue_receipts queue_returned_error completion_returned_error stop_request queued_prompts active_prompt plugin_waiters outer_exception)
     add_test(NAME ava_tests.tui_shutdown.${AVA_SHUTDOWN_FAULT}
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_shutdown_subprocess_test.py
         --ava-tests $<TARGET_FILE:ava_tests>

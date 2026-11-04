@@ -153,7 +153,7 @@ class ActiveRun final
     bool terminal_signal_received = false;
     // Set before calling finish so exceptional shutdown never invokes it twice.
     bool queues_finished = false;
-    // Queue receipt failure requires session exit even if terminal writes still work.
+    // TUI-thread queue completion failure; both complete and shutdown return a failure exit.
     bool completion_failed = false;
     // Owned event authority and submitted text must never enter generated diagnostics.
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -203,8 +203,8 @@ class ActiveRun final
   // TUI thread after join, receipt authorization and final drain: select command
   // versus conversation output, fill missing streamed results, then render once.
   [[nodiscard]] ActiveRunOutcome settle_completion(TuiSubmitResult const& result, bool session_changed);
-  // TUI thread: capture signal and terminal failure before operation reset discards
-  // flags. With no operation, produce an ordinary close decision.
+  // TUI thread: capture signal, terminal and queue-completion failures before
+  // resetting the operation. With no operation, produce an ordinary close decision.
   [[nodiscard]] ActiveRunOutcome exit_outcome() const;
   // TUI thread after worker join: close remaining callback endpoints and clear
   // processing before destroying the per-submission value. Requires an operation.
