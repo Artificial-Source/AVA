@@ -38,6 +38,9 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+// Run isolated callable-copy and destruction regressions after the common terminal setup.
+void run_tui_prompt_callback_lock_test_case(std::string_view test_case);
+
 // Run isolated shutdown fault cases after the common terminal setup below.
 void run_tui_shutdown_test_case(std::string_view test_case);
 // Run the missing-notifier contract only under its bounded subprocess supervisor.
@@ -1889,6 +1892,8 @@ void run_tui_session_test_case(std::string_view test_case)
       break;
   if (test_case == "shutdown_outcome" || test_case == "shutdown_cleanup")
     run_tui_shutdown_test_case(test_case);
+  else if (test_case.starts_with("prompt_audit_") || test_case.starts_with("prompt_question_"))
+    run_tui_prompt_callback_lock_test_case(test_case);
   else if (test_case == "mermaid_missing_notifier")
     run_tui_mermaid_missing_notifier_test();
   else if (test_case == "turn_order")

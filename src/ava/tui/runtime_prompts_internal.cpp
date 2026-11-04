@@ -87,24 +87,31 @@ void RuntimePromptCoordinator::shutdown()
 
 void RuntimePromptCoordinator::set_audit_sink(ava::event::RuntimeEventSink sink)
 {
-  std::lock_guard<std::mutex> lock(prompt_audit_mutex_);
-  prompt_audit_sink_ = std::move(sink);
+  // Prepare ownership before locking. Empty replacement is allocation-free for
+  // shutdown; the old target is destroyed only after the swap's lock is gone.
+  auto replacement = sink ? std::make_shared<ava::event::RuntimeEventSink const>(std::move(sink)) : nullptr;
+  {
+    std::lock_guard lock(prompt_audit_mutex_);
+    prompt_audit_sink_.swap(replacement);
+  }
 }
 
 void RuntimePromptCoordinator::emit_prompt_audit(std::string status, std::string text, std::string permission_request_id, std::string tool_name,
                                                  std::string reason, std::string resolution_reason)
 {
-  auto& prompt_audit_mutex = prompt_audit_mutex_;
-  auto& prompt_audit_sink = prompt_audit_sink_;
-  ava::event::RuntimeEventSink sink;
+  // Retain the stored target without invoking its copy constructor under the
+  // lock. Replacement may proceed while this independent snapshot stays alive.
+  std::shared_ptr<ava::event::RuntimeEventSink const> retained;
   {
-    std::lock_guard<std::mutex> lock(prompt_audit_mutex);
-    sink = prompt_audit_sink;
+    std::lock_guard lock(prompt_audit_mutex_);
+    retained = prompt_audit_sink_;
   }
-  // The copied callback may publish through another synchronized owner. Release
-  // the audit lock before invoking it, so callback reentry cannot deadlock replacement.
-  if (!sink)
+  if (!retained)
     return;
+  // Preserve a fresh callable copy for each event, including mutable capture
+  // behavior. Copying, invoking and destroying arbitrary target code all occur
+  // outside the audit mutex, so each operation can safely reenter replacement.
+  auto sink = *retained;
   // Preserve the legacy empty timestamp/session metadata; do not invent IDs.
   ava::event::RuntimeEventMetadata metadata;
   ava::event::ProviderPayload payload;
@@ -872,9 +879,9 @@ void RuntimePromptCoordinator::fail_active_render()
 
 void RuntimePromptCoordinator::fail_pending_requests()
 {
-  // Queued requests have no UI callbacks and can be interrupted immediately.
-  // The TUI thread alone resolves a held request, preserving automatic answers
-  // and retiring borrowed callbacks before its waiting worker can return.
+  // Queued requests have no TUI claim, so release every waiter with its prepared
+  // interruption before destroying any stored callback. An active claim keeps
+  // its separate callback-retirement order in service/cancel.
   {
     std::lock_guard lock(prompt_request_mutex_);
     accept_prompt_requests_ = false;
@@ -885,14 +892,40 @@ void RuntimePromptCoordinator::fail_pending_requests()
       request->interrupt_queued();
     for (auto const& request : pending_question_requests_)
       request->interrupt_queued();
-    pending_permission_requests_.clear();
-    pending_question_requests_.clear();
+  }
+  // A notified worker may already have dropped its share. The queue can then
+  // own the final callback target, whose destructor is arbitrary code. Fresh
+  // locals on each pass release that ownership only after the queue unlocks.
+  // Do not replace this with default-constructed temporary deques: they allocate.
+  for (;;)
+  {
+    std::shared_ptr<PendingPermissionRequest> permission;
+    std::shared_ptr<PendingQuestionRequest> question;
+    {
+      std::lock_guard lock(prompt_request_mutex_);
+      if (!pending_permission_requests_.empty())
+      {
+        permission = std::move(pending_permission_requests_.front());
+        pending_permission_requests_.pop_front();
+      }
+      else if (!pending_question_requests_.empty())
+      {
+        question = std::move(pending_question_requests_.front());
+        pending_question_requests_.pop_front();
+      }
+      else
+        break;
+    }
   }
   wakeup_.notify();
 }
 
 RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::claim_pending_request_locked()
 {
+  // Callback destruction during cleanup may reenter TUI prompt service. Remaining
+  // canceled queue entries must only lose ownership, never acquire a new claim.
+  if (!accept_prompt_requests_)
+    return {};
   if (!pending_permission_requests_.empty())
   {
     auto request = std::move(pending_permission_requests_.front());
@@ -950,14 +983,20 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
 
 ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::request_question(ava::agent::QuestionPrompt const& prompt)
 {
-  // UI resolution can outlive queue membership; worker and UI each retain their
-  // own share until no prompt callback can refer back to the blocked worker.
-  std::shared_ptr<PendingQuestionRequest> request;
+  // Keep the closed-queue fast path: it must not copy a caller's callback.
   {
     std::lock_guard lock(prompt_request_mutex_);
     if (!accept_prompt_requests_)
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question prompt interrupted"));
-    request = std::make_shared<PendingQuestionRequest>(prompt);
+      return interrupted_question_result();
+  }
+  // QuestionPrompt carries a callable. Its copy constructor can reenter this
+  // coordinator, so construct outside the queue lock and recheck closure below.
+  // This worker share also keeps the request alive after the queue removes it.
+  auto request = std::make_shared<PendingQuestionRequest>(prompt);
+  {
+    std::lock_guard lock(prompt_request_mutex_);
+    if (!accept_prompt_requests_)
+      return interrupted_question_result();
     pending_question_requests_.push_back(request);
   }
   wakeup_.notify();

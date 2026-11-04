@@ -1,5 +1,12 @@
 # 06/02 — Ownership decisions
 
+The opening decisions and implementation checkpoints record earlier stages.
+Current behavior is described in [the TUI guide](../../docs/engineering/tui-architecture.md)
+and [the final handoff](../11-review-design-and-close-migration/refactor-handoff.md).
+The final-round sections below record later design decisions and explicit
+exceptions; they supersede earlier statements about mutable screen state,
+public frontend actions, fixture modes and callback ownership.
+
 Inputs read: 06/handoff.md and the source-verified 06/01/inventory.md. Baseline runtime remains the plan branch. These are agent-selected decisions under the user's instruction to continue without waiting for review; they are reviewable, not a claim that the maintainer has personally approved them. No unresolved question blocks implementation. Scheduling contracts are selected in07 after06’s fresh audit; see06/07/event-contracts.md.
 
 ## Selected owners and files
@@ -288,3 +295,21 @@ because the field currently has no production writer; no public setter is added.
 The test checks the populated live owner before transition and its absence after.
 Workspace discovery uses a far-future synthetic time with headroom, so real paint
 time cannot conceal an erroneous redraw deadline.
+
+## Final prompt callback lock checks
+
+The coordinator stores a shared immutable audit callable so a copied endpoint
+can survive replacement. Shared ownership is needed only while an event copies
+its callable outside the audit mutex. Invocation still uses a fresh callable
+copy, preserving mutable-capture behavior. Question construction and last-owner
+retirement also run outside the request mutex; cancellation releases all queued
+waiters first and closed queues refuse reentrant UI claims.
+
+`tests/tui_prompt_callback_lock_tests.cpp` keeps its eleven small fixture/probe
+classes local rather than adding production interfaces. This is a test file-layout
+exception. Their fields are private and their internal-linkage printers opt out.
+A scoped thread-local GNU call-through wrapper for `condition_variable::notify_one`
+waits for the real resolver futures after forwarding each notification. It proves
+the queue has the last request shares before testing callback destruction. The
+wrapper is otherwise inert. Callback probes retain their futures until the outer
+operation unlocks; bounded guards turn a regression into a failed isolated case.

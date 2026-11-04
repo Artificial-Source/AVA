@@ -317,6 +317,7 @@ set(AVA_TESTS_SOURCES
   "tui_shutdown_tests.cpp"
   "tui_mermaid_contract_tests.cpp"
   "tui_prompt_security_tests.cpp"
+  "tui_prompt_callback_lock_tests.cpp"
   "support/ScopedScreenDrawObserver.cpp"
   "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
@@ -354,6 +355,7 @@ add_executable(ava_tests ${AVA_TESTS_SOURCES})
 # Observe the real Session turn in isolated tests without adding production hooks.
 # Each wrapper forwards normally unless that test's TUI thread installs its probe.
 target_link_options(ava_tests PRIVATE
+  "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
   "LINKER:--wrap=_ZN3ava3tui20TuiTimerRegistration6repeatENSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE"
   "LINKER:--wrap=_ZN3ava3tui20TuiTimerRegistration16prepare_dispatchENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE"
   "LINKER:--wrap=_ZN3ava3tui12TuiWaitState4waitESt8optionalINSt6chrono10time_pointINS3_3_V212steady_clockENS3_8durationIlSt5ratioILl1ELl1000000000EEEEEEE"
@@ -524,6 +526,11 @@ set(AVA_TUI_COMPOSER_RENDERING_CASES
 set(AVA_TUI_SESSION_CASES
   turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
   notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question shutdown_outcome shutdown_cleanup prompt_deferred_permission prompt_deferred_question)
+# These isolated cases exercise callable copying and final-owner destruction under contention.
+set(AVA_TUI_PROMPT_CALLBACK_CASES
+  prompt_audit_replacement prompt_audit_copy prompt_question_copy
+  prompt_question_admission prompt_question_retirement)
+list(APPEND AVA_TUI_SESSION_CASES ${AVA_TUI_PROMPT_CALLBACK_CASES})
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -548,6 +555,11 @@ foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_SESSION_CASES)
   add_test(NAME ava_tests.tui_session.${AVA_TERMINAL_CASE}
     COMMAND ava_tests tui_session ${AVA_TERMINAL_CASE})
   set_tests_properties(ava_tests.tui_session.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 20 LABELS "tui;offline")
+endforeach()
+# A regressed retirement case must report both ten-second deadlock guards before
+# CTest ends it. Correct handshakes finish immediately; existing case limits stay intact.
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_PROMPT_CALLBACK_CASES)
+  set_tests_properties(ava_tests.tui_session.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 90)
 endforeach()
 foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering tui_session)
   if (AVA_TERMINAL_SUITE STREQUAL "terminal_keyboard_input_mode")

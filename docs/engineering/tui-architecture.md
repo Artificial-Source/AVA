@@ -295,6 +295,16 @@ Permission Escape is special: publish run stop first, then cancel the active
 claim. A failed deferred paint completes the active prompt with an I/O error
 before generic shutdown can answer it as interrupted.
 
+Question prompts may contain a callable that checks for an automatic answer.
+Copying or destroying that callable can run arbitrary code. The coordinator
+therefore constructs question requests outside its queue mutex, then checks
+again whether shutdown has closed the queue before inserting them. Cancellation
+interrupts all queued waiters before removing each queue-owned request outside
+the lock. Once closed, the queue refuses new UI claims, including calls made
+from a retiring callback. Audit endpoints follow the same rule: retain shared
+ownership under the audit mutex, then copy, invoke and destroy the callable
+without the mutex. Each audit event uses a fresh callable copy.
+
 Opening a host prompt and delivering its answer are synchronous rendering
 handoffs. Queuing a frame is not proof that a choice was displayed successfully.
 After opening, the coordinator discards input until the session decoder reports

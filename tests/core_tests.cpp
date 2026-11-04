@@ -235,7 +235,7 @@ constexpr std::array<std::string_view, 13> kComposerRenderingCases{"search_tail"
                                                                    "prompt_completion_wakeup_permission",
                                                                    "prompt_completion_wakeup_question"};
 // Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
-constexpr std::array<std::string_view, 19> kSessionCases{"turn_order",
+constexpr std::array<std::string_view, 24> kSessionCases{"turn_order",
                                                          "frame_deadline",
                                                          "hangup",
                                                          "descriptor_error",
@@ -253,7 +253,12 @@ constexpr std::array<std::string_view, 19> kSessionCases{"turn_order",
                                                          "shutdown_outcome",
                                                          "shutdown_cleanup",
                                                          "prompt_deferred_permission",
-                                                         "prompt_deferred_question"};
+                                                         "prompt_deferred_question",
+                                                         "prompt_audit_replacement",
+                                                         "prompt_audit_copy",
+                                                         "prompt_question_copy",
+                                                         "prompt_question_admission",
+                                                         "prompt_question_retirement"};
 
 // Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
 void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)

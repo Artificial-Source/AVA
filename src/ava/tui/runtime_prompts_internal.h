@@ -105,8 +105,9 @@ class RuntimePromptCoordinator final
   // TUI setup: return a raw-this worker callback with the same join requirement.
   // Accepted callers wait until an answer exists and the TUI releases its hold.
   [[nodiscard]] ava::agent::QuestionResolver question_resolver();
-  // TUI thread: stop accepting requests and interrupt queued waiters without allocation.
-  // A claimed request stays with the TUI; service/cancel retires its callbacks first.
+  // TUI thread: close the queue and interrupt every queued waiter before dropping
+  // queue ownership. Coordinator cleanup allocates no queue storage; arbitrary
+  // callback destruction runs unlocked. Active claims retire separately in service/cancel.
   void fail_pending_requests();
   // TUI thread: claim the next queued request before presenting it; an existing
   // claim is serviced first. Retained stop callbacks must bind stable owners that
@@ -141,8 +142,9 @@ class RuntimePromptCoordinator final
   [[nodiscard]] SearchInputPromptDispatchResult dispatch_search_input_with_prompt_precedence(std::function<bool()> const& dispatch_search_input,
                                                                                              std::function<bool()> stop_requested = {},
                                                                                              std::function<void()> before_prompt = {});
-  // Either thread: replace the audit endpoint under its own mutex. In-flight copied
-  // sinks may still run, so their captured owners need independent lifetime protection.
+  // Either thread: prepare a shared endpoint, swap ownership under its mutex,
+  // and destroy the replaced target unlocked. Empty replacement does not allocate.
+  // In-flight copies may still run; captured owners must survive those invocations.
   void set_audit_sink(ava::event::RuntimeEventSink sink);
 
   // Queued prompts, decisions and audit callbacks contain arbitrary user text.
@@ -160,18 +162,21 @@ class RuntimePromptCoordinator final
   // Worker thread: construct and enqueue under the queue lock, notify after unlock,
   // then wait without retaining the queue mutex. The coordinator must outlive the call.
   [[nodiscard]] ava::core::Result<ava::permissions::PermissionResolutionDecision> request_permission(ava::permissions::PermissionPrompt const& prompt);
-  // Worker thread: retain a request share while waiting, so removal from the queue
-  // cannot destroy the request while TUI callbacks may still borrow worker data.
+  // Worker thread: copy the callback-bearing prompt outside the queue mutex, then
+  // recheck acceptance before enqueueing. Closure during copying returns interruption.
+  // Retain a worker share until resolution and retirement of borrowed TUI callbacks.
   [[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> request_question(ava::agent::QuestionPrompt const& prompt);
-  // TUI thread with prompt_request_mutex_: prefer permission over question FIFO.
-  // Claim the request before unlocking so cancellation cannot release its worker early.
+  // TUI thread with prompt_request_mutex_: decline closed queues, otherwise prefer
+  // permission over question FIFO. Claim before unlocking so cancellation cannot
+  // release the worker early; cleanup reentry must not claim interrupted requests.
   [[nodiscard]] ClaimedPromptRequest claim_pending_request_locked();
   // TUI thread after unlocking the queue: install the held request before invoking hooks
   // or presenting the prompt. Exceptions abandon only after retiring callbacks.
   [[nodiscard]] PromptServiceOutcome start_claimed_request(ClaimedPromptRequest request, std::function<bool()> stop_requested,
                                                            std::function<void()> before_prompt);
-  // TUI thread: copy the sink under its mutex and invoke it unlocked; the sink may
-  // publish through another owner and must never reenter while this lock is held.
+  // TUI thread: retain only shared endpoint ownership under its mutex, then copy,
+  // invoke and destroy the callable unlocked. Each event gets a fresh callable
+  // copy; replacement cannot destroy the retained source during that copy.
   void emit_prompt_audit(std::string status, std::string text, std::string permission_request_id = {}, std::string tool_name = {}, std::string reason = {},
                          std::string resolution_reason = {});
   // TUI thread with a permission claim: audit and reuse an eligible session grant,
@@ -253,10 +258,12 @@ class RuntimePromptCoordinator final
   // Under queue mutex: cancellation asks TUI service to release its active request;
   // it does not interrupt that claim or overwrite an automatic answer.
   bool cancellation_pending_ = false;
-  // Protects sink replacement/copy only; callbacks always run after unlock.
+  // Serializes shared endpoint replacement/snapshots; no callable operation runs inside it.
   std::mutex prompt_audit_mutex_;
-  // Synchronized endpoint copied for audit emission; its captures must survive in-flight calls.
-  ava::event::RuntimeEventSink prompt_audit_sink_;
+  // Coordinator and in-flight snapshots share the immutable stored callable so
+  // replacement cannot destroy it during an unlocked copy. Captures protect their
+  // own owners through invocation; either thread may release the last snapshot.
+  std::shared_ptr<ava::event::RuntimeEventSink const> prompt_audit_sink_;
 
   // Only the TUI thread owns this hold. Cancellation is stored separately under
   // prompt_request_mutex_; service() checks automatic answers before handling it.
