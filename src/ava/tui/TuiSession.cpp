@@ -732,6 +732,7 @@ bool TuiSession::service_application_updates()
   {
     terminal_write_failed_ = terminal_write_failed_ || completed->terminal_write_failed();
     terminal_signal_received_ = terminal_signal_received_ || completed->terminal_signal_received();
+    cleanup_failed_ = cleanup_failed_ || completed->cleanup_failed();
     // A signal completion must exit; continuing would lose its claimed outcome.
     ASSERT(!completed->terminal_signal_received() || completed->break_loop());
     if (completed->break_loop())
@@ -857,12 +858,13 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
   auto const stopped = active_run_controller_.shutdown();
   terminal_write_failed_ = terminal_write_failed_ || stopped.terminal_write_failed();
   terminal_signal_received_ = terminal_signal_received_ || stopped.terminal_signal_received();
+  cleanup_failed_ = cleanup_failed_ || stopped.cleanup_failed();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
   prompt_coordinator_.shutdown();
   if (!before_shutdown())
     terminal_write_failed_ = true;
-  return terminal_signal_received_ ? 130 : (terminal_write_failed_ ? 1 : 0);
+  return terminal_signal_received_ ? 130 : ((terminal_write_failed_ || cleanup_failed_) ? 1 : 0);
 }
 
 } // namespace ava::tui

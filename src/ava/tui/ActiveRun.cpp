@@ -30,6 +30,8 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
+#include <cstdio>
+#include <exception>
 #include <functional>
 #include <future>
 #include <iterator>
@@ -589,49 +591,49 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
 {
   if (!active())
     return exit_outcome();
-  // A destructor must continue independent cleanup after a failed step. Use
-  // fixed stage names only: exceptions can contain prompt or command bodies.
-  auto cleanup = [](char const* stage, auto&& operation) noexcept {
+  auto outcome = exit_outcome();
+  // Cleanup runs synchronously on the TUI thread. Preserve failure even in a
+  // release build, and log only a fixed stage: exception text may contain input.
+  auto cleanup = [&outcome](char const* stage, auto&& operation) noexcept {
     try
     {
       operation();
+      return true;
     }
     catch (...)
     {
-      try
-      {
-        Dout(dc::warning, "TUI shutdown cleanup failed at " << stage);
-      }
-      catch (...)
-      {
-        // Logging must not turn a recoverable cleanup failure into termination.
-      }
+      outcome = outcome.with_cleanup_failure();
+      std::fprintf(stderr, "TUI shutdown cleanup failed at %s\n", stage);
+      return false;
     }
   };
   spinner_.stop();
-  // Stop admission and retire all callbacks borrowing worker-local data before
-  // joining. These cancellation paths avoid allocation; mutex failure remains
-  // an unrecoverable platform failure, not a promised liveness guarantee.
-  cleanup("stop request", [&] {
+  // Attempt every independent release before deciding whether joining is safe.
+  // Retire callbacks that borrow worker data, and release prompt/plugin waiters.
+  bool released = cleanup("stop request", [this] {
     if (operation_->inbox)
       static_cast<void>(operation_->inbox->request_stop());
   });
-  cleanup("queued prompts", [&] { prompt_coordinator_.fail_pending_requests(); });
-  cleanup("active prompt", [&] { static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown)); });
-  cleanup("plugin waiters", [&] { plugin_ui_.finish_submission(); });
-  cleanup("worker join", [&] {
+  released &= cleanup("queued prompts", [this] { prompt_coordinator_.fail_pending_requests(); });
+  released &= cleanup("active prompt", [this] { static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown)); });
+  released &= cleanup("plugin waiters", [this] { plugin_ui_.finish_submission(); });
+  // A failed release can leave a worker blocked forever. After logging and
+  // recording failure, terminate instead of joining that worker. Terminate
+  // outside the cleanup catch, after its caught exception has been discarded.
+  if (!released)
+    std::terminate();
+  cleanup("worker join", [this] {
     if (operation_->worker.valid())
       operation_->worker.get();
   });
-  cleanup("queue receipts", [&] { finish_queues(); });
-  cleanup("audit retirement", [&] { prompt_coordinator_.set_audit_sink(nullptr); });
-  cleanup("inbox retirement", [&] {
+  cleanup("queue receipts", [this] { finish_queues(); });
+  cleanup("audit retirement", [this] { prompt_coordinator_.set_audit_sink(nullptr); });
+  cleanup("inbox retirement", [this] {
     if (operation_->inbox)
       operation_->inbox->retire();
   });
-  // Each local value is now independent of worker execution. Do not call the
-  // normal retirement sequence again: it would repeat fallible cleanup steps.
-  auto const outcome = exit_outcome();
+  // The worker has returned, so later cleanup failures cannot strand it. Retain
+  // the failure in the value returned to Session before destroying per-run state.
   presentation_state_.publish_processing(false);
   operation_.reset();
   return outcome;

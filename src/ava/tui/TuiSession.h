@@ -171,6 +171,8 @@ class TuiSession final
   bool terminal_write_failed_ = false;
   // TUI-thread latch for a claimed signal that requests exit, preserving status 130 through cleanup.
   bool terminal_signal_received_ = false;
+  // TUI-thread cleanup failure copied from completed or stopped runs; survives their reset.
+  bool cleanup_failed_ = false;
   // TUI-thread terminal-closure latch; once set, only drain buffered input and retire work.
   bool terminal_closing_ = false;
   // The session's one TUI-thread editor; declared before every owner that borrows draft state.

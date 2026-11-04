@@ -93,8 +93,9 @@ class ActiveRun final
   // TUI thread: report runnable mailboxes; a claimed prompt deliberately pauses
   // provider projection, so its backlog alone must not keep the loop spinning.
   [[nodiscard]] bool has_pending_updates();
-  // TUI thread: best-effort teardown continues after individual cleanup failures.
-  // Stop and retire callbacks before joining, then capture exit flags before reset.
+  // TUI thread: release worker waits before joining, then retire per-run state.
+  // A release failure logs fixed metadata and terminates, because joining could
+  // block forever. Later failures are recorded in the returned cleanup outcome.
   ActiveRunOutcome shutdown() noexcept;
 
   // Active input calls this on the TUI thread with an operation present.

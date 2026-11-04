@@ -310,6 +310,7 @@ set(AVA_TESTS_SOURCES
   "tui_branch_summary_timer_tests.cpp"
   "tui_runtime_owner_tests.cpp"
   "tui_session_tests.cpp"
+  "tui_shutdown_tests.cpp"
   "tui_prompt_security_tests.cpp"
   "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
@@ -347,6 +348,12 @@ add_executable(ava_tests ${AVA_TESTS_SOURCES})
 # Observe the real Session turn in isolated tests without adding production hooks.
 # Each wrapper forwards normally unless that test's TUI thread installs its probe.
 target_link_options(ava_tests PRIVATE
+  "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinator11attach_loopERNS0_12TuiEventLoopE"
+  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox12request_stopEv"
+  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator21fail_pending_requestsEv"
+  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13cancel_activeENS0_18PromptCancelReasonE"
+  "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinator17finish_submissionEv"
+  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox6retireEv"
   "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop11service_dueENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE"
   "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop4waitENS0_11TuiWaitModeE"
   "LINKER:--wrap=_ZNK3ava3tui12TuiEventLoop19notification_failedEv"
@@ -504,7 +511,7 @@ set(AVA_TUI_COMPOSER_RENDERING_CASES
   message_navigation_empty display_reload_poll display_reload_overview prompt_security paste_security)
 set(AVA_TUI_SESSION_CASES
   turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
-  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question)
+  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question shutdown_outcome shutdown_cleanup)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -670,6 +677,17 @@ add_test(
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_package_manager_deferred.cmake)
 
 if(Python3_Interpreter_FOUND)
+  # A fresh supervised process makes intentional shutdown termination observable
+  # without risking an unbounded worker join in the ordinary test runner.
+  foreach(AVA_SHUTDOWN_FAULT IN ITEMS queue_receipts stop_request queued_prompts active_prompt plugin_waiters)
+    add_test(NAME ava_tests.tui_shutdown.${AVA_SHUTDOWN_FAULT}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_shutdown_subprocess_test.py
+        --ava-tests $<TARGET_FILE:ava_tests>
+        --root ${CMAKE_CURRENT_BINARY_DIR}/tui-shutdown
+        --fault ${AVA_SHUTDOWN_FAULT})
+    set_tests_properties(ava_tests.tui_shutdown.${AVA_SHUTDOWN_FAULT}
+      PROPERTIES TIMEOUT 20 LABELS "tui;offline" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endforeach()
   add_test(
     NAME ava_cli.isolated_env
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_isolated_env_test.py inject

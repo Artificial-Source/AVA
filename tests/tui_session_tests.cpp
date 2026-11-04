@@ -37,6 +37,9 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+// Run isolated shutdown fault cases after the common terminal setup below.
+void run_tui_shutdown_test_case(std::string_view test_case);
+
 // Direct access to the real latch lets the fault test inspect it without adding
 // an artificial Session control marker to its phase observations.
 extern "C" bool session_real_notification(ava::tui::TuiEventLoop const*) noexcept asm("__real__ZNK3ava3tui12TuiEventLoop19notification_failedEv");
@@ -1578,7 +1581,9 @@ void run_tui_session_test_case(std::string_view test_case)
   for (std::size_t remaining = 0; remaining < 256; ++remaining)
     if (ava::tui::runtime_input::poll_curses_input().kind == InputPollKind::Empty)
       break;
-  if (test_case == "turn_order")
+  if (test_case == "shutdown_outcome" || test_case == "shutdown_cleanup")
+    run_tui_shutdown_test_case(test_case);
+  else if (test_case == "turn_order")
     test_turn_order();
   else if (test_case == "close_after_submit")
     test_close_after_submit_drains_input();
