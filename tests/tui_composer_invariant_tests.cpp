@@ -1,5 +1,6 @@
 // Protect draft validity at edit boundaries and publication before the next render.
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
@@ -288,11 +289,12 @@ void test_interrupt_clear_publishes_before_caller_work()
 {
   ava::tui::TuiRuntimeOptions options;
   options.file_references = {{.value = "alpha.txt", .description = "Alpha"}, {.value = "alpine.txt", .description = "Alpine"}};
-  // All borrowers die before their preceding owners. This case performs no rendering or timer attachment.
+  // All borrowers die before their preceding owners. This case registers real timers but does not paint or dispatch them.
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  tui_test_support::TuiEventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, ava::core::Application::instance().terminal_context());

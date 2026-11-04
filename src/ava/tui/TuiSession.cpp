@@ -54,8 +54,8 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       presentation_state_(&frontend, initial_status_line),
       command_output_(presentation_state_),
       attachments_(presentation_state_),
-      plugin_ui_(presentation_state_),
-      renderer_(&frontend, presentation_state_, draft_state_, &terminal_context),
+      plugin_ui_(loop_, presentation_state_),
+      renderer_(loop_, &frontend, presentation_state_, draft_state_, &terminal_context),
       navigation_(frontend, presentation_state_, draft_state_, renderer_),
       selectors_(presentation_state_),
       selector_input_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
@@ -95,8 +95,6 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
   // Some members registered timers during initialization; the remaining owners
   // attach here. Registration never dispatches callbacks. Only run() services
   // due timers, after every member and attachment is ready at a stable address.
-  renderer_.attach_loop(loop_);
-  plugin_ui_.attach_loop(loop_);
   // Share an origin so the 500 ms reload deadline adds no wake between control
   // ticks. Each timer still skips missed ticks independently after a slow turn.
   auto const control_epoch = TuiTimer::Clock::now();

@@ -274,16 +274,14 @@ void run_tui_active_input_route_tests()
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
-  renderer.attach_loop(loop);
+  ava::tui::RuntimeRenderer renderer(loop, frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
   ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, terminal_context);
   ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, loop);
   ava::tui::RuntimePromptStashController stash(presentation, composer, renderer, selectors, frontend.frontend()->key_bindings(), attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
-  plugin_ui.attach_loop(loop);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(loop, presentation);
   ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, composer, renderer, selectors, sessions, attachments);
   actions.attach_loop(loop);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);

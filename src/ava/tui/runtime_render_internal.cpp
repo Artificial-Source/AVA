@@ -109,28 +109,20 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer, terminal::Context* terminal_context)
+RuntimeRenderer::RuntimeRenderer(TuiEventLoop& loop, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer,
+                                 terminal::Context* terminal_context)
     : presentation_(presentation), draft_state_(composer), terminal_context_(terminal_context), transcript_(presentation, composer), frontend_(frontend)
 {
-}
-
-void RuntimeRenderer::attach_loop(TuiEventLoop& loop)
-{
-  // Attach this renderer exactly once, before dispatch, to a loop that outlives it.
-  ASSERT(!loop_attached_);
-  if (loop_attached_)
-    return;
+  // Register while all callback targets are alive. The caller services the loop
+  // only after construction; partially constructed handles retire on failure.
   frame_timer_ = loop.member_timer(*this, &RuntimeRenderer::frame_due);
   indicator_timer_ = loop.member_timer(*this, &RuntimeRenderer::indicator_due);
   autoscroll_timer_ = loop.member_timer(*this, &RuntimeRenderer::autoscroll_due);
-  loop_attached_ = true;
   synchronize_timers();
 }
 
 void RuntimeRenderer::synchronize_timers()
 {
-  if (!loop_attached_)
-    return;
   // A failed terminal write retires every render-related callback; deadlines must not keep waking a closing
   // session.
   if (frame_scheduler_.failed())
@@ -399,8 +391,6 @@ void RuntimeRenderer::reset_for_session_transition()
 }
 bool RuntimeRenderer::render()
 {
-  if (!loop_attached_)
-    return paint_for_handoff();
   if (frame_scheduler_.failed())
     return false;
   frame_scheduler_.request(FrameRenderKind::Full, std::chrono::steady_clock::now());
@@ -502,10 +492,6 @@ bool RuntimeRenderer::request_render(FrameRenderKind kind)
 
 bool RuntimeRenderer::paint_ready_frame()
 {
-  // Attach the production renderer before calling the session's end-of-batch paint hook.
-  ASSERT(loop_attached_);
-  if (!loop_attached_)
-    return false;
   // View operations are deliberately independent of the renderer. Reconcile
   // their absolute deadlines here even when this batch needs no actual paint.
   synchronize_timers();

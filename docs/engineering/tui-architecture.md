@@ -129,6 +129,14 @@ view it will restore. `TuiSession::handle_selector_input` applies that result
 after selector cleanup and before requesting paint. Session success and error
 both reconcile the backend's committed identity before displaying feedback.
 
+`RuntimeRenderer` and `RuntimePluginUiCoordinator` require the session's event
+loop in their constructors. Their timer registrations are ready before input or
+worker endpoints can use them. Tests also supply a real loop, whose pipe and
+registry outlive the feature. `render()` requests a batch paint;
+`paint_ready_frame()` performs eligible work, and `paint_for_handoff()` supplies
+synchronous output when a prompt or terminal handoff requires it. Plugin expiry
+comes from its timer; polling only consumes the resulting transport updates.
+
 ## Debug output
 
 Print TUI owners on the TUI thread. Generated printers show reference and raw

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
@@ -205,7 +206,8 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  tui_test_support::TuiEventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -261,7 +263,8 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
+  tui_test_support::TuiEventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -388,7 +391,7 @@ struct B5AttachedMermaidFixture
   // Composer is borrowed by renderer and navigation.
   ava::tui::Composer composer;
   // Renderer batches invalidation while attached to the loop.
-  ava::tui::RuntimeRenderer renderer{frontend.frontend(), presentation, composer};
+  ava::tui::RuntimeRenderer renderer{loop, frontend.frontend(), presentation, composer};
   // Navigation shares the stable presentation and renderer owners.
   ava::tui::RuntimeNavigationController navigation{*frontend.frontend(), presentation, composer, renderer};
   // Selectors precede the search owner that borrows them.
@@ -398,10 +401,9 @@ struct B5AttachedMermaidFixture
   // Controller is destroyed first and unregisters its producer notification.
   ava::tui::RuntimeMermaidPresentationController controller{presentation, renderer, search, b5_bridge(state)};
 
-  // Attach renderer before Mermaid and install one finalized eligible block.
+  // Renderer is already registered; attach Mermaid and install one eligible block.
   B5AttachedMermaidFixture()
   {
-    renderer.attach_loop(loop);
     controller.attach_loop(loop);
     presentation.finish_session_transition("b5-attached");
     auto display = frontend.frontend()->display_settings_snapshot();

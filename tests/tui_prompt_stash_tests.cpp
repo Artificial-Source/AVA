@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
@@ -149,7 +150,8 @@ void test_prompt_stash_runtime_controller()
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  tui_test_support::TuiEventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::SelectorHost active_list(presentation);
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings, attachments);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);

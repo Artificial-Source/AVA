@@ -1,5 +1,6 @@
 // Protect Composer dispatch precedence and completion feedback through the production handler seams.
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
@@ -41,11 +42,12 @@ ava::tui::TuiRuntimeOptions file_options(std::vector<ava::tui::FileReferenceItem
 // Owns synchronous TUI-thread dispatch collaborators; declaration order keeps borrowed owners alive through teardown.
 struct ComposerDispatchFixture
 {
-  // Assemble the real presentation, editor, renderer, and navigation owners without starting a terminal loop.
+  // Assemble real editor/render owners with timer registrations; this fixture does
+  // not run a session or start a worker.
   explicit ComposerDispatchFixture(ava::tui::TuiRuntimeOptions options = {})
       : frontend(std::move(options)),
         presentation(frontend.frontend(), {}),
-        renderer(frontend.frontend(), presentation, composer),
+        renderer(event_loop.loop(), frontend.frontend(), presentation, composer),
         navigation(*frontend.frontend(), presentation, composer, renderer)
   {
   }
@@ -68,6 +70,8 @@ struct ComposerDispatchFixture
     return renderer.completion_cache();
   }
 
+  // Timer registry and descriptors outlive the renderer that registers callbacks.
+  tui_test_support::TuiEventLoopFixture event_loop;
   // Owns the canonical backend and frontend for the complete fixture lifetime.
   tui_test_support::TuiFrontEndFixture frontend;
   // Holds the screen projection borrowed by the renderer and navigation controller.

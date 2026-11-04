@@ -79,12 +79,11 @@ class SummaryTimerFixture final
       : descriptors_(open_pipe()),
         loop_(descriptors_.first.get()),
         presentation_(frontend_.frontend(), {}),
-        renderer_(frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
+        renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         summary_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context())
   {
     presentation_.publish_dimensions(100, 24);
-    renderer_.attach_loop(loop_);
     summary_.attach_loop(loop_);
     frontend_.hooks().on_branch_summary_prepare = [this](std::string_view source) {
       expect(source == "second", "timer fixture prepares the selected session identity");

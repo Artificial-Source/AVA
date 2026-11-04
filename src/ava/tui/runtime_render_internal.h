@@ -147,21 +147,21 @@ enum class TranscriptUpdateMode
 class RuntimeRenderer final
 {
  public:
-  // TUI thread: borrow earlier-lived presentation, Composer, frontend, and optional Context. Rendering helpers
-  // accept a null frontend; a supplied Context applies cursor settings.
-  RuntimeRenderer(TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state, terminal::Context* terminal_context = nullptr);
+  // TUI thread: register timers in the earlier-lived loop, then borrow presentation,
+  // Composer, frontend and optional Context. Registration never dispatches callbacks.
+  // A null frontend is supported; a supplied Context applies cursor settings.
+  RuntimeRenderer(TuiEventLoop& loop, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state,
+                  terminal::Context* terminal_context = nullptr);
   // Not copyable or movable: timer callbacks hold this address, and one owner manages caches and frames.
   RuntimeRenderer(RuntimeRenderer const&) = delete;
   RuntimeRenderer& operator=(RuntimeRenderer const&) = delete;
   RuntimeRenderer(RuntimeRenderer&&) = delete;
   RuntimeRenderer& operator=(RuntimeRenderer&&) = delete;
 
-  // Attach once before live dispatch. The loop outlives this nonmoving owner.
-  void attach_loop(TuiEventLoop& loop);
-  // TUI thread: before attachment paint synchronously for startup; after attachment request an urgent full
-  // paint that thaws detached layout at the batch boundary.
+  // TUI thread: request an urgent full paint that thaws detached layout at the
+  // batch boundary. Use paint_for_handoff only when synchronous output is required.
   [[nodiscard]] bool render();
-  // TUI thread: coalesce invalidation and synchronize deadlines without painting, including before attachment.
+  // TUI thread: coalesce invalidation and synchronize deadlines without painting.
   // Return false only for an already latched paint failure.
   [[nodiscard]] bool request_render(FrameRenderKind kind = FrameRenderKind::Full);
   // Composition calls this after each application/input batch and before wait.
@@ -299,9 +299,6 @@ class RuntimeRenderer final
   // TUI-thread pending frame kind and deadline; timer callbacks wake the loop while the paint stage consumes
   // work.
   FrameScheduler frame_scheduler_;
-  // TUI-thread one-way attachment marker; render() switches from startup painting to batched invalidation once
-  // set.
-  bool loop_attached_ = false;
   // TUI-thread urgent full-frame request set by render(); the next batch paint synchronizes detached layout.
   // Ordinary scheduled paints preserve compatible frozen rows; footer requests never force synchronization.
   bool pending_thaw_ = false;

@@ -187,14 +187,13 @@ struct PromptSecurityFixture
   // Initialize the Application terminal exactly as the existing rendering fixtures do.
   PromptSecurityFixture()
       : presentation(frontend.frontend(), {}),
-        renderer(frontend.frontend(), presentation, composer),
+        renderer(event_loop.loop(), frontend.frontend(), presentation, composer),
         coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop())
   {
     static_cast<void>(ava::core::Application::instance().terminal_context());
     static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
     presentation.finish_session_transition("prompt-security-session");
     presentation.publish_dimensions(120, 24);
-    renderer.attach_loop(event_loop.loop());
     coordinator.open_admission();
   }
 

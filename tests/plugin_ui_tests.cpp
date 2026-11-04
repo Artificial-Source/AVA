@@ -1,5 +1,6 @@
 // Verify plugin UI validation, lifetime, interaction, and sanitized terminal rendering.
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/process_group_test_support.h"
 #include "tests/support/process_test_support.h"
@@ -1089,7 +1090,8 @@ void test_external_disable_revokes_active_ui_command()
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  tui_test_support::TuiEventLoopFixture coordinator_loop;
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.loop(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 12);
   auto const artificial_start = std::chrono::steady_clock::now() - ava::tui::kTuiPluginUiInvocationDeadline + std::chrono::seconds(3);
@@ -1293,7 +1295,8 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  tui_test_support::TuiEventLoopFixture coordinator_loop;
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.loop(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 24);
   ava::tui::Composer snapshot_composer;
@@ -1382,8 +1385,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
-  coordinator.attach_loop(loop);
+  ava::tui::RuntimePluginUiCoordinator coordinator(loop, snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 10);
   ava::tui::Composer snapshot_composer;
@@ -1473,7 +1475,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   loop.service_due(endpoint->deadline);
   bool const cancellation_latched = coordinator.deadline_reached(std::chrono::steady_clock::time_point::min());
   auto const deadline_poll = coordinator.poll(false);
-  auto const repeated_poll = coordinator.poll(false, endpoint->deadline);
+  auto const repeated_poll = coordinator.poll(false);
   bool const deadline_ready = deadline_reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
   if (!deadline_ready)
     coordinator.cancel_active();
@@ -1523,7 +1525,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
       tui_test_support::TuiFrontEndFixture snapshot_frontend;
       ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
       auto const& snapshot = snapshot_presentation.screen();
-      ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+      tui_test_support::TuiEventLoopFixture coordinator_loop;
+      ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.loop(), snapshot_presentation);
       snapshot_presentation.publish_dimensions(80, snapshot.height);
       snapshot_presentation.publish_dimensions(snapshot.width, height);
       auto const invocation_id = std::string(invocation_prefix) + std::to_string(height);
@@ -1573,7 +1576,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
         tui_test_support::TuiFrontEndFixture snapshot_frontend;
         ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
         auto const& snapshot = snapshot_presentation.screen();
-        ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+        tui_test_support::TuiEventLoopFixture coordinator_loop;
+        ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.loop(), snapshot_presentation);
         snapshot_presentation.publish_dimensions(160, snapshot.height);
         snapshot_presentation.publish_dimensions(snapshot.width, height);
         auto const invocation_id = "wide_narrow_" + std::to_string(height) + std::string(suffix);
@@ -1683,7 +1687,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
   tui_test_support::TuiFrontEndFixture queued_snapshot_frontend;
   ava::tui::RuntimePresentationState queued_snapshot_presentation(queued_snapshot_frontend.frontend(), {});
   auto const& queued_snapshot = queued_snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_snapshot_presentation);
+  tui_test_support::TuiEventLoopFixture queued_coordinator_loop;
+  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_coordinator_loop.loop(), queued_snapshot_presentation);
   queued_snapshot_presentation.publish_dimensions(160, queued_snapshot.height);
   queued_snapshot_presentation.publish_dimensions(queued_snapshot.width, 12);
   auto queued_endpoint = queued_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "queued_resize");
@@ -1723,7 +1728,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
   tui_test_support::TuiFrontEndFixture visible_snapshot_frontend;
   ava::tui::RuntimePresentationState visible_snapshot_presentation(visible_snapshot_frontend.frontend(), {});
   auto const& visible_snapshot = visible_snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_snapshot_presentation);
+  tui_test_support::TuiEventLoopFixture visible_coordinator_loop;
+  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_coordinator_loop.loop(), visible_snapshot_presentation);
   visible_snapshot_presentation.publish_dimensions(160, visible_snapshot.height);
   visible_snapshot_presentation.publish_dimensions(visible_snapshot.width, 12);
   auto visible_endpoint = visible_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "visible_resize");
@@ -1764,7 +1770,8 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator coordinator(snapshot_presentation);
+  tui_test_support::TuiEventLoopFixture coordinator_loop;
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.loop(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 24);
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "close_race");
@@ -1783,45 +1790,56 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
   bool swapped_nonempty = false;
   bool release_poll = false;
   auto const deadline = ava::tests::now_plus_seconds(10);
-  std::future<ava::tui::TuiPluginUiPollResult> polling;
+  // Only this thread may poll presentation and cancel its registered TUI timer.
+  // The worker borrows the local synchronization until its bounded join, and owns
+  // its copied endpoint/binding. It closes transport while poll is paused outside the lock.
+  auto closer =
+      std::async(std::launch::async, [endpoint = *endpoint, binding, mutex = &mutex, cv = &cv, swapped = &swapped_nonempty, release = &release_poll, deadline] {
+        bool observed = false;
+        {
+          std::unique_lock lock(*mutex);
+          observed = cv->wait_until(lock, deadline, [swapped, release] { return *swapped || *release; }) && *swapped;
+        }
+        if (observed)
+          endpoint.close(binding);
+        {
+          std::lock_guard lock(*mutex);
+          *release = true;
+        }
+        cv->notify_all();
+        return observed;
+      });
+  ava::tui::TuiPluginUiPollResult poll_result;
   while (!swapped_nonempty && std::chrono::steady_clock::now() < deadline)
   {
-    bool hook_ran = false;
-    coordinator.set_after_queue_swap_for_test([&](std::size_t count) {
-      std::unique_lock lock(mutex);
-      hook_ran = true;
-      swapped_nonempty = count != 0;
-      cv.notify_all();
-      if (swapped_nonempty)
-        cv.wait(lock, [&] { return release_poll; });
+    // The hook is consumed by this poll on the TUI thread. Even if close regresses,
+    // the deadline releases the hook so cleanup cannot wait forever on this gate.
+    coordinator.set_after_queue_swap_for_test([mutex = &mutex, cv = &cv, swapped = &swapped_nonempty, release = &release_poll, deadline](std::size_t count) {
+      std::unique_lock lock(*mutex);
+      *swapped = count != 0;
+      cv->notify_all();
+      if (*swapped)
+        static_cast<void>(cv->wait_until(lock, deadline, [release] { return *release; }));
     });
-    polling = std::async(std::launch::async, [&] { return coordinator.poll(false); });
-    {
-      std::unique_lock lock(mutex);
-      static_cast<void>(cv.wait_until(lock, deadline, [&] { return hook_ran; }));
-    }
+    poll_result = coordinator.poll(false);
     if (!swapped_nonempty)
-    {
-      static_cast<void>(polling.get());
       std::this_thread::yield();
-    }
   }
-
-  bool close_returned = false;
-  if (swapped_nonempty)
+  // Stop the closer even on a producer timeout, before destroying its borrowed gate.
   {
-    endpoint->close(binding);
-    close_returned = true;
-    {
-      std::lock_guard lock(mutex);
-      release_poll = true;
-    }
-    cv.notify_all();
+    std::lock_guard lock(mutex);
+    release_poll = true;
   }
-  auto const poll_result = polling.valid() ? polling.get() : ava::tui::TuiPluginUiPollResult{};
+  cv.notify_all();
+  if (!ava::tests::require(closer.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready,
+                           "close/poll race worker retires before its synchronization state"))
+    std::abort();
+  bool const close_returned = closer.get();
   if (!close_returned)
     coordinator.cancel_active();
   auto const reply_ready = reply.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready;
+  if (!ava::tests::require(reply_ready, "invalidated plugin reply completes before its future is joined"))
+    std::abort();
   auto const action = reply.get();
   static_cast<void>(coordinator.poll(false));
   ava::tests::expect_all("close after dequeue but before apply cancels the record without publishing or acknowledging a surface",

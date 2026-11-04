@@ -45,14 +45,13 @@ class FeatureOwnerFixture final
       : descriptors_(open_pipe()),
         loop_(descriptors_.first.get()),
         presentation_(frontend_.frontend(), {}),
-        renderer_(frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
+        renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         selector_input_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context()),
         summary_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context())
   {
     auto const [width, height] = ava::tui::terminal_size();
     presentation_.publish_dimensions(width, height);
-    renderer_.attach_loop(loop_);
     summary_.attach_loop(loop_);
   }
 

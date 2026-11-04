@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
@@ -364,7 +365,8 @@ void run_tui_transcript_selection_tests()
     auto const expired = indicator.expire_if_due(started + std::chrono::milliseconds(1000)) && !indicator.visible();
     ava::tui::RuntimePresentationState streaming_snapshot_presentation(frontend.frontend(), {});
     ava::tui::Composer streaming_draft;
-    ava::tui::RuntimeRenderer streaming_renderer(frontend.frontend(), streaming_snapshot_presentation, streaming_draft);
+    tui_test_support::TuiEventLoopFixture event_loop;
+    ava::tui::RuntimeRenderer streaming_renderer(event_loop.loop(), frontend.frontend(), streaming_snapshot_presentation, streaming_draft);
     change_transcript(streaming_snapshot_presentation, [&](auto& transcript) {
       transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "streaming", .stream_id = "live", .append_only_stream = true});
     });

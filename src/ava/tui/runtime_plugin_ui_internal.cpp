@@ -258,8 +258,9 @@ std::optional<std::pair<std::string, std::string>> direct_foreground_plugin_bind
 class RuntimePluginUiCoordinatorState final
 {
  public:
-  // TUI thread, before accepting requests: store only the weak loop wake handle.
-  bool attach_wakeup(TuiWakeup wakeup);
+  // TUI thread before endpoints exist: retain a weak loop wake handle. Workers
+  // can later notify without extending loop or coordinator lifetime.
+  explicit RuntimePluginUiCoordinatorState(TuiWakeup wakeup) : wakeup_(std::move(wakeup)) { }
   // TUI thread: cancel old waiters, then open one new generation until its deadline.
   [[nodiscard]] std::optional<std::uint64_t> begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline);
   // Worker thread with shared ownership: wait for a screen-data update acknowledgement,
@@ -272,8 +273,7 @@ class RuntimePluginUiCoordinatorState final
   void expire(std::chrono::steady_clock::time_point now);
   // TUI thread: drain one finite batch. Check the submission, update screen data and
   // send Ack under one lock so cancellation cannot race those steps. Ack is not a paint.
-  [[nodiscard]] TuiPluginUiPollResult poll(RuntimePresentationState& presentation_, bool host_modal_conflict, std::chrono::steady_clock::time_point now,
-                                           bool observe_deadline);
+  [[nodiscard]] TuiPluginUiPollResult poll(RuntimePresentationState& presentation_, bool host_modal_conflict);
   // TUI thread: retire modal ownership before completing the worker outside the lock.
   void resolve_visible(TuiPluginUiReply reply);
   // Either thread: observe cancellation/deadline without touching screen data.
@@ -355,17 +355,6 @@ bool clear_plugin_surface(RuntimePresentationState& presentation_, std::optional
   return changed;
 }
 } // namespace
-
-bool RuntimePluginUiCoordinatorState::attach_wakeup(TuiWakeup wakeup)
-{
-  std::lock_guard lock(mutex_);
-  // Install scheduling before begin, and never reattach a shut-down coordinator.
-  ASSERT(!active_ && !shutdown_);
-  if (active_ || shutdown_)
-    return false;
-  wakeup_ = std::move(wakeup);
-  return true;
-}
 
 std::optional<std::uint64_t> RuntimePluginUiCoordinatorState::begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline)
 {
@@ -510,8 +499,7 @@ void RuntimePluginUiCoordinatorState::expire(std::chrono::steady_clock::time_poi
   wakeup.notify();
 }
 
-TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationState& presentation_, bool host_modal_conflict,
-                                                            std::chrono::steady_clock::time_point now, bool observe_deadline)
+TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationState& presentation_, bool host_modal_conflict)
 {
   auto const& snapshot = presentation_.screen();
   TuiPluginUiPollResult result;
@@ -519,14 +507,6 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
   std::function<void(std::size_t)> after_queue_swap;
   {
     std::lock_guard lock(mutex_);
-    // Standalone fixtures retain explicit-clock servicing. An attached owner
-    // receives expiry only from its registered member timer.
-    if (observe_deadline && active_ && now >= deadline_)
-    {
-      deadline_expired_ = true;
-      expiry_report_pending_ = true;
-      cancel_locked();
-    }
     if (std::exchange(clear_pending_, false))
       result.changed = clear_plugin_surface(presentation_) || result.changed;
     result.deadline_expired = std::exchange(expiry_report_pending_, false);
@@ -727,24 +707,17 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(RuntimePresentationState& presentation)
-    : presentation_(presentation), state_(std::make_shared<RuntimePluginUiCoordinatorState>()), runtime_token_(std::make_shared<int const>(1))
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiEventLoop& loop, RuntimePresentationState& presentation)
+    : presentation_(presentation),
+      state_(std::make_shared<RuntimePluginUiCoordinatorState>(loop.wakeup())),
+      runtime_token_(std::make_shared<int const>(1)),
+      deadline_timer_(loop.member_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
 {
 }
 
 RuntimePluginUiCoordinator::~RuntimePluginUiCoordinator()
 {
   shutdown();
-}
-
-void RuntimePluginUiCoordinator::attach_loop(TuiEventLoop& loop)
-{
-  // Attach this stable coordinator exactly once, before opening a submission.
-  ASSERT(!loop_attached_);
-  if (loop_attached_ || !state_->attach_wakeup(loop.wakeup()))
-    return;
-  deadline_timer_ = loop.member_timer(*state_, &RuntimePluginUiCoordinatorState::expire);
-  loop_attached_ = true;
 }
 
 std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(std::string_view submitted, std::string invocation_id,
@@ -806,10 +779,10 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
   return true;
 }
 
-TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now)
+TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict)
 {
   auto const geometry_changed = cancel_unfittable_surfaces();
-  auto result = state_->poll(presentation_, host_modal_conflict, now, !loop_attached_);
+  auto result = state_->poll(presentation_, host_modal_conflict);
   result.changed = result.changed || geometry_changed;
   if (!state_->active())
     deadline_timer_.cancel();

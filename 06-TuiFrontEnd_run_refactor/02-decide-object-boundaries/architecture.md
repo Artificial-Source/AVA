@@ -200,3 +200,21 @@ caller on the same thread. They own no registration, worker or coordinated
 mutable state. Public aggregate initialization makes each handoff explicit;
 private fields with matching setters would add no invariant. Feature owners
 remain private and expose operations instead of writable state.
+
+
+## Final R16 loop construction
+
+Renderer and plugin UI timers register during construction with a required
+`TuiEventLoop&`. Their test-only unattached modes and `loop_attached_` flags are
+gone. All timer handles retire before their loop and callback targets.
+Plugin transport receives only the loop's weak wake handle; an endpoint still
+cannot retain a screen owner. Poll no longer expires a request by an injected
+clock; tests drive the same expiry callback through the real scheduler.
+
+`TuiEventLoopFixture` is test infrastructure in its matching support header. Its
+private pipe and loop keep production lifetime rules executable in fixtures
+whose ncurses input is a regular file. Its generated-printing exception is that
+test-support headers are outside production printer discovery. Existing local
+fixture classes remain local; no new production adapter or test mode is added.
+The close/poll race keeps poll on the TUI thread and invalidates the endpoint on
+a joined worker, with a deadline on both the race gate and teardown.

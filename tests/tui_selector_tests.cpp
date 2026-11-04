@@ -1905,8 +1905,7 @@ void run_tui_selector_tests()
   if (!ava::tests::require(discovery_fd.get() >= 0, "workspace discovery has a pollable descriptor"))
     return;
   ava::tui::TuiEventLoop discovery_loop(discovery_fd.get());
-  ava::tui::RuntimeRenderer workspace_renderer(controller_frontend.frontend(), controller_presentation, controller_composer);
-  workspace_renderer.attach_loop(discovery_loop);
+  ava::tui::RuntimeRenderer workspace_renderer(discovery_loop, controller_frontend.frontend(), controller_presentation, controller_composer);
   ava::tui::SelectorHost selectors(controller_presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
   workspace_controller.attach_loop(discovery_loop, workspace_renderer);

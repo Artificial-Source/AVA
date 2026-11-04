@@ -59,7 +59,7 @@ struct ShutdownProbe
 {
   // Scenario chosen before Session or its worker exists.
   Fault fault = Fault::QueueReceipts;
-  // Borrowed loop captured during real attachment; invalid after Session dies.
+  // Borrowed loop captured during real construction; invalid after Session dies.
   ava::tui::TuiEventLoop* loop = nullptr;
   // Single worker publication proving the worker reached its held wait.
   std::promise<void> entered;
@@ -249,7 +249,7 @@ void test_cleanup()
   // before frontend/Session and survives their callbacks and the complete worker join.
   frontend.hooks().create_active_run_queues = [state = &probe](ava::event::EventEnvelopeSink) {
     if (!state->loop)
-      throw std::runtime_error("shutdown test did not observe loop attachment");
+      throw std::runtime_error("shutdown test did not observe coordinator construction");
     ava::tui::TuiActiveRunQueues queues;
     queues.finish = [state](bool stopped) -> ava::core::VoidResult {
       ++state->queue_finishes;
@@ -307,8 +307,8 @@ void test_cleanup()
 } // namespace
 
 // Original external method symbols; GNU ld resolves these past the test wrappers.
-extern "C" void shutdown_real_attach(ava::tui::RuntimePluginUiCoordinator*,
-                                     ava::tui::TuiEventLoop&) asm("__real__ZN3ava3tui26RuntimePluginUiCoordinator11attach_loopERNS0_12TuiEventLoopE");
+extern "C" void shutdown_real_construct_plugin(ava::tui::RuntimePluginUiCoordinator*, ava::tui::TuiEventLoop&, ava::tui::RuntimePresentationState&) asm(
+    "__real__ZN3ava3tui26RuntimePluginUiCoordinatorC1ERNS0_12TuiEventLoopERNS0_24RuntimePresentationStateE");
 extern "C" bool shutdown_real_stop(ava::tui::ActiveRunInbox*) asm("__real__ZN3ava3tui14ActiveRunInbox12request_stopEv");
 extern "C" void shutdown_real_queued(ava::tui::RuntimePromptCoordinator*) asm("__real__ZN3ava3tui24RuntimePromptCoordinator21fail_pending_requestsEv");
 extern "C" ava::tui::PromptServiceOutcome shutdown_real_active(ava::tui::RuntimePromptCoordinator*, ava::tui::PromptCancelReason) asm(
@@ -317,8 +317,8 @@ extern "C" void shutdown_real_plugin(ava::tui::RuntimePluginUiCoordinator*) asm(
 extern "C" void shutdown_real_retire(ava::tui::ActiveRunInbox*) asm("__real__ZN3ava3tui14ActiveRunInbox6retireEv");
 
 // Wrapped names keep the usual C++ method ABI, including the explicit this pointer.
-extern "C" void shutdown_wrap_attach(ava::tui::RuntimePluginUiCoordinator*,
-                                     ava::tui::TuiEventLoop&) asm("__wrap__ZN3ava3tui26RuntimePluginUiCoordinator11attach_loopERNS0_12TuiEventLoopE");
+extern "C" void shutdown_wrap_construct_plugin(ava::tui::RuntimePluginUiCoordinator*, ava::tui::TuiEventLoop&, ava::tui::RuntimePresentationState&) asm(
+    "__wrap__ZN3ava3tui26RuntimePluginUiCoordinatorC1ERNS0_12TuiEventLoopERNS0_24RuntimePresentationStateE");
 extern "C" bool shutdown_wrap_stop(ava::tui::ActiveRunInbox*) asm("__wrap__ZN3ava3tui14ActiveRunInbox12request_stopEv");
 extern "C" void shutdown_wrap_queued(ava::tui::RuntimePromptCoordinator*) asm("__wrap__ZN3ava3tui24RuntimePromptCoordinator21fail_pending_requestsEv");
 extern "C" ava::tui::PromptServiceOutcome shutdown_wrap_active(ava::tui::RuntimePromptCoordinator*, ava::tui::PromptCancelReason) asm(
@@ -327,9 +327,10 @@ extern "C" void shutdown_wrap_plugin(ava::tui::RuntimePluginUiCoordinator*) asm(
 extern "C" void shutdown_wrap_retire(ava::tui::ActiveRunInbox*) asm("__wrap__ZN3ava3tui14ActiveRunInbox6retireEv");
 
 // Observe real construction, then borrow the public loop for this scoped test.
-extern "C" void shutdown_wrap_attach(ava::tui::RuntimePluginUiCoordinator* coordinator, ava::tui::TuiEventLoop& loop)
+extern "C" void shutdown_wrap_construct_plugin(ava::tui::RuntimePluginUiCoordinator* coordinator, ava::tui::TuiEventLoop& loop,
+                                               ava::tui::RuntimePresentationState& presentation)
 {
-  shutdown_real_attach(coordinator, loop);
+  shutdown_real_construct_plugin(coordinator, loop, presentation);
   if (shutdown_probe)
     shutdown_probe->loop = &loop;
 }

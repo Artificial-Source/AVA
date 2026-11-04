@@ -273,7 +273,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   presentation.publish_visible_sidebar(presentation.sidebar());
   EventLoopFixture event_loop;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController controller(presentation, renderer, navigation, active_select_list);
@@ -311,7 +311,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 
   // Drive the same timer and paint path as the session. Attach after the initial
   // modal handoff so its cached underlying geometry is already established.
-  renderer.attach_loop(event_loop.loop());
+
   auto const scheduled = renderer.request_render(ava::tui::FrameRenderKind::Full);
   // The real frame timer must wake this wait. A separate fallback makes a lost
   // registration fail the test instead of blocking forever.
@@ -401,7 +401,8 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.publish_composer(draft_state);
   draft_state.extend_selection_to(3);
   presentation.publish_composer(draft_state);
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  EventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
@@ -524,7 +525,7 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.publish_command_output(std::nullopt);
   active_select_list.close();
   draft_state.reset_draft();
-  bool const selection_frame = renderer.render();
+  bool const selection_frame = renderer.render() && renderer.paint_ready_frame();
   auto const selection_geometry = ava::tui::detail::transcript_body_screen_geometry(presentation.screen());
   auto const& selection_layout = renderer.prepared_transcript_layout().layout;
   auto const selection_row = selection_layout.content_starts.empty() ? std::size_t{1} : selection_layout.content_starts.front() + 1;
@@ -661,7 +662,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   presentation.publish_run_progress(preloaded_run);
   ava::tui::Composer draft_state;
   draft_state.record_submission("OLD HISTORY PROMPT");
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
@@ -670,7 +671,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.loop(), presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
@@ -786,7 +787,7 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::tui::PendingAttachments attachments(presentation);
       ava::tui::TuiSessionGrantRegistry grants;
       ava::tui::Composer draft_state;
-      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+      ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
       ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
       ava::tui::SelectorHost active_select_list(presentation);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
@@ -795,7 +796,7 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
       ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                           attachments);
-      ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
+      ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.loop(), presentation);
       ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                           attachments);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
@@ -922,14 +923,13 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
-  renderer.attach_loop(loop);
+  ava::tui::RuntimeRenderer renderer(loop, frontend.frontend(), presentation, composer);
+
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
   ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, loop);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
-  plugin_ui.attach_loop(loop);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(loop, presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
   ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
@@ -1061,8 +1061,8 @@ bool test_attached_prompt_render_failure_returns_io()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
-  renderer.attach_loop(event_loop.loop());
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
+
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   bool passed = true;
@@ -1106,8 +1106,8 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer);
-  renderer.attach_loop(event_loop.loop());
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
+
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   bool passed = true;
@@ -1164,7 +1164,7 @@ bool test_atomic_search_input_prompt_precedence()
   presentation.finish_session_transition("search_prompt_race");
   presentation.publish_dimensions(80, 12);
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::TuiSessionGrantRegistry session_grants;
   ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, session_grants, renderer, event_loop.loop());
   coordinator.open_admission();
@@ -1356,7 +1356,8 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   ava::tui::Composer draft_state;
   draft_state.replace_draft("NAV-DRAFT-KEEP");
   presentation.publish_composer(draft_state);
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  EventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
 
   navigation.jump_to_bottom("live tail");
@@ -1519,9 +1520,9 @@ bool test_detached_completion_publish_preserves_numbered_window()
   ava::tui::Composer draft_state;
   draft_state.replace_draft("STREAM-DRAFT-KEEP");
   presentation.publish_composer(draft_state);
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
 
-  if (!renderer.render())
+  if (!renderer.render() || !renderer.paint_ready_frame())
     return false;
 
   auto const [width, height] = ava::tui::terminal_size();
@@ -1533,7 +1534,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   renderer.navigate_transcript(std::min(max_scroll, renderer.transcript().scroll_offset() + 3));
   presentation.publish_transcript_scroll(renderer.transcript().scroll_offset());
   presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
-  if (!renderer.render())
+  if (!renderer.render() || !renderer.paint_ready_frame())
     return false;
 
   auto const detached_scroll = renderer.transcript().scroll_offset();
@@ -1551,7 +1552,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
   presentation.publish_run_frame(false);
 
-  auto const rendered = renderer.render();
+  auto const rendered = renderer.render() && renderer.paint_ready_frame();
   auto const after_numbers = numbered_window(renderer.painted_frame().surfaces);
   auto const surfaces_joined = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces);
   auto const hint_visible =
@@ -1562,7 +1563,6 @@ bool test_detached_completion_publish_preserves_numbered_window()
                       presentation.screen().transcript_scroll_offset == renderer.transcript().scroll_offset() && renderer.transcript().scroll_offset() > 0 &&
                       draft_state.draft().text == draft_before && presentation.screen().input == draft_before && !presentation.screen().processing;
 
-  renderer.attach_loop(event_loop.loop());
   auto const before_attached_paint = renderer.painted_frame().surfaces;
   renderer.show_live_tail(ava::tui::LiveTailReason::Navigation);
   static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"}));
@@ -1616,7 +1616,8 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
     ava::tui::Composer draft_state;
     draft_state.replace_draft("FIT-DRAFT-KEEP");
     presentation.publish_composer(draft_state);
-    ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+    EventLoopFixture event_loop;
+    ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
     ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
 
     auto const draft_before = draft_state.draft().text;
@@ -1856,8 +1857,8 @@ bool test_settings_archive_restores_preview_and_selector_storage()
   auto& terminal = ava::core::Application::instance().terminal_context();
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer, &terminal);
-  renderer.attach_loop(event_loop.loop());
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer, &terminal);
+
   auto display = frontend.frontend()->display_settings_snapshot();
   display.show_images = true;
   presentation.apply_local_display_settings(display);
@@ -1941,7 +1942,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
@@ -1982,7 +1983,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
                                     !presentation.screen().show_images;
 
   // Final paint happens only after overlay staging (controller did not final-render on Applied).
-  bool const rendered = renderer.render();
+  bool const rendered = renderer.render() && renderer.paint_ready_frame();
 
   preview.cancel();
   presentation.publish_display_preview(preview);
@@ -2033,7 +2034,7 @@ bool test_display_reload_shares_control_deadlines()
     ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
     ava::tui::PendingAttachments attachments(presentation);
     ava::tui::Composer draft;
-    ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft);
+    ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft);
     ava::tui::SelectorHost selectors(presentation);
     ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, ava::core::Application::instance().terminal_context());
     ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, draft, renderer, selectors, sessions, attachments);
@@ -2120,7 +2121,8 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   presentation.refresh_after_backend_action();
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  EventLoopFixture event_loop;
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
@@ -2146,7 +2148,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
                                             [](auto const& item) { return item.text.find("display theme auto-reloaded") != std::string::npos; });
 
   // Outer idle path still owns settings-preview rebase + single final paint after Applied.
-  bool const rendered = renderer.render();
+  bool const rendered = renderer.render() && renderer.paint_ready_frame();
 
   bool const closed = action_controller.toggle_startup_overview();
   bool const reopened = action_controller.toggle_startup_overview();
@@ -2302,7 +2304,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
@@ -2311,7 +2313,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.loop());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.loop(), presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
@@ -5193,7 +5195,8 @@ void run_tui_composer_rendering_tests_part_4()
       presentation.initialize_startup_overview(*frontend.frontend(), overview);
       active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       ava::tui::Composer draft_state;
-      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
+      EventLoopFixture event_loop;
+      ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
       ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active);

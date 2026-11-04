@@ -52,8 +52,9 @@ enum class TuiPluginUiInputResult
 class RuntimePluginUiCoordinator final
 {
  public:
-  // TUI-thread owner; the borrowed presentation state outlives this coordinator.
-  explicit RuntimePluginUiCoordinator(RuntimePresentationState& presentation);
+  // TUI thread: register expiry before accepting requests. The loop and presentation
+  // outlive this coordinator; workers receive only a weak wake handle and transport.
+  RuntimePluginUiCoordinator(TuiEventLoop& loop, RuntimePresentationState& presentation);
   // TUI thread: close transport and clear surfaces before its members are destroyed.
   // Retained endpoints may survive; their weak locks can only reach closed transport.
   ~RuntimePluginUiCoordinator();
@@ -62,17 +63,13 @@ class RuntimePluginUiCoordinator final
   RuntimePluginUiCoordinator(RuntimePluginUiCoordinator const&) = delete;
   RuntimePluginUiCoordinator& operator=(RuntimePluginUiCoordinator const&) = delete;
 
-  // Attach once on the TUI thread before accepting requests. The loop outlives
-  // this owner; worker endpoints receive only its weak wake capability.
-  void attach_loop(TuiEventLoop& loop);
-
   // TUI thread: admit only a canonical direct plugin command with invocation identity.
   // Returned endpoints bind this generation and deadline but retain no screen owner.
   [[nodiscard]] std::optional<TuiPluginUiEndpoint> begin_submission(std::string_view submitted, std::string invocation_id,
                                                                     std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
   // TUI thread: validate geometry, consume a finite transport batch, then retire the
   // timer if requests are closed. Host conflicts reject modal views; dock updates still apply.
-  [[nodiscard]] TuiPluginUiPollResult poll(bool host_modal_conflict, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+  [[nodiscard]] TuiPluginUiPollResult poll(bool host_modal_conflict);
   // Main-thread geometry guard shared by resize, poll/render, and input dispatch.
   // Unfittable plugin surfaces invalidate their binding, resolve any modal as
   // Cancel, and are removed from the snapshot.
@@ -115,8 +112,6 @@ class RuntimePluginUiCoordinator final
   // Coordinator's shared identity is exposed weakly in endpoints. Reset at shutdown
   // invalidates lifetime checks without keeping the coordinator or screen data alive.
   std::shared_ptr<void const> runtime_token_;
-  // TUI-only attachment state selects registered expiry versus explicit-clock fixture polling.
-  bool loop_attached_ = false;
   // TUI registration targets the retained state; cancel before shutdown releases state.
   TuiTimer deadline_timer_;
 };
