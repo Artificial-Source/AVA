@@ -101,8 +101,9 @@ one stable `TuiSession`; frontend and Context outlive it. Session members are
 ordered by dependency. Features and their timer handles are destroyed before
 the collaborators they borrow. Session owns composition and transitions, while
 Composer, selectors, SettingsDialog, CommandOutput and ActiveRunInput own their
-feature algorithms. Existing frontend action callbacks form the public action
-boundary; protected configuration storage is not exposed through friendship.
+feature algorithms. Five narrow feature interfaces expose the required actions while the concrete
+frontend declarations stay protected. Their virtual calls retain application
+validation; protected configuration storage is not exposed through friendship.
 
 RuntimePresentationState owns screen/sidebar projections. Features publish
 coherent changes through named operations; readers borrow const views only on

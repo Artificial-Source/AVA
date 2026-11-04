@@ -247,7 +247,7 @@ std::optional<bool> ActiveRunInput::run_active_command()
     }
     else
     {
-      presentation_state_.apply_local_display_settings(frontend_, std::move(applied->settings));
+      presentation_state_.apply_local_display_settings(std::move(applied->settings));
       presentation_state_.publish_local_completion(submitted_command, std::move(applied->output));
     }
     return renderer_.request_render();

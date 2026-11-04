@@ -16,7 +16,6 @@ class RuntimeRenderer;
 class TranscriptSearchController;
 class RuntimeSubagentWorkspaceController;
 class SelectorHost;
-class TuiFrontEnd;
 
 // Session owns transition ordering shared by idle selection and active-run completion.
 // Every member is TUI-thread-only and borrows owners that outlive this coordinator.
@@ -38,9 +37,10 @@ class SessionTransitionCoordinator final
   // TUI thread: receive the backend's committed identity, then clean old presentation
   // before storing a different identity. Return true after cleanup; false preserves local state.
   [[nodiscard]] bool apply(std::string committed_session_id);
-  // TUI thread: apply committed identity cleanup, then refresh frontend facts even
-  // when identity matched. Return whether session-specific cleanup was necessary.
-  [[nodiscard]] bool apply_and_refresh(TuiFrontEnd& frontend, std::string committed_session_id);
+  // TUI thread: apply committed identity cleanup, then refresh facts through
+  // presentation's own frontend even when identity matched. Return whether
+  // session-specific cleanup was necessary; no frontend borrow changes owners.
+  [[nodiscard]] bool apply_and_refresh(std::string committed_session_id);
 
   // Generated reference printing reports type/address without traversing owners.
   AVA_DEBUG_PRINT_MEMBERS_ON

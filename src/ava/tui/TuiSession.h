@@ -31,6 +31,7 @@
 #include "ava/debug/print_members_on.h"
 
 namespace ava::tui {
+class TuiSessionActions;
 
 // TuiFrontEnd::run owns this object for one interactive session on the TUI thread.
 // The application-owned frontend and initialized terminal Context outlive it.
@@ -149,8 +150,9 @@ class TuiSession final
 
   // Declaration order is dependency order for owned collaborators. Reverse
   // destruction keeps each borrowed owner alive until its borrowers have retired.
-  // Application frontend borrowed until destruction; backend validation stays in its implementation.
-  TuiFrontEnd& frontend_;
+  // Borrowed narrow session actions; the application frontend outlives this
+  // session and its joined worker. Backend validation stays in its implementation.
+  TuiSessionActions& frontend_;
   // External initialized terminal, borrowed for TUI-thread input/output until destruction.
   terminal::Context& terminal_context_;
   // TUI-thread waiter and timer registry, constructed before every registered feature.

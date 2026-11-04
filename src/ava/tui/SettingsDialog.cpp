@@ -3,13 +3,14 @@
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SettingsDialog.h"
-#include "TuiFrontEnd.h"
+#include "SettingsDialogActions.h"
 #include "runtime_state_internal.h"
 #include "terminal/Context.h"
 
 namespace ava::tui {
 
-SettingsDialog::SettingsDialog(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, terminal::Context& terminal_context)
+SettingsDialog::SettingsDialog(SettingsDialogActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors,
+                               terminal::Context& terminal_context)
     : frontend_(frontend), presentation_state_(presentation), selectors_(selectors), terminal_context_(terminal_context)
 {
 }
@@ -226,7 +227,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     }
     else
     {
-      presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
+      presentation_state_.apply_local_key_bindings(std::move(*reloaded));
       presentation_state_.publish_status("keybindings reloaded");
     }
   }
@@ -269,7 +270,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     if (selected)
     {
       auto status = selected->status;
-      presentation_state_.apply_local_display_settings(frontend_, std::move(selected->settings));
+      presentation_state_.apply_local_display_settings(std::move(selected->settings));
       begin_baseline();
       rebuild(navigation_.section, current_query, current_selected);
       presentation_state_.publish_status(status.empty() ? std::string("display setting saved") : std::move(status));
@@ -290,7 +291,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     auto selected = frontend_.on_settings_selected(confirm_token);
     if (selected)
     {
-      presentation_state_.refresh_after_backend_action(frontend_);
+      presentation_state_.refresh_after_backend_action();
       auto status = std::move(*selected);
       presentation_state_.publish_status(status);
       begin_baseline();

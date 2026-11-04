@@ -7,6 +7,8 @@
 
 namespace ava::tui {
 
+class SessionSelectorActions;
+
 class SelectorHost;
 class RuntimeRenderer;
 namespace terminal {
@@ -22,7 +24,7 @@ class SessionSelector final
  public:
   // TUI thread: start without archive intent; open loads the current catalog later.
   // Borrowed session collaborators outlive this selector and each synchronous frontend call.
-  SessionSelector(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
+  SessionSelector(SessionSelectorActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                   terminal::Context& terminal_context);
   // Not copyable: one stable selector owns the two-press archive confirmation.
   SessionSelector(SessionSelector const&) = delete;
@@ -57,8 +59,8 @@ class SessionSelector final
   // and row identity, followed by the action status.
   void preserve_selection(SelectListInputResult const& input, SelectListView view, std::string status);
 
-  // Borrowed from Session; boundary for catalogs and persistent session operations.
-  TuiFrontEnd& frontend_;
+  // Frontend-owned narrow session interface; outlives this TUI-thread selector.
+  SessionSelectorActions& frontend_;
   // Borrowed from Session; display state; receives transient status updates.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole list storage; selected row pointers expire when it changes.

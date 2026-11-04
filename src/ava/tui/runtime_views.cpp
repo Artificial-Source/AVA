@@ -1,7 +1,7 @@
 // Builds owned settings, prompt, summary, and overview views on the TUI thread.
 #include "sys.h"
 #include "ava/agent/question.h"
-#include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/SettingsDialogActions.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
@@ -205,13 +205,13 @@ void populate_display_section(SelectListView& view, ComposerSnapshot const& snap
   add_settings_action_row(view, std::string(kSettingsDraftThinking), "Thinking blocks", snapshot.thinking_visible ? "visible" : "hidden");
 }
 
-void populate_models_section(TuiFrontEnd* frontend, SelectListView& view)
+// TUI thread while building Model rows: consume the frontend's three label refreshes
+// here only, then use their owned copies so no model-storage borrow escapes.
+void populate_models_section(SettingsDialogActions* frontend, SelectListView& view)
 {
-  auto provider = frontend->model_selection().provider_refresh();
-  auto model = frontend->model_selection().model_refresh();
-  auto reasoning = frontend->model_selection().reasoning_refresh();
-  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider.value) + "/" + value_or_unknown(model.value));
-  add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", reasoning.value == "unknown" ? "default" : reasoning.value);
+  auto const [provider, model, reasoning] = frontend->read_settings_model_labels();
+  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider) + "/" + value_or_unknown(model));
+  add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", reasoning == "unknown" ? "default" : reasoning);
   add_settings_action_row(view, std::string(kSettingsOpenScopedModels), "Cycle scope", "Ctrl+P");
 }
 
@@ -620,7 +620,9 @@ SelectListView build_settings_root_select_list_view(std::string footer_hint)
   return view;
 }
 
-SelectListView build_settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+// TUI thread: build one section; only Model consumes label refresh flags. The
+// interface must be nonnull for that section and is borrowed only during this call.
+SelectListView build_settings_select_list_view_for_section(SettingsDialogActions* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
                                                            TuiKeyBindings const& bindings, std::string footer_hint)
 {
   switch (section)
@@ -1141,7 +1143,9 @@ SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, TuiKe
   return runtime_views::build_settings_root_select_list_view(std::move(footer_hint));
 }
 
-SelectListView settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+// TUI thread: return owned section rows through the narrow Settings interface.
+// Other sections do not read model labels; no frontend reference enters the result.
+SelectListView settings_select_list_view_for_section(SettingsDialogActions* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
                                                      TuiKeyBindings const& bindings, std::string footer_hint)
 {
   return runtime_views::build_settings_select_list_view_for_section(frontend, section, snapshot, bindings, std::move(footer_hint));

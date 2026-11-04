@@ -214,7 +214,7 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   auto display = frontend.frontend()->display_settings_snapshot();
   display.mermaid_enabled = true;
   display.mermaid_config_epoch = 1;
-  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  presentation.apply_local_display_settings(display);
   presentation.publish_transcript({{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}});
   auto const generation = snapshot.transcript_generation;
   auto pending = controller.service();
@@ -232,7 +232,7 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
 
   auto fallback_before = ava::tui::detail::render_transcript_layout(snapshot.transcript, 60);
   display.mermaid_config_epoch = 2;
-  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  presentation.apply_local_display_settings(display);
   state->completions.push_back({.identity = request.identity, .config_epoch = 1, .accepted = true, .text = "stale result"});
   auto reconfigured = controller.service();
   auto fallback_after = ava::tui::detail::render_transcript_layout(snapshot.transcript, 60, ava::tui::ToolPresentation::Rich, true, false,
@@ -270,7 +270,7 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
   auto display = frontend.frontend()->display_settings_snapshot();
   display.mermaid_enabled = true;
   display.mermaid_config_epoch = 1;
-  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  presentation.apply_local_display_settings(display);
   for (std::size_t index = 0; index < 40; ++index)
     static_cast<void>(presentation.append_transcript({.label = "ava", .text = "```mermaid\ngraph TD; A" + std::to_string(index) + "-->B\n```"}));
   static_cast<void>(controller.service());
@@ -407,7 +407,7 @@ struct B5AttachedMermaidFixture
     auto display = frontend.frontend()->display_settings_snapshot();
     display.mermaid_enabled = true;
     display.mermaid_config_epoch = 1;
-    presentation.apply_local_display_settings(*frontend.frontend(), display);
+    presentation.apply_local_display_settings(display);
     presentation.publish_transcript({{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}});
   }
 

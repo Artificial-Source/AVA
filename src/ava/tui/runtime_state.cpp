@@ -221,21 +221,23 @@ void RuntimePresentationState::apply_boundary_data(TuiFrontEnd const& frontend, 
     sidebar_.todos = std::move(*reads.todos);
 }
 
-void RuntimePresentationState::refresh_after_backend_action(TuiFrontEnd& frontend)
+void RuntimePresentationState::refresh_after_backend_action()
 {
-  apply_boundary_data(frontend, read_boundary_data(frontend));
+  apply_boundary_data(*frontend_, read_boundary_data(*frontend_));
 }
 
-void RuntimePresentationState::apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings)
+void RuntimePresentationState::apply_local_key_bindings(TuiKeyBindings bindings)
 {
-  frontend.key_bindings() = std::move(bindings);
+  auto& frontend = *frontend_;
+  frontend.apply_key_bindings(std::move(bindings));
   snapshot_.active_run_hint = runtime_views::active_run_hint_for(frontend.key_bindings());
   refresh_local_palette_hints(snapshot_, frontend.key_bindings());
   refresh_local_overview_hints(snapshot_, frontend);
 }
 
-void RuntimePresentationState::apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings)
+void RuntimePresentationState::apply_local_display_settings(TuiLocalDisplaySettings settings)
 {
+  auto const& frontend = *frontend_;
   snapshot_.custom_themes = std::move(settings.custom_themes);
   snapshot_.show_images = settings.show_images;
   snapshot_.image_width_cells = settings.image_width_cells;

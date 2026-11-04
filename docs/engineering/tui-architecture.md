@@ -44,6 +44,27 @@ The application owns the concrete `TuiFrontEnd` and `terminal::Context`.
 signal policy, performs the startup background-color probe, and constructs a
 `TuiSession`. The frontend and context outlive that session.
 
+Five features borrow small interfaces implemented by the same frontend. Their
+backend-action declarations remain protected on `TuiFrontEnd`; virtual calls
+through the feature interface reach the existing application validation.
+
+| Feature | Frontend interface |
+| --- | --- |
+| `TuiSession` | [TuiSessionActions](../../src/ava/tui/TuiSessionActions.h): mode, committed identity, diagram callbacks and bindings. |
+| `SettingsDialog` | [SettingsDialogActions](../../src/ava/tui/SettingsDialogActions.h): Settings actions, trust, bindings and copied model labels. |
+| `SessionSelector` | [SessionSelectorActions](../../src/ava/tui/SessionSelectorActions.h): session catalogs, archive and open actions. |
+| `BranchSummaryOperation` | [BranchSummaryActions](../../src/ava/tui/BranchSummaryActions.h): summary snapshots, generation-checked commands and bindings. |
+| `SelectorInputController` | [SelectorInputActions](../../src/ava/tui/SelectorInputActions.h): model and user-turn choices, plus bindings. |
+
+These interfaces make feature dependencies explicit. A deliberate public-base
+cast remains possible; the interfaces do not replace backend validation.
+`TuiSession` accepts the full frontend only to construct its collaborators, then
+retains its narrow interface. The presentation owner keeps its own frontend and
+uses it for coordinated display updates. Apply a new binding map through
+`RuntimePresentationState::apply_local_key_bindings` so dispatch and displayed
+hints agree. The frontend replaces the map's value while preserving the object
+address borrowed by existing features.
+
 The session constructs its members in dependency order. A feature's borrowed
 references point to earlier members. C++ destroys members in reverse order,
 so timer handles, input callbacks and features disappear before the objects

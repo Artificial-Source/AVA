@@ -65,7 +65,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings(), attachments_),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
       prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, loop_, &selectors_),
-      mermaid_presentation_(presentation_state_, renderer_, transcript_search_, frontend.mermaid_bridge()),
+      mermaid_presentation_(presentation_state_, renderer_, transcript_search_, frontend_.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_, attachments_),
       subagent_workspace_(frontend, presentation_state_, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_, attachments_,
@@ -158,7 +158,7 @@ RuntimeSubmitDisposition TuiSession::handle_submit(std::optional<std::string> fo
 void TuiSession::settle_opened_session(std::string status)
 {
   auto committed_session_id = frontend_.read_committed_session_id();
-  static_cast<void>(session_transitions_.apply_and_refresh(frontend_, std::move(committed_session_id)));
+  static_cast<void>(session_transitions_.apply_and_refresh(std::move(committed_session_id)));
   if (!status.empty())
     presentation_state_.publish_local_status(std::move(status));
 }

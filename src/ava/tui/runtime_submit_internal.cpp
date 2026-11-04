@@ -262,7 +262,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
           if (auto reloaded = frontend_.on_reload_display_settings())
           {
             auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
-            presentation_state_.apply_local_display_settings(frontend_, std::move(reloaded->settings));
+            presentation_state_.apply_local_display_settings(std::move(reloaded->settings));
             presentation_state_.publish_local_status(std::move(status));
           }
           else
@@ -273,7 +273,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         else if (auto reloaded = frontend_.on_reload_key_bindings())
         {
-          presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
+          presentation_state_.apply_local_key_bindings(std::move(*reloaded));
           presentation_state_.publish_local_status("keybindings reloaded");
         }
         else
@@ -299,7 +299,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       else
       {
-        presentation_state_.apply_local_display_settings(frontend_, std::move(applied->settings));
+        presentation_state_.apply_local_display_settings(std::move(applied->settings));
         presentation_state_.publish_local_completion(submitted, std::move(applied->output));
       }
       if (!renderer_.render())

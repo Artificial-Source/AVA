@@ -56,7 +56,7 @@ struct ComposerDispatchFixture
     auto bindings = ava::tui::parse_key_bindings_json(json);
     if (!ava::tests::require(bindings.has_value(), "composer dispatch fixture accepts its keybinding configuration"))
       return false;
-    presentation.apply_local_key_bindings(*frontend.frontend(), std::move(*bindings));
+    presentation.apply_local_key_bindings(std::move(*bindings));
     return true;
   }
 
@@ -176,7 +176,7 @@ void test_space_bound_to_submit_does_not_insert()
              fixture.composer.draft().text == "ready" && fixture.composer.draft().cursor == 5,
          "composer Space submit requests submission and preserves draft content and cursor");
 
-  fixture.presentation.apply_local_key_bindings(*fixture.frontend.frontend(), ava::tui::default_key_bindings());
+  fixture.presentation.apply_local_key_bindings(ava::tui::default_key_bindings());
   auto const inserted = fixture.composer.handle_key(input, fixture.frontend.frontend()->key_bindings(), fixture.presentation.screen(), fixture.completions(),
                                                     false, ComposerInputPhase::Tail);
   expect(inserted.handled && inserted.request == ComposerInputRequest::None && fixture.composer.draft().text == "ready ",

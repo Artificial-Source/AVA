@@ -292,7 +292,7 @@ void test_selector_scoped_keys_and_query_classification()
   for (auto& [action, assigned] : bindings.bindings)
     if (action == ava::tui::TuiAction::ModelsSave)
       assigned = {Key::F9};
-  fixture.presentation().apply_local_key_bindings(*fixture.frontend().frontend(), std::move(bindings));
+  fixture.presentation().apply_local_key_bindings(std::move(bindings));
   expect(fixture.input().classify({.event = {.key = Key::F9}, .text = {}}).action == SelectListInputAction::ModelsSave,
          "scoped-model classification uses the current custom save binding");
   fixture.selectors().open(ActiveSelectList::Hotkeys, selector_view());

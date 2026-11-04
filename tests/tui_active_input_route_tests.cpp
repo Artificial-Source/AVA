@@ -60,13 +60,12 @@ std::pair<ava::core::UniqueFd, ava::core::UniqueFd> make_active_input_pipe()
 }
 
 // Publish only the bindings under test through the same local update boundary used by the session.
-void bind_active_input_actions(ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                               std::initializer_list<std::pair<TuiAction, Key>> actions)
+void bind_active_input_actions(ava::tui::RuntimePresentationState& presentation, std::initializer_list<std::pair<TuiAction, Key>> actions)
 {
   ava::tui::TuiKeyBindings bindings;
   for (auto const& [action, key] : actions)
     bindings.bindings.emplace_back(action, std::vector<Key>{key});
-  presentation.apply_local_key_bindings(frontend, std::move(bindings));
+  presentation.apply_local_key_bindings(std::move(bindings));
 }
 
 // Restore a clean editor boundary and publish the draft before the controller sees its next event.
@@ -87,10 +86,9 @@ TuiInputOutcome dispatch_active_key(ava::tui::ActiveRunInput& input, Key key)
 }
 
 // A failed selection copy consumes a shared DeleteBackward binding and preserves the selected bytes.
-void test_active_copy_failure_precedes_delete(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend,
-                                              ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer)
+void test_active_copy_failure_precedes_delete(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer)
 {
-  bind_active_input_actions(frontend, presentation, {{TuiAction::CopySelection, Key::F6}, {TuiAction::DeleteBackward, Key::F6}});
+  bind_active_input_actions(presentation, {{TuiAction::CopySelection, Key::F6}, {TuiAction::DeleteBackward, Key::F6}});
   std::string const text(ava::tui::runtime_transcript::kMaxTerminalClipboardTextBytes + 1, 'x');
   seed_active_input_draft(composer, presentation, text);
   composer.begin_pointer_selection(0, true);
@@ -113,10 +111,9 @@ void test_active_copy_failure_precedes_delete(ava::tui::ActiveRunInput& input, a
 }
 
 // Interrupt clears and publishes a nonempty draft before the shared ordinary ClearInput stage runs.
-void test_active_interrupt_precedes_clear(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                          ava::tui::Composer& composer)
+void test_active_interrupt_precedes_clear(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer)
 {
-  bind_active_input_actions(frontend, presentation, {{TuiAction::Interrupt, Key::F6}, {TuiAction::ClearInput, Key::F6}});
+  bind_active_input_actions(presentation, {{TuiAction::Interrupt, Key::F6}, {TuiAction::ClearInput, Key::F6}});
   seed_active_input_draft(composer, presentation, "interrupt draft", 4);
   composer.dismiss_completion();
   presentation.publish_status("prior feedback");
@@ -130,10 +127,10 @@ void test_active_interrupt_precedes_clear(ava::tui::ActiveRunInput& input, ava::
 }
 
 // NewLine wins over FollowUp on a shared key without delivering a backend queue request.
-void test_active_newline_precedes_follow_up(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                            ava::tui::Composer& composer, std::vector<std::string> const& follow_ups)
+void test_active_newline_precedes_follow_up(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer,
+                                            std::vector<std::string> const& follow_ups)
 {
-  bind_active_input_actions(frontend, presentation, {{TuiAction::NewLine, Key::F6}, {TuiAction::MessageFollowUp, Key::F6}});
+  bind_active_input_actions(presentation, {{TuiAction::NewLine, Key::F6}, {TuiAction::MessageFollowUp, Key::F6}});
   seed_active_input_draft(composer, presentation, "firstsecond", 5);
   auto const queued_before = follow_ups.size();
   auto const result = dispatch_active_key(input, Key::F6);
@@ -143,10 +140,10 @@ void test_active_newline_precedes_follow_up(ava::tui::ActiveRunInput& input, ava
 }
 
 // Submit bound to Space queues the exact draft before the ordinary literal-space fallback.
-void test_active_space_submit_precedes_text(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                            ava::tui::Composer& composer, std::vector<std::string> const& follow_ups)
+void test_active_space_submit_precedes_text(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer,
+                                            std::vector<std::string> const& follow_ups)
 {
-  bind_active_input_actions(frontend, presentation, {{TuiAction::Submit, Key::Space}});
+  bind_active_input_actions(presentation, {{TuiAction::Submit, Key::Space}});
   seed_active_input_draft(composer, presentation, "queue exactly this");
   auto const queued_before = follow_ups.size();
   auto const submitted = dispatch_active_key(input, Key::Space);
@@ -154,7 +151,7 @@ void test_active_space_submit_precedes_text(ava::tui::ActiveRunInput& input, ava
              composer.draft().text.empty() && presentation.screen().status == "follow-up queued",
          "active Submit bound to Space delivers the unchanged draft and commits its queue reset");
 
-  bind_active_input_actions(frontend, presentation, {});
+  bind_active_input_actions(presentation, {});
   seed_active_input_draft(composer, presentation, "ordinary");
   auto const inserted = dispatch_active_key(input, Key::Space);
   expect(inserted == TuiInputOutcome::Handled && composer.draft().text == "ordinary " && composer.draft().cursor == 9 && follow_ups.size() == queued_before + 1,
@@ -162,10 +159,10 @@ void test_active_space_submit_precedes_text(ava::tui::ActiveRunInput& input, ava
 }
 
 // Empty history routes Previous and Next requests to three-row transcript scrolling, with Previous winning collisions.
-void test_active_history_fallback_scrolls(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                          ava::tui::Composer& composer, ava::tui::RuntimeRenderer& renderer, ava::tui::RuntimeNavigationController& navigation)
+void test_active_history_fallback_scrolls(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer,
+                                          ava::tui::RuntimeRenderer& renderer, ava::tui::RuntimeNavigationController& navigation)
 {
-  bind_active_input_actions(frontend, presentation, {{TuiAction::HistoryPrev, Key::F6}, {TuiAction::HistoryNext, Key::F6}});
+  bind_active_input_actions(presentation, {{TuiAction::HistoryPrev, Key::F6}, {TuiAction::HistoryNext, Key::F6}});
   seed_active_input_draft(composer, presentation, "navigation draft", 4);
   navigation.jump_to_bottom("live tail");
   auto const previous = dispatch_active_key(input, Key::F6);
@@ -173,7 +170,7 @@ void test_active_history_fallback_scrolls(ava::tui::ActiveRunInput& input, ava::
              composer.draft().cursor == 4 && !composer.history_index(),
          "active shared Previous/Next binding scrolls upward once when history is empty");
 
-  bind_active_input_actions(frontend, presentation, {{TuiAction::HistoryNext, Key::F6}});
+  bind_active_input_actions(presentation, {{TuiAction::HistoryNext, Key::F6}});
   auto const next = dispatch_active_key(input, Key::F6);
   expect(next == TuiInputOutcome::Handled && renderer.transcript().scroll_offset() == 0 && composer.draft().text == "navigation draft" &&
              composer.draft().cursor == 4 && !composer.history_index(),
@@ -181,12 +178,12 @@ void test_active_history_fallback_scrolls(ava::tui::ActiveRunInput& input, ava::
 }
 
 // Active horizontal edits and Undo consume shared explicit transcript and history bindings first.
-void test_active_edits_precede_transcript(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                          ava::tui::Composer& composer, ava::tui::RuntimeRenderer& renderer, ava::tui::RuntimeNavigationController& navigation)
+void test_active_edits_precede_transcript(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer,
+                                          ava::tui::RuntimeRenderer& renderer, ava::tui::RuntimeNavigationController& navigation)
 {
   for (auto const action : {TuiAction::CursorLeft, TuiAction::CursorRight, TuiAction::Undo})
   {
-    bind_active_input_actions(frontend, presentation, {{action, Key::F6}, {TuiAction::PageUp, Key::F6}, {TuiAction::HistoryPrev, Key::F6}});
+    bind_active_input_actions(presentation, {{action, Key::F6}, {TuiAction::PageUp, Key::F6}, {TuiAction::HistoryPrev, Key::F6}});
     seed_active_input_draft(composer, presentation, "abcd", 2);
     composer.record_submission("history candidate");
     if (action == TuiAction::Undo)
@@ -202,13 +199,11 @@ void test_active_edits_precede_transcript(ava::tui::ActiveRunInput& input, ava::
 }
 
 // Explicit transcript page actions win over history even when previous and next history entries are available.
-void test_active_transcript_precedes_history(ava::tui::ActiveRunInput& input, ava::tui::TuiFrontEnd& frontend, ava::tui::RuntimePresentationState& presentation,
-                                             ava::tui::Composer& composer, ava::tui::RuntimeRenderer& renderer,
-                                             ava::tui::RuntimeNavigationController& navigation)
+void test_active_transcript_precedes_history(ava::tui::ActiveRunInput& input, ava::tui::RuntimePresentationState& presentation, ava::tui::Composer& composer,
+                                             ava::tui::RuntimeRenderer& renderer, ava::tui::RuntimeNavigationController& navigation)
 {
   bind_active_input_actions(
-      frontend, presentation,
-      {{TuiAction::PageUp, Key::F6}, {TuiAction::HistoryPrev, Key::F6}, {TuiAction::PageDown, Key::F7}, {TuiAction::HistoryNext, Key::F7}});
+      presentation, {{TuiAction::PageUp, Key::F6}, {TuiAction::HistoryPrev, Key::F6}, {TuiAction::PageDown, Key::F7}, {TuiAction::HistoryNext, Key::F7}});
   seed_active_input_draft(composer, presentation, "scratch", 3);
   composer.record_submission("older prompt");
   composer.record_submission("middle prompt");
@@ -307,13 +302,13 @@ void run_tui_active_input_route_tests()
   if (!ava::tests::require(renderer.paint_ready_frame(), "active input fixture paints its initial transcript layout"))
     return;
 
-  test_active_copy_failure_precedes_delete(input, *frontend.frontend(), presentation, composer);
-  test_active_interrupt_precedes_clear(input, *frontend.frontend(), presentation, composer);
-  test_active_newline_precedes_follow_up(input, *frontend.frontend(), presentation, composer, follow_ups);
-  test_active_space_submit_precedes_text(input, *frontend.frontend(), presentation, composer, follow_ups);
-  test_active_history_fallback_scrolls(input, *frontend.frontend(), presentation, composer, renderer, navigation);
-  test_active_edits_precede_transcript(input, *frontend.frontend(), presentation, composer, renderer, navigation);
-  test_active_transcript_precedes_history(input, *frontend.frontend(), presentation, composer, renderer, navigation);
+  test_active_copy_failure_precedes_delete(input, presentation, composer);
+  test_active_interrupt_precedes_clear(input, presentation, composer);
+  test_active_newline_precedes_follow_up(input, presentation, composer, follow_ups);
+  test_active_space_submit_precedes_text(input, presentation, composer, follow_ups);
+  test_active_history_fallback_scrolls(input, presentation, composer, renderer, navigation);
+  test_active_edits_precede_transcript(input, presentation, composer, renderer, navigation);
+  test_active_transcript_precedes_history(input, presentation, composer, renderer, navigation);
 
   release_run.once();
   // A broken worker handoff must fail within a deadline, not hang in shutdown's join.

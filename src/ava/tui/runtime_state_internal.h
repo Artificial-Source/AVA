@@ -198,13 +198,16 @@ class RuntimePresentationState final
   static BoundaryReads read_boundary_data(TuiFrontEnd& frontend);
   // Applies previously read transports without reading or replacing popup-only facts.
   void apply_boundary_data(TuiFrontEnd const& frontend, BoundaryReads reads);
-  // TUI thread: reads and applies at one serialized application boundary.
-  void refresh_after_backend_action(TuiFrontEnd& frontend);
-  // Applies TUI-owned bindings and refreshes every local hint.
-  // This never changes backend catalog generations or applies a backend snapshot.
-  void apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings);
-  // Applies TUI-owned display values without changing backend runtime state.
-  void apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings);
+  // TUI thread: read and apply from this display owner's frontend at one serialized
+  // application boundary; popup-only state is not refreshed.
+  void refresh_after_backend_action();
+  // TUI thread between dispatch steps: apply validated bindings to this owner's
+  // frontend and refresh all local hints before returning. Existing binding borrows
+  // remain valid; backend catalog generations and snapshots are unchanged.
+  void apply_local_key_bindings(TuiKeyBindings bindings);
+  // TUI thread: apply owned display values and rebuild hints from this owner's
+  // frontend. No backend runtime state changes; the passed settings are consumed.
+  void apply_local_display_settings(TuiLocalDisplaySettings settings);
   // Starts one popup-local overview lifetime from fresh backend facts, then
   // composes current UI-owned theme and keybinding hints.
   void initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview);

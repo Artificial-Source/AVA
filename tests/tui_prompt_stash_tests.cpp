@@ -197,7 +197,7 @@ void test_prompt_stash_runtime_controller()
 
   draft_state.reset_draft();
   auto const backend_session_replaced = frontend.replace_session_identity();
-  auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
+  auto const session_changed = session_transition.apply_and_refresh(frontend.frontend()->read_committed_session_id());
   expect(backend_session_replaced && session_changed && controller.stash().size() == 1 && controller.pop_latest() &&
              draft_state.draft().text == "newest selector draft" && backend_submit_calls == 0 && presentation.screen().status == "stashed prompt restored",
          "prompt stash survives a committed session transition in one runtime process, restores LIFO, and never dispatches backend work");

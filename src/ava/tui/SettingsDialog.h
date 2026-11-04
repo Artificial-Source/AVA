@@ -9,7 +9,7 @@
 
 namespace ava::tui {
 
-class TuiFrontEnd;
+class SettingsDialogActions;
 struct SelectListInputResult;
 class RuntimePresentationState;
 class SelectorHost;
@@ -60,7 +60,7 @@ class SettingsDialog final
  public:
   // TUI thread: start inactive; capture a preview baseline only when Settings opens.
   // All collaborators outlive this dialog, including destructor rollback.
-  SettingsDialog(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, terminal::Context& terminal_context);
+  SettingsDialog(SettingsDialogActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, terminal::Context& terminal_context);
   // TUI thread: restore the captured display baseline and remove the theme overlay
   // while presentation and terminal-facing theme state are still alive.
   ~SettingsDialog();
@@ -111,8 +111,8 @@ class SettingsDialog final
   // non-display highlights cancel the prior overlay before publishing.
   void preview_highlight();
 
-  // Borrowed from Session; boundary that persists confirmed settings and supplies current catalogs.
-  TuiFrontEnd& frontend_;
+  // Frontend-owned narrow Settings interface; outlives this TUI-thread dialog.
+  SettingsDialogActions& frontend_;
   // Borrowed from Session; display state read when saving the baseline and updated by previews.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole selector view; highlight reads rows only until the next host mutation.

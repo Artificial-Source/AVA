@@ -11,6 +11,8 @@
 
 namespace ava::tui {
 
+class SelectorInputActions;
+
 class RuntimeRenderer;
 class SelectorHost;
 namespace terminal {
@@ -56,7 +58,7 @@ class SelectorInputController final
  public:
   // TUI thread: bind input classification, feedback and frontend callbacks without loading a
   // catalog. All collaborators outlive this controller; dispatch reads their current views.
-  SelectorInputController(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
+  SelectorInputController(SelectorInputActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                           terminal::Context& terminal_context);
   // Not copyable: keep one controller bound to the session's selector and feedback owners.
   SelectorInputController(SelectorInputController const&) = delete;
@@ -79,8 +81,8 @@ class SelectorInputController final
   // the old view and beep on failure. The caller supplies a completed frontend result.
   void apply_scoped_update(core::Result<SelectListView> updated, SelectListInputResult const& input, std::string status);
 
-  // Borrowed through Session; supplies model/session callbacks and current bindings.
-  TuiFrontEnd& frontend_;
+  // Frontend-owned narrow selector interface; outlives this TUI-thread controller.
+  SelectorInputActions& frontend_;
   // Borrowed from Session; display state; receives status and refreshed backend values.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; selector owner; row borrows cannot survive a host mutation.

@@ -8,6 +8,8 @@
 
 namespace ava::tui {
 
+class BranchSummaryActions;
+
 class RuntimeRenderer;
 class SelectorHost;
 class TuiEventLoop;
@@ -52,7 +54,7 @@ class BranchSummaryOperation final
   // TUI thread: start inactive without launching work or registering discovery.
   // Frontend and session collaborators outlive this owner; attach_loop precedes
   // normal operation, and backend execution remains frontend-owned.
-  BranchSummaryOperation(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
+  BranchSummaryOperation(BranchSummaryActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                          terminal::Context& terminal_context);
   // Not copyable: the timer targets this address, and one owner restores the prior selector.
   BranchSummaryOperation(BranchSummaryOperation const&) = delete;
@@ -104,8 +106,8 @@ class BranchSummaryOperation final
   // application stage copies snapshots and applies their result before input.
   void discover_progress(TuiTimer::Clock::time_point now);
 
-  // App frontend outlives this owner; callbacks submit coordinator commands or copy snapshots.
-  TuiFrontEnd& frontend_;
+  // Frontend-owned narrow summary interface outlives this TUI-thread operation.
+  BranchSummaryActions& frontend_;
   // Borrowed from Session; display state; receives status updates for this operation.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole modal storage, replaced by progress and restored when finished.

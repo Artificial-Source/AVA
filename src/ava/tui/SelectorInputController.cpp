@@ -2,8 +2,8 @@
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
+#include "SelectorInputActions.h"
 #include "SelectorInputController.h"
-#include "TuiFrontEnd.h"
 #include "command_output.h"
 #include "runtime_input_internal.h"
 #include "runtime_internal.h"
@@ -17,7 +17,7 @@
 
 namespace ava::tui {
 
-SelectorInputController::SelectorInputController(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors,
+SelectorInputController::SelectorInputController(SelectorInputActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors,
                                                  RuntimeRenderer& renderer, terminal::Context& terminal_context)
     : frontend_(frontend), presentation_state_(presentation), selectors_(selectors), renderer_(renderer), terminal_context_(terminal_context)
 {
@@ -176,10 +176,10 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     case ActiveSelectList::Model: {
       auto selected =
           dispatch_tui_selector_authority(presentation_state_, selectors_, "switching model…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
-                                          std::bind_front(&TuiFrontEnd::on_model_selected, &frontend_, std::move(selected_value)));
+                                          std::bind_front(&SelectorInputActions::on_model_selected, &frontend_, std::move(selected_value)));
       if (selected)
       {
-        presentation_state_.refresh_after_backend_action(frontend_);
+        presentation_state_.refresh_after_backend_action();
         presentation_state_.publish_status(std::move(*selected));
         return SelectorInputRequest::OpenReasoning;
       }
@@ -191,10 +191,10 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
       auto level = selected_value == "default" ? std::optional<std::string>{} : std::optional<std::string>{std::move(selected_value)};
       auto selected = dispatch_tui_selector_authority(presentation_state_, selectors_, "setting thinking mode…",
                                                       std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
-                                                      std::bind_front(&TuiFrontEnd::on_reasoning_selected, &frontend_, std::move(level)));
+                                                      std::bind_front(&SelectorInputActions::on_reasoning_selected, &frontend_, std::move(level)));
       if (selected)
       {
-        presentation_state_.refresh_after_backend_action(frontend_);
+        presentation_state_.refresh_after_backend_action();
         presentation_state_.publish_status(std::move(*selected));
       }
       else
@@ -223,7 +223,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
       return std::pair{SelectorInputTextKind::ReconcileSessionError, opened.error().format()};
     }
     case ActiveSelectList::CopyUserTurn: {
-      auto decision = evaluate_copy_user_turn_selection(selected_value, std::bind_front(&TuiFrontEnd::on_read_user_turn_text, &frontend_),
+      auto decision = evaluate_copy_user_turn_selection(selected_value, std::bind_front(&SelectorInputActions::on_read_user_turn_text, &frontend_),
                                                         runtime_transcript::copy_text_to_terminal_clipboard);
       presentation_state_.publish_local_status(decision.status);
       if (decision.beep)

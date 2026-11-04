@@ -12,6 +12,9 @@ void run_tui_composer_policy_tests();
 // Verify active controller precedence with a held worker and real feature owners.
 void run_tui_active_input_route_tests();
 
+// Verify narrow frontend access, stable binding borrows and Settings refresh timing.
+void run_tui_feature_interface_tests();
+
 // Direct selector/summary contracts use the same initialized test-thread terminal.
 void run_tui_feature_owner_tests();
 // Exercise timer discovery through the explicit application-service boundary.
@@ -50,6 +53,7 @@ void run_tui_composer_tests()
   run_tui_modal_tests_part_3();
   run_tui_selector_tests();
   run_tui_feature_owner_tests();
+  run_tui_feature_interface_tests();
   run_tui_branch_summary_timer_tests();
   run_tui_transcript_view_tests();
   run_tui_transcript_tests_part_1();

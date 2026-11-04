@@ -163,7 +163,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   auto result = std::move(**reloaded);
   auto status = result.status.empty() ? std::string("display theme auto-reloaded") : result.status;
   {
-    presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
+    presentation_state_.apply_local_display_settings(std::move(result.settings));
     synchronize_startup_overview_presentation(presentation_state_, selectors_);
     presentation_state_.publish_local_status(std::move(status));
   }
@@ -430,7 +430,7 @@ void RuntimeActionController::cycle_model(bool forward)
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return;
   }
-  presentation_state_.refresh_after_backend_action(frontend_);
+  presentation_state_.refresh_after_backend_action();
   presentation_state_.publish_status(std::move(*result));
   renderer_.show_live_tail(LiveTailReason::Requested);
 }

@@ -2197,7 +2197,7 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   expect(presentation.sidebar().todos.size() == 1 && presentation.sidebar().todos.front().id == "seed",
          "committed backend todos hydrate the sidebar at startup");
   options_frontend.seed_committed_todos({ava::agent::TodoItem{.id = "switched", .content = "After switch", .status = ava::agent::TodoStatus::InProgress}});
-  presentation.refresh_after_backend_action(*options_frontend.frontend());
+  presentation.refresh_after_backend_action();
   expect(presentation.sidebar().todos.size() == 1 && presentation.sidebar().todos.front().id == "switched",
          "boundary refresh replaces todos from committed session history");
 }

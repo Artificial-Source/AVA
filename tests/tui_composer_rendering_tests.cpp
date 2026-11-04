@@ -424,7 +424,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
 
   frontend.seed_committed_todos({{.id = "todo-new", .content = "new todo", .status = ava::agent::TodoStatus::InProgress}});
-  auto changed = session_transition.apply_and_refresh(*frontend.frontend(), committed_session_id);
+  auto changed = session_transition.apply_and_refresh(committed_session_id);
 
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_probe_index = std::optional<std::size_t>{};
@@ -458,7 +458,7 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.publish_run_progress(new_run);
   auto const unchanged_generation = presentation.screen().transcript_generation;
   frontend.seed_committed_todos({{.id = "todo-same", .content = "same-session todo"}});
-  auto unchanged = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
+  auto unchanged = session_transition.apply_and_refresh(frontend.frontend()->read_committed_session_id());
   auto const unchanged_state_ok = !unchanged && presentation.screen().transcript_generation == unchanged_generation &&
                                   presentation.screen().transcript.size() == 1 && presentation.screen().transcript.front().text == "new receipt only" &&
                                   presentation.screen().queued_messages.size() == 1 && presentation.sidebar().activity.size() == 1 &&
@@ -1796,7 +1796,7 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
     catalog_cache.slash_commands.push_back(std::move(catalog_command));
   }
   tui_test_support::TuiFrontEndFixture frontend(options, std::move(catalog_cache));
-  frontend.frontend()->key_bindings() = bindings;
+  frontend.frontend()->apply_key_bindings(bindings);
   frontend.hooks().display_settings_snapshot = [initial_display_settings] { return initial_display_settings; };
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   bool const initial =
@@ -1806,9 +1806,9 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
       count_completion(presentation.screen(), "/hotkeys", 1, "mode_toggle", {"set"}) == 1 && key_display(presentation.screen(), "/mode") == initial_mode_keys;
 
   auto const initial_generation = presentation.screen().file_references_generation;
-  presentation.refresh_after_backend_action(*frontend.frontend());
+  presentation.refresh_after_backend_action();
   auto const delivered_generation = presentation.screen().file_references_generation;
-  presentation.refresh_after_backend_action(*frontend.frontend());
+  presentation.refresh_after_backend_action();
   bool const applied_once = delivered_generation == initial_generation + 1 && presentation.screen().file_references_generation == delivered_generation &&
                             presentation.screen().file_references.size() == 1 && presentation.screen().file_references.front().value == "src/catalog.cpp" &&
                             count_completion(presentation.screen(), "/theme", 0, "backend-theme-fact") == 1;
@@ -1820,10 +1820,8 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
                                count_completion(presentation.screen(), "/reload", 0, "keybindings") == 1;
 
   presentation.apply_local_display_settings(
-      *frontend.frontend(),
       ava::tui::TuiLocalDisplaySettings{.custom_themes = {ava::tui::ThemeOptionItem{.name = "midnight", .detail = "/themes/midnight.json"}}});
   presentation.apply_local_display_settings(
-      *frontend.frontend(),
       ava::tui::TuiLocalDisplaySettings{.custom_themes = {ava::tui::ThemeOptionItem{.name = "midnight", .detail = "/themes/midnight.json"}}});
   auto refreshed_bindings = ava::tui::parse_key_bindings_json(R"({"mode_toggle":"Alt+Y","app.overview.toggle":"F6"})");
   if (!refreshed_bindings)
@@ -1831,8 +1829,8 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
     expect(false, "local slash composition fixture parses refreshed bindings");
     return false;
   }
-  presentation.apply_local_key_bindings(*frontend.frontend(), *refreshed_bindings);
-  presentation.apply_local_key_bindings(*frontend.frontend(), *refreshed_bindings);
+  presentation.apply_local_key_bindings(*refreshed_bindings);
+  presentation.apply_local_key_bindings(*refreshed_bindings);
   bool const local_refresh =
       count_completion(presentation.screen(), "/theme", 0, "sunrise") == 0 && count_completion(presentation.screen(), "/theme", 0, "midnight") == 1 &&
       count_completion(presentation.screen(), "/theme", 0, "backend-theme-fact") == 1 &&
@@ -1862,7 +1860,7 @@ bool test_settings_archive_restores_preview_and_selector_storage()
   renderer.attach_loop(event_loop.loop());
   auto display = frontend.frontend()->display_settings_snapshot();
   display.show_images = true;
-  presentation.apply_local_display_settings(*frontend.frontend(), display);
+  presentation.apply_local_display_settings(display);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::SelectorInputController classifier(*frontend.frontend(), presentation, selectors, renderer, terminal);
   ava::tui::SettingsDialog settings(*frontend.frontend(), presentation, selectors, terminal);
@@ -2119,7 +2117,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   };
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.refresh_after_backend_action(*frontend.frontend());
+  presentation.refresh_after_backend_action();
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, draft_state);
@@ -2177,8 +2175,8 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
       presentation.screen().startup_overview && presentation.screen().startup_overview->compact_line == "build · provider/model · ava-dark · /overview";
 
   ava::tui::set_tui_config_theme("light");
-  presentation.apply_local_display_settings(*frontend.frontend(), {});
-  presentation.apply_local_display_settings(*frontend.frontend(), {});
+  presentation.apply_local_display_settings({});
+  presentation.apply_local_display_settings({});
   bool const theme_switch_ok =
       presentation.screen().startup_overview && presentation.screen().startup_overview->compact_line == "build · provider/model · ava-light · /overview";
 
@@ -2189,13 +2187,13 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
     ava::tui::set_tui_config_theme(std::nullopt);
     return false;
   }
-  presentation.apply_local_key_bindings(*frontend.frontend(), *bindings);
-  presentation.apply_local_key_bindings(*frontend.frontend(), *bindings);
+  presentation.apply_local_key_bindings(*bindings);
+  presentation.apply_local_key_bindings(*bindings);
   bool const binding_refresh_ok =
       presentation.screen().startup_overview && presentation.screen().startup_overview->compact_line == "build · provider/model · ava-light · F6 · /overview";
 
   ava::tui::set_tui_config_theme("dark");
-  presentation.apply_local_display_settings(*frontend.frontend(), {});
+  presentation.apply_local_display_settings({});
   bool const stale_theme_removed =
       presentation.screen().startup_overview && presentation.screen().startup_overview->compact_line == "build · provider/model · ava-dark · F6 · /overview";
 
@@ -2203,14 +2201,14 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
   auto const capped_factual_line = std::string(160 - factual_suffix.size(), 'x') + factual_suffix;
   ava::tui::TuiRuntimeOptions capped_options;
   tui_test_support::TuiFrontEndFixture capped_frontend(capped_options);
-  capped_frontend.frontend()->key_bindings() = *bindings;
+  capped_frontend.frontend()->apply_key_bindings(*bindings);
   ava::tui::RuntimePresentationState capped(capped_frontend.frontend(), {});
   capped.initialize_startup_overview(
       *capped_frontend.frontend(),
       ava::tui::StartupOverviewSnapshot{
           .theme_name = "ava-light", .theme_badge = "display.json", .overview_toggle_keys = "F6", .compact_line = capped_factual_line});
-  capped.apply_local_display_settings(*capped_frontend.frontend(), {});
-  capped.apply_local_key_bindings(*capped_frontend.frontend(), *bindings);
+  capped.apply_local_display_settings({});
+  capped.apply_local_key_bindings(*bindings);
   bool const bounded_omission_ok = capped.screen().startup_overview && capped.screen().startup_overview->compact_line == capped_factual_line &&
                                    capped.screen().startup_overview->compact_line.size() <= 160;
 
@@ -2331,7 +2329,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
     return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;
   };
 
-  presentation.refresh_after_backend_action(*frontend.frontend());
+  presentation.refresh_after_backend_action();
   bool const settings_not_read_by_snapshot = project_trust_reads == 0;
   auto const first_settings = submit_controller.submit(std::string("/settings"));
   auto const first_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
@@ -5179,7 +5177,7 @@ void run_tui_composer_rendering_tests_part_4()
       active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       active.update_selection(0, "mode");
 
-      presentation.refresh_after_backend_action(*frontend.frontend());
+      presentation.refresh_after_backend_action();
       expect(active.kind() == ava::tui::ActiveSelectList::Overview && presentation.screen().select_list && presentation.screen().select_list->query == "mode" &&
                  presentation.screen().startup_overview && presentation.screen().startup_overview->model == "gpt-test" &&
                  std::ranges::any_of(presentation.screen().select_list->items,
@@ -5201,7 +5199,7 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active);
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active, attachments,
                                                                 grants);
-      auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), "session_overview_other");
+      auto const session_changed = session_transition.apply_and_refresh("session_overview_other");
       expect(session_changed && active.kind() == ava::tui::ActiveSelectList::None && !presentation.screen().select_list,
              "session transition closes an open startup overview through the shared presentation path");
     }

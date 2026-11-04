@@ -1,10 +1,10 @@
 // Presents asynchronous parent-summary progress through frontend snapshots.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
+#include "BranchSummaryActions.h"
 #include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
 #include "TuiEventLoop.h"
-#include "TuiFrontEnd.h"
 #include "runtime_render_internal.h"
 #include "runtime_views_internal.h"
 #include "terminal/Context.h"
@@ -14,7 +14,7 @@
 
 namespace ava::tui {
 
-BranchSummaryOperation::BranchSummaryOperation(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors,
+BranchSummaryOperation::BranchSummaryOperation(BranchSummaryActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors,
                                                RuntimeRenderer& renderer, terminal::Context& terminal_context)
     : frontend_(frontend), presentation_state_(presentation), selectors_(selectors), renderer_(renderer), terminal_context_(terminal_context)
 {

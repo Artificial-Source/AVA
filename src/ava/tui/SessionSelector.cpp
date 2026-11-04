@@ -3,7 +3,7 @@
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
-#include "TuiFrontEnd.h"
+#include "SessionSelectorActions.h"
 #include "runtime_internal.h"
 #include "runtime_render_internal.h"
 #include "terminal/Context.h"
@@ -12,7 +12,7 @@
 
 namespace ava::tui {
 
-SessionSelector::SessionSelector(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
+SessionSelector::SessionSelector(SessionSelectorActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                                  terminal::Context& terminal_context)
     : frontend_(frontend), presentation_state_(presentation), selectors_(selectors), renderer_(renderer), terminal_context_(terminal_context)
 {
@@ -87,7 +87,7 @@ core::Result<std::string> SessionSelector::resolve(SelectListInputResult const& 
   auto const* item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = item ? item->value : std::string{};
   return dispatch_tui_selector_authority(presentation_state_, selectors_, "opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
-                                         std::bind_front(&TuiFrontEnd::on_session_selected, &frontend_, std::move(selected_value)));
+                                         std::bind_front(&SessionSelectorActions::on_session_selected, &frontend_, std::move(selected_value)));
 }
 
 std::optional<core::Result<std::string>> SessionSelector::navigate_branch(SelectListInputResult const& input)
@@ -101,8 +101,8 @@ std::optional<core::Result<std::string>> SessionSelector::navigate_branch(Select
     return std::nullopt;
   }
   auto const selected_value = item->value;
-  auto callback =
-      input.action == SelectListInputAction::BranchParent ? &TuiFrontEnd::on_session_selector_branch_parent : &TuiFrontEnd::on_session_selector_branch_child;
+  auto callback = input.action == SelectListInputAction::BranchParent ? &SessionSelectorActions::on_session_selector_branch_parent
+                                                                      : &SessionSelectorActions::on_session_selector_branch_child;
   return dispatch_tui_selector_authority(presentation_state_, selectors_, "opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                          std::bind_front(callback, &frontend_, selected_value));
 }

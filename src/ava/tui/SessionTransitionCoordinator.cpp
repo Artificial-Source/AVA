@@ -50,10 +50,10 @@ bool SessionTransitionCoordinator::apply(std::string committed_session_id)
   return true;
 }
 
-bool SessionTransitionCoordinator::apply_and_refresh(TuiFrontEnd& frontend, std::string committed_session_id)
+bool SessionTransitionCoordinator::apply_and_refresh(std::string committed_session_id)
 {
   auto const changed = apply(std::move(committed_session_id));
-  presentation_.refresh_after_backend_action(frontend);
+  presentation_.refresh_after_backend_action();
   return changed;
 }
 

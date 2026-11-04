@@ -334,7 +334,8 @@ struct TuiBranchSummarySnapshot
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Forward declare ava::tui::TuiFrontEnd.
+// Feature interfaces are borrowed by row builders only for the synchronous call.
+class SettingsDialogActions;
 class TuiFrontEnd;
 
 struct TuiRuntimeOptions
@@ -365,7 +366,9 @@ enum class SettingsSection
 // Root settings selector with shallow section rows.
 [[nodiscard]] SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings, std::string footer_hint = {});
 [[nodiscard]] SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, std::string footer_hint = {});
-[[nodiscard]] SelectListView settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+// TUI thread: build owned rows; frontend must be nonnull for the Model section,
+// which consumes its model-label refreshes. Other sections do not use the interface.
+[[nodiscard]] SelectListView settings_select_list_view_for_section(SettingsDialogActions* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
                                                                    TuiKeyBindings const& bindings, std::string footer_hint = {});
 // Read-only host-owned startup overview list. Enter closes without backend mutation.
 [[nodiscard]] SelectListView overview_select_list_view(StartupOverviewSnapshot const& overview, std::string footer_hint = {});

@@ -200,6 +200,21 @@ int TuiFrontEnd::run()
 }
 
 // Load startup bindings into TUI-owned state and return only formatted failure status.
+void TuiFrontEnd::apply_key_bindings(TuiKeyBindings bindings)
+{
+  key_bindings_ = std::move(bindings);
+}
+
+std::array<std::string, 3> TuiFrontEnd::read_settings_model_labels()
+{
+  // These refreshes consume change flags. Read them together only when the Model
+  // section is rebuilt, and copy the labels before returning to its row builder.
+  auto const provider = model_selection().provider_refresh();
+  auto const model = model_selection().model_refresh();
+  auto const reasoning = model_selection().reasoning_refresh();
+  return {provider.value, model.value, reasoning.value};
+}
+
 std::string TuiFrontEnd::load_key_bindings()
 {
   std::string keybind_status;

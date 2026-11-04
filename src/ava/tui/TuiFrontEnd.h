@@ -1,12 +1,18 @@
 // Application boundary and startup owner for the TUI session architecture.
 #pragma once
 
+#include "BranchSummaryActions.h"
+#include "SelectorInputActions.h"
+#include "SessionSelectorActions.h"
+#include "SettingsDialogActions.h"
+#include "TuiSessionActions.h"
 #include "composer.h"                   // StartupOverviewSnapshot
 #include "keybindings.h"                // TuiKeyBindings
 #include "runtime.h"                    // TuiRuntimeOptions, TuiCatalogDelivery, TuiLocalDisplaySettingsResult
 #include "ava/frontend/FrontEnd.h"
 #include "utils/threading/aithreadid.h"
 
+#include <array>
 #include <filesystem>
 
 namespace ava::tui {
@@ -16,12 +22,17 @@ struct TuiRuntimeOptions;
 // The application owns the concrete frontend; interactive calls run on the TUI thread.
 // run() owns one TuiSession; that session and its joined submission worker must
 // finish before the frontend is destroyed. Presentation owners request backend
-// work through these virtual operations instead of borrowing backend storage.
+// work through narrow feature interfaces instead of borrowing backend storage.
 // Unless stated otherwise, calls are synchronous on the TUI thread. Arguments
 // are borrowed for the call; implementations must copy any data retained for
 // asynchronous work. Returned values own their display data. See
 // docs/engineering/tui-architecture.md for the session and worker lifetimes.
-class TuiFrontEnd : public frontend::FrontEnd
+class TuiFrontEnd : public frontend::FrontEnd,
+                    public TuiSessionActions,
+                    public SettingsDialogActions,
+                    public SessionSelectorActions,
+                    public BranchSummaryActions,
+                    public SelectorInputActions
 {
  protected:
   // TUI-thread effective bindings, initialized at construction and replaced by validated reloads.
@@ -42,71 +53,75 @@ class TuiFrontEnd : public frontend::FrontEnd
   // Return the application configuration path used for keybind loading.
   virtual std::filesystem::path keybinds_json_path() const = 0;
 
- public:
-  // TUI feature owners request backend actions through these existing virtual
-  // operations without gaining protected-member access. The application
-  // implementations retain backend validation and state changes.
+ protected:
+  // Feature owners receive the corresponding narrow interface. Keep these concrete
+  // declarations protected; the existing application overrides still validate and
+  // perform every action. Public interface upcasts are explicit, not a security boundary.
 
   // TUI thread: return diagram callbacks that retain the application renderer's
   // resources. Removing a UI completion notifier does not stop or join its worker.
-  virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;
+  virtual TuiMermaidRenderBridge mermaid_bridge() const override = 0;
 
   // Toggle the committed Build/Plan mode or return the command error.
-  virtual core::VoidResult on_toggle_mode() const = 0;
+  virtual core::VoidResult on_toggle_mode() const override = 0;
 
   // TUI thread: update application-owned sort preferences before rebuilding selector rows.
-  virtual SelectListView on_session_selector_sort_cycle() = 0;
+  virtual SelectListView on_session_selector_sort_cycle() override = 0;
   // TUI thread: change catalog filtering before publishing the replacement selector rows.
-  virtual SelectListView on_session_selector_named_filter_toggle() = 0;
+  virtual SelectListView on_session_selector_named_filter_toggle() override = 0;
   // TUI thread: rebuild row labels from the new path-display preference, retaining backend row identity.
-  virtual SelectListView on_session_selector_path_display_toggle() = 0;
+  virtual SelectListView on_session_selector_path_display_toggle() override = 0;
   // TUI thread: rebuild the displayed catalog after changing which archived sessions are visible.
-  virtual SelectListView on_session_selector_archived_filter_toggle() = 0;
+  virtual SelectListView on_session_selector_archived_filter_toggle() override = 0;
   // TUI thread: rebuild row labels after changing timestamp visibility without changing session identity.
-  virtual SelectListView on_session_selector_label_timestamp_toggle() = 0;
+  virtual SelectListView on_session_selector_label_timestamp_toggle() override = 0;
   // Archive session_id and return the refreshed selector, or a command/catalog error.
-  virtual core::Result<SelectListView> on_session_selector_archive(std::string_view session_id) = 0;
+  virtual core::Result<SelectListView> on_session_selector_archive(std::string_view session_id) override = 0;
   // Unarchive session_id and return the refreshed selector, or a command/catalog error.
-  virtual core::Result<SelectListView> on_session_selector_unarchive(std::string_view session_id) = 0;
+  virtual core::Result<SelectListView> on_session_selector_unarchive(std::string_view session_id) override = 0;
   // Open the parent of session_id or return validation, lookup, open, or replacement errors.
-  virtual core::Result<std::string> on_session_selector_branch_parent(std::string_view session_id) = 0;
+  virtual core::Result<std::string> on_session_selector_branch_parent(std::string_view session_id) override = 0;
   // Open the selected child of session_id or return validation, lookup, open, or replacement errors.
-  virtual core::Result<std::string> on_session_selector_branch_child(std::string_view session_id) = 0;
+  virtual core::Result<std::string> on_session_selector_branch_child(std::string_view session_id) override = 0;
   // Prepare a summary for session_id and return its path-free operation snapshot.
-  virtual core::Result<TuiBranchSummarySnapshot> on_branch_summary_prepare(std::string_view session_id) const = 0;
+  virtual core::Result<TuiBranchSummarySnapshot> on_branch_summary_prepare(std::string_view session_id) const override = 0;
   // TUI thread: read the application operation without joining its worker; the returned value is a presentation copy.
-  virtual TuiBranchSummarySnapshot branch_summary_snapshot() const = 0;
+  virtual TuiBranchSummarySnapshot branch_summary_snapshot() const override = 0;
   // Confirm generation; false means it was not confirmable and errors preserve backend detail boundaries.
-  virtual core::Result<bool> on_branch_summary_confirm(std::uint64_t generation) const = 0;
+  virtual core::Result<bool> on_branch_summary_confirm(std::uint64_t generation) const override = 0;
   // Cancel generation; false means it was not cancelable and errors preserve backend detail boundaries.
-  virtual core::Result<bool> on_branch_summary_cancel(std::uint64_t generation) const = 0;
+  virtual core::Result<bool> on_branch_summary_cancel(std::uint64_t generation) const override = 0;
   // Refresh the session catalog after summary completion or return its refresh error.
-  virtual core::Result<SelectListView> on_branch_summary_refresh_catalog() = 0;
+  virtual core::Result<SelectListView> on_branch_summary_refresh_catalog() override = 0;
 
   // Apply settings token value and return user-facing status or command error.
-  virtual core::Result<std::string> on_settings_selected(std::string_view value) = 0;
+  virtual core::Result<std::string> on_settings_selected(std::string_view value) override = 0;
   // Resolve and commit provider/model value and return user-facing status or resolution error.
-  virtual core::Result<std::string> on_model_selected(std::string_view value) = 0;
+  virtual core::Result<std::string> on_model_selected(std::string_view value) override = 0;
   // Commit level, where nullopt restores provider default, and return user-facing status.
-  virtual core::Result<std::string> on_reasoning_selected(std::optional<std::string> level) = 0;
+  virtual core::Result<std::string> on_reasoning_selected(std::optional<std::string> level) override = 0;
   // Fork from public user entry_id and return committed-session status or a truthful failure.
-  virtual core::Result<std::string> on_fork_user_turn_selected(std::string_view entry_id) = 0;
+  virtual core::Result<std::string> on_fork_user_turn_selected(std::string_view entry_id) override = 0;
   // Re-read public user entry_id text at action time or return session storage errors.
-  virtual core::Result<std::string> on_read_user_turn_text(std::string_view entry_id) const = 0;
+  virtual core::Result<std::string> on_read_user_turn_text(std::string_view entry_id) const override = 0;
   // Toggle scoped model value against previous and return the rebuilt selector or validation error.
-  virtual core::Result<SelectListView> on_scoped_model_toggled(SelectListView const& previous, std::string_view value) const = 0;
+  virtual core::Result<SelectListView> on_scoped_model_toggled(SelectListView const& previous, std::string_view value) const override = 0;
   // Enable visible scoped-model values and return the rebuilt selector or validation error.
-  virtual core::Result<SelectListView> on_scoped_model_enable_all(SelectListView const& previous, std::vector<std::string> values) const = 0;
+  virtual core::Result<SelectListView> on_scoped_model_enable_all(SelectListView const& previous, std::vector<std::string> values) const override = 0;
   // Clear visible scoped-model values and return the rebuilt selector or validation error.
-  virtual core::Result<SelectListView> on_scoped_model_clear_all(SelectListView const& previous, std::vector<std::string> values) const = 0;
+  virtual core::Result<SelectListView> on_scoped_model_clear_all(SelectListView const& previous, std::vector<std::string> values) const override = 0;
   // Toggle the provider represented by value and return the rebuilt selector or validation error.
-  virtual core::Result<SelectListView> on_scoped_model_toggle_provider(SelectListView const& previous, std::string_view value) const = 0;
+  virtual core::Result<SelectListView> on_scoped_model_toggle_provider(SelectListView const& previous, std::string_view value) const override = 0;
   // Reorder value up or down and return the rebuilt selector or validation error.
-  virtual core::Result<SelectListView> on_scoped_model_reorder(SelectListView const& previous, std::string_view value, bool up) const = 0;
+  virtual core::Result<SelectListView> on_scoped_model_reorder(SelectListView const& previous, std::string_view value, bool up) const override = 0;
   // Persist the staged scoped-model cycle and return user-facing status or persistence error.
-  virtual core::Result<std::string> on_scoped_model_save() const = 0;
+  virtual core::Result<std::string> on_scoped_model_save() const override = 0;
   // Open session value and return user-facing status or validation/open/replacement errors.
-  virtual core::Result<std::string> on_session_selected(std::string_view value) = 0;
+  virtual core::Result<std::string> on_session_selected(std::string_view value) override = 0;
+
+  // TUI thread: copy only the three labels needed by the Settings Model section.
+  // Called through SettingsDialogActions; refresh order matches normal model display.
+  std::array<std::string, 3> read_settings_model_labels() override;
 
  private:
   // TUI thread before session construction: load effective bindings so all owners
@@ -118,7 +133,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual TuiLocalDisplaySettings display_settings_snapshot() const = 0;
 
   // TUI thread: read committed identity after a backend action, so UI reset follows the actual session transition.
-  virtual std::string read_committed_session_id() const = 0;
+  virtual std::string read_committed_session_id() const override = 0;
 
   // TUI thread: pull pending catalog generations before updating their display values.
   virtual TuiCatalogDelivery read_catalog_delivery() = 0;
@@ -138,7 +153,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<std::optional<TuiLocalDisplaySettingsResult>> on_maybe_reload_display_settings() = 0;
 
   // Persists and applies a recognized display command or settings action on the TUI thread.
-  virtual core::Result<TuiLocalDisplaySettingsResult> on_local_display_settings_action(std::string_view action) = 0;
+  virtual core::Result<TuiLocalDisplaySettingsResult> on_local_display_settings_action(std::string_view action) override = 0;
 
   // Runs after the composer loop exits while curses is still active. Application-scoped
   // workers that can notify this runtime must be canceled and joined here.
@@ -147,9 +162,9 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual void on_before_tui_shutdown() = 0;
 
   // Reset session-selector preferences and return the current application-owned session view.
-  virtual SelectListView session_selector_view() = 0;
+  virtual SelectListView session_selector_view() override = 0;
   // Snapshot project trust for settings presentation without exposing operations that change trust.
-  virtual ProjectTrustSnapshot read_project_trust() const = 0;
+  virtual ProjectTrustSnapshot read_project_trust() const override = 0;
   // Create queue callables bound to event_sink and the specific backend run.
   // TUI thread before launch: bind queue capabilities to this submission.
   // Returned callbacks can be used by its worker until finish/retirement.
@@ -171,7 +186,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   // Cycle the committed model forward or backward and return user-facing status.
   virtual core::Result<std::string> on_cycle_model(bool forward) = 0;
   // Load and validate application keybindings without mutating TUI state.
-  virtual core::Result<TuiKeyBindings> on_reload_key_bindings() const = 0;
+  virtual core::Result<TuiKeyBindings> on_reload_key_bindings() const override = 0;
   // Build the current model selector from the current application model settings.
   virtual SelectListView model_selector_view() const = 0;
   // Build reasoning choices; chained selects the staged-model footer and nullopt means unsupported.
@@ -206,11 +221,13 @@ class TuiFrontEnd : public frontend::FrontEnd
   // receive request-local copies instead of sharing this reference.
   TuiRuntimeOptions const& options() const { return options_; }
 
-  // TUI thread: update effective bindings only between dispatch steps so key hints
-  // and dispatch agree; the reference expires with this owner.
-  TuiKeyBindings& key_bindings() { return key_bindings_; }
-  // TUI thread: inspect current dispatch bindings; copy them into a worker request.
-  TuiKeyBindings const& key_bindings() const { return key_bindings_; }
+  // TUI thread between dispatch steps: replace a validated map in the existing
+  // object so borrowed const references remain valid. RuntimePresentationState
+  // coordinates this operation with refreshing the displayed hints.
+  void apply_key_bindings(TuiKeyBindings bindings);
+  // TUI thread: borrow effective bindings until frontend destruction; updates
+  // replace their value without changing the object address. Workers receive copies.
+  TuiKeyBindings const& key_bindings() const override { return key_bindings_; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON_BASE(frontend::FrontEnd)
 };

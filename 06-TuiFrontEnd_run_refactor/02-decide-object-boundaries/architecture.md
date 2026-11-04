@@ -136,3 +136,21 @@ without adding getters and setters that repeat the fixture's fields. This is a
 visibility and file-layout exception for an anonymous, synchronous test fixture;
 no production feature receives it. Its comment identifies the test-thread and
 lifetime limits, and its debug marker excludes user-text examples.
+
+## Final R14 frontend interfaces
+
+The five formerly friended features borrow `TuiSessionActions`,
+`SettingsDialogActions`, `SessionSelectorActions`, `BranchSummaryActions` and
+`SelectorInputActions`. These abstract interfaces have no fields or workers.
+`TuiFrontEnd` implements them through its existing application overrides and
+keeps the 28 concrete backend-action declarations protected. Public inheritance
+allows an explicit interface cast; these interfaces narrow dependencies without
+claiming to enforce backend security. There are no forwarding action methods.
+
+Settings copies provider, model and reasoning labels through its interface only
+when building the Model section. That preserves when the three refresh flags
+are consumed. Presentation uses its already-retained frontend for backend-action
+refreshes, local bindings and local display settings. Callers no longer pass the
+same frontend through several features. `apply_key_bindings` replaces the stored
+map's value; its address remains valid for existing const borrows. Presentation
+updates key hints immediately after applying that map.
