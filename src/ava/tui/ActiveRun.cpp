@@ -464,7 +464,7 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
 
 bool ActiveRun::accepts_input() const
 {
-  return active() && !operation_->close_after_submit && operation_->inbox && !operation_->inbox->terminal_ready();
+  return active() && operation_->inbox && !operation_->inbox->terminal_ready();
 }
 
 bool ActiveRun::has_pending_updates()

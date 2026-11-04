@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 // Direct access to the real latch lets the fault test inspect it without adding
@@ -235,6 +236,22 @@ class SessionInput final
       if (ava::tui::runtime_input::poll_curses_input().kind == InputPollKind::Empty)
         break;
   }
+  // TUI test thread, ordinary mode only: enqueue real fd bytes after close is
+  // requested. The nonblocking pipe makes fixture failure return instead of hang.
+  [[nodiscard]] bool write_bytes(std::string_view bytes) const
+  {
+    return ::write(peer_.get(), bytes.data(), bytes.size()) == static_cast<ssize_t>(bytes.size());
+  }
+  // TUI test thread: inspect only the kernel pipe, separately from ncurses replay.
+  // Return no count if the descriptor cannot supply this fixture observation.
+  [[nodiscard]] std::optional<std::size_t> pending_pipe_bytes() const
+  {
+    int count = 0;
+    auto* stream = ava::core::Application::instance().terminal_context().input_stream();
+    if (::ioctl(::fileno(stream), FIONREAD, &count) != 0 || count < 0)
+      return std::nullopt;
+    return static_cast<std::size_t>(count);
+  }
   // Closing the peer latches terminal failure in the next actual epoll wait.
   void close_peer() { peer_.reset(); }
 
@@ -287,7 +304,7 @@ class WorkerGate final
  public:
   // Create both synchronization channels before the Session starts its worker.
   WorkerGate() : published_(publication_.get_future()), released_(release_.get_future().share()) { }
-  // Worker-only publication after all 300 inbox events have been accepted.
+  // Worker-only publication after the scenario has reached its required setup point.
   void published() { publication_.set_value(); }
   // TUI-only bounded wait prevents a missing worker from hanging the case.
   bool wait_for_publication() { return published_.wait_for(std::chrono::seconds(5)) == std::future_status::ready; }
@@ -458,6 +475,82 @@ void test_turn_order()
   expect(first.wait == TuiWaitMode::ReadyOnly && second.wait == TuiWaitMode::ReadyOnly && final.wait == TuiWaitMode::Block,
          "full input/event batches stay runnable; exhausted queues block without an extra paint turn");
   expect(first.flushes > 0, "eligible provider/input frame actually flushes at the same paint stage");
+}
+
+// R1: real fd bytes arriving after empty-draft Ctrl+D must be decoded and
+// discarded while the worker is held, so level-triggered readiness cannot spin.
+void test_close_after_submit_drains_input()
+{
+  SessionInput input;
+  WorkerGate gate;
+  std::atomic_size_t submissions{0};
+  std::atomic_bool worker_stopped{false};
+  std::atomic_bool released{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  // These copied pointers borrow locals that outlive Session. ReleaseWorker
+  // opens the gate before Session's destructor joins, including on exceptions.
+  frontend.hooks().on_submit = [gate = &gate, submissions = &submissions, stopped = &worker_stopped, released = &released](std::string const&,
+                                                                                                                           ava::tui::TuiSubmitContext context) {
+    if (submissions->fetch_add(1) != 0)
+      return ava::tui::TuiSubmitResult{};
+    gate->published();
+    released->store(gate->wait_for_release());
+    stopped->store(context.cancel_requested && context.cancel_requested());
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  std::optional<std::size_t> first_drain_turn;
+  std::size_t decoded = 0;
+  std::size_t drain_turns = 0;
+  bool drained = false;
+  bool turn_limit_reached = false;
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (probe.turns.size() == 1)
+    {
+      expect(gate.wait_for_publication(), "close test worker is running before Ctrl+D");
+      native_input("\x04");
+      notify_before_block(loop, mode);
+      return;
+    }
+    if (!first_drain_turn)
+    {
+      // Ctrl+D was dispatched in this turn. Send actual pipe data only now,
+      // rather than using startup replay which does not make epoll readable.
+      first_drain_turn = probe.turns.size();
+      expect(input.write_bytes(std::string(65, 'x') + "\n"), "write fd bytes after close request");
+      return;
+    }
+    if (drained || turn_limit_reached)
+      return;
+    drain_turns = probe.turns.size() - *first_drain_turn;
+    decoded += static_cast<std::size_t>(std::ranges::count(probe.turn().input, InputPollKind::Input));
+    drained = decoded == 66 && !probe.turn().input.empty() && probe.turn().input.back() == InputPollKind::Empty;
+    if (drained)
+    {
+      expect(input.pending_pipe_bytes() == std::optional<std::size_t>{0}, "closing drain empties the watched kernel pipe");
+      gate.release();
+      return;
+    }
+    if (drain_turns >= 3)
+    {
+      // This detects the old spin by work count, independently of timer timing.
+      // Always release before requesting shutdown, which joins the held worker.
+      turn_limit_reached = true;
+      gate.release();
+      loop.request_stop();
+    }
+  };
+  seed_submission();
+  int exit_code = -1;
+  {
+    ProbeScope scope(probe);
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    ReleaseWorker release(gate);
+    exit_code = session.run([] { return true; });
+  }
+  expect(exit_code == 0 && !probe.timed_out && released.load() && worker_stopped.load(), "close drain releases and joins a canceled worker normally");
+  expect(drained && drain_turns <= 3 && !turn_limit_reached, "66 bytes after close drain in at most three input turns without a readable-fd spin");
+  expect(submissions.load() == 1, "discarded close-state Enter never starts another submission");
 }
 
 // B3: an ordinary key returned after the prior frame's cadence deadline must
@@ -873,6 +966,8 @@ void run_tui_session_test_case(std::string_view test_case)
       break;
   if (test_case == "turn_order")
     test_turn_order();
+  else if (test_case == "close_after_submit")
+    test_close_after_submit_drains_input();
   else if (test_case == "frame_deadline")
     test_frame_deadline();
   else if (test_case == "hangup")

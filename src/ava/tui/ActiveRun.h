@@ -86,8 +86,9 @@ class ActiveRun final
   [[nodiscard]] bool cancel(ActiveRunCancel reason);
   // TUI thread: operation presence covers launch through post-join settlement.
   [[nodiscard]] bool active() const { return operation_.has_value(); }
-  // TUI thread: a published completion blocks another terminal key until complete
-  // has consumed it. Closing also blocks input while the worker settles.
+  // TUI thread: permit decoding until the worker publishes its final result.
+  // Closing keys must still be decoded; handle_modal_input discards them so the
+  // watched fd cannot stay readable. A final result is processed before more input.
   [[nodiscard]] bool accepts_input() const;
   // TUI thread: report runnable mailboxes; a claimed prompt deliberately pauses
   // provider projection, so its backlog alone must not keep the loop spinning.

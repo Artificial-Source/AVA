@@ -767,8 +767,9 @@ bool TuiSession::service_input_batch()
 {
   for (std::size_t count = 0; count < kInputBatchLimit && !loop_.stopped(); ++count)
   {
-    // A published completion and its finite frozen receipt backlog settle before
-    // more input is decoded. Those bytes remain in ncurses/startup buffering.
+    // Process a published final result before decoding more keys. Closing an
+    // unfinished run still decodes and discards input in the active handler;
+    // leaving those bytes on a level-triggered fd would make wait spin.
     if (!terminal_closing_ && active_run_controller_.active() && !active_run_controller_.accepts_input())
       return active_run_controller_.has_pending_updates();
     auto polled = runtime_input::poll_curses_input();

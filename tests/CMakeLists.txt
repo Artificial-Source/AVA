@@ -494,7 +494,7 @@ set(AVA_TUI_COMPOSER_RENDERING_CASES
   message_navigation_empty display_reload_poll display_reload_overview)
 set(AVA_TUI_SESSION_CASES
   turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
-  notification_failure prompt_paint_permission prompt_paint_question)
+  notification_failure prompt_paint_permission prompt_paint_question close_after_submit)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
