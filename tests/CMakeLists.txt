@@ -311,6 +311,7 @@ set(AVA_TESTS_SOURCES
   "tui_runtime_owner_tests.cpp"
   "tui_session_tests.cpp"
   "tui_shutdown_tests.cpp"
+  "tui_mermaid_contract_tests.cpp"
   "tui_prompt_security_tests.cpp"
   "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
@@ -512,7 +513,7 @@ set(AVA_TUI_COMPOSER_RENDERING_CASES
   message_navigation_empty display_reload_poll display_reload_overview prompt_security paste_security prompt_completion_wakeup_permission prompt_completion_wakeup_question)
 set(AVA_TUI_SESSION_CASES
   turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
-  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question shutdown_outcome shutdown_cleanup)
+  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question shutdown_outcome shutdown_cleanup prompt_deferred_permission prompt_deferred_question)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -678,6 +679,15 @@ add_test(
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_package_manager_deferred.cmake)
 
 if(Python3_Interpreter_FOUND)
+  if(OptionEnableLibcwd)
+    # Only the supervisor runs the expected assertion; ordinary suites never invoke it directly.
+    add_test(NAME ava_tests.tui_mermaid_notifier_contract
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_mermaid_contract_subprocess_test.py
+        --ava-tests $<TARGET_FILE:ava_tests>
+        --root ${CMAKE_CURRENT_BINARY_DIR}/tui-mermaid-contract)
+    set_tests_properties(ava_tests.tui_mermaid_notifier_contract
+      PROPERTIES TIMEOUT 20 LABELS "tui;offline" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endif()
   # A fresh supervised process makes intentional shutdown termination observable
   # without risking an unbounded worker join in the ordinary test runner.
   foreach(AVA_SHUTDOWN_FAULT IN ITEMS queue_receipts queue_returned_error completion_returned_error stop_request queued_prompts active_prompt plugin_waiters outer_exception)

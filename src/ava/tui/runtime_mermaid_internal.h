@@ -56,6 +56,7 @@ class RuntimeMermaidPresentationController final
 
   // The attached loop outlives this stable owner and its registration.
   // Attach the renderer first so discovery requests only batch invalidation.
+  // A nonempty bridge must support notifier registration, including while disabled.
   void attach_loop(TuiEventLoop& loop);
   // TUI application stage: reconcile records, drain results before submitting work, update accepted diagram layout, refresh
   // search, and invalidate a frame.

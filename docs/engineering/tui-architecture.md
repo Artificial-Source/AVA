@@ -103,8 +103,9 @@ The normal order in `TuiSession::run` is:
 2. **Due timers.** Dispatch the registrations whose deadlines were due at the
    start of this pass. Timer callbacks update their feature or request a frame.
 3. **Application updates.** Consume up to 256 active-run events, handle completion,
-   and update feature presentation. An open host prompt holds provider projection
-   until the claim retires.
+   and update feature presentation. An open host prompt holds provider events,
+   Mermaid completions and display-settings reloads until the prompt retires.
+   Their pending work stays queued; workspace rendering failures still stop the loop.
 4. **Input.** Poll up to 32 input results. A discarded control reply consumed input
    and counts toward that budget; it does not mean the input buffer is empty.
    Check signals again after decoding before dispatching a retained key.

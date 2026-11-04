@@ -99,6 +99,7 @@ class TuiSession final
   [[nodiscard]] bool service_application_updates();
   // TUI thread after run updates: consume feature failure/outcome flags, diagram
   // readiness and eligible display reloads before decoding input. Never waits.
+  // Host prompts hold diagram/reload work; workspace failure is checked first.
   void service_presentations();
   // TUI thread after updates: poll at most 32 input results, including discarded
   // replies. True keeps the next wait nonblocking; closing input is drained only.

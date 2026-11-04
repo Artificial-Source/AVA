@@ -756,7 +756,17 @@ void TuiSession::service_presentations()
     loop_.request_stop();
     return;
   }
-  if (subagent_workspace_.take_render_failure() || mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)
+  if (subagent_workspace_.take_render_failure())
+  {
+    apply_input_outcome(TuiInputOutcome::Failure);
+    return;
+  }
+  // A host prompt freezes these display changes until it retires. Skip the
+  // service calls themselves so completion and reload flags remain pending.
+  // Workspace failures still end the session even while the prompt owns input.
+  if (prompt_coordinator_.has_active())
+    return;
+  if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)
   {
     apply_input_outcome(TuiInputOutcome::Failure);
     return;

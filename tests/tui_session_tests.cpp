@@ -39,6 +39,8 @@
 
 // Run isolated shutdown fault cases after the common terminal setup below.
 void run_tui_shutdown_test_case(std::string_view test_case);
+// Run the missing-notifier contract only under its bounded subprocess supervisor.
+void run_tui_mermaid_missing_notifier_test();
 
 // Direct access to the real latch lets the fault test inspect it without adding
 // an artificial Session control marker to its phase observations.
@@ -134,6 +136,9 @@ struct SessionProbe
   std::function<void(TuiEventLoop&, TuiWaitMode)> before_wait;
   // Runs before real due dispatch, after this turn's control stage finished.
   std::function<void(TuiEventLoop&, Clock::time_point)> before_due;
+  // A scenario may advance only timer dispatch's clock after observing a real
+  // prompt. OS waits, worker timeouts, and frame deadlines keep their real clocks.
+  std::optional<Clock::time_point> timer_now;
   // Runs after real dispatch to inspect callback effects before application work.
   std::function<void(TuiEventLoop&)> after_due;
   // Runs after a real decoded result, before Session's retained-key signal check.
@@ -1274,6 +1279,147 @@ void test_prompt_exit(int cause, bool permission = true)
   expect(cause == 2 ? caught : exit_code == (cause >= 3 ? 130 : cause == 1 ? 1 : 0), "permission exit preserves its original reason");
 }
 
+// R11: host prompts hold Mermaid results/retries and settings checks. Answering
+// resumes the held work without a second producer notification or timer deadline.
+void test_prompt_holds_display_work(bool permission, bool retry)
+{
+  SessionInput input;
+  WorkerGate gate;
+  std::atomic_bool answered{false};
+  std::atomic_bool released{false};
+  std::function<void()> notify;
+  std::vector<ava::tui::TuiMermaidRenderRequest> requests;
+  std::vector<ava::tui::TuiMermaidRenderCompletion> completions;
+  std::size_t drains = 0;
+  std::size_t reloads = 0;
+  bool bridge_busy = retry;
+  bool reload_ready = false;
+  ava::tui::TuiRuntimeOptions options;
+  options.initial_transcript = {{.label = "ava", .text = "```mermaid\ngraph TD; A-->B\n```"}};
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  frontend.hooks().display_settings_snapshot = [] {
+    ava::tui::TuiLocalDisplaySettings settings;
+    settings.mermaid_enabled = true;
+    settings.mermaid_config_epoch = 1;
+    return settings;
+  };
+  // All bridge callbacks run on the test's TUI thread and borrow locals declared
+  // before frontend. Session unregisters the notifier before those locals die.
+  frontend.hooks().mermaid_bridge = [requests = &requests, completions = &completions, drains = &drains, busy = &bridge_busy, notify = &notify] {
+    ava::tui::TuiMermaidRenderBridge bridge;
+    bridge.enabled = true;
+    bridge.config_epoch = 1;
+    bridge.enqueue = [requests](ava::tui::TuiMermaidRenderRequest request) {
+      requests->push_back(std::move(request));
+      return ava::tui::TuiMermaidEnqueueResult::Accepted;
+    };
+    bridge.cancel = [](std::uint64_t, std::uint64_t) { return true; };
+    bridge.drain = [drains, busy, completions]() -> std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> {
+      ++*drains;
+      if (*busy)
+        return std::nullopt;
+      return std::exchange(*completions, {});
+    };
+    bridge.set_completion_notifier = [notify](std::function<void()> replacement) { *notify = std::move(replacement); };
+    return bridge;
+  };
+  frontend.hooks().on_maybe_reload_display_settings = [reloads = &reloads,
+                                                       ready = &reload_ready]() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
+    ++*reloads;
+    if (!std::exchange(*ready, false))
+      return std::nullopt;
+    ava::tui::TuiLocalDisplaySettings settings;
+    settings.show_images = false;
+    settings.mermaid_enabled = true;
+    settings.mermaid_config_epoch = 1;
+    return ava::tui::TuiLocalDisplaySettingsResult{.settings = std::move(settings), .status = "deferred settings applied", .output = {}};
+  };
+  frontend.hooks().on_submit = [permission, gate = &gate, answered = &answered, released = &released](std::string const&, ava::tui::TuiSubmitContext context) {
+    if (permission)
+    {
+      ava::permissions::PermissionPrompt prompt;
+      prompt.operation = ava::permissions::Operation::RunCommand;
+      prompt.mode = ava::core::Mode::Build;
+      prompt.command = "echo deferred";
+      prompt.tool_name = "bash";
+      auto result = context.permission_resolver(prompt);
+      answered->store(result && *result == ava::permissions::PermissionResolution::Allow);
+    }
+    else
+    {
+      ava::agent::QuestionPrompt prompt{.header = "Deferred work", .question = "Choose", .options = {{.value = "yes", .label = "Yes"}}};
+      auto result = context.question_resolver(prompt);
+      answered->store(result && result->selected_options == std::vector<std::string>{"yes"});
+    }
+    // Hold the provider after its answer so completion settlement cannot be the
+    // reason Mermaid/display work resumes. The unwind guard releases before join.
+    released->store(gate->wait_for_release());
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  ava::tui::RuntimePromptCoordinator* prompts = nullptr;
+  std::size_t held_turns = 0;
+  std::size_t held_drains = 0;
+  std::size_t held_reloads = 0;
+  bool fresh_sent = false;
+  bool resumed = false;
+  bool held_unchanged = true;
+  probe.before_prompt = [prompts = &prompts](ava::tui::RuntimePromptCoordinator& coordinator) { *prompts = &coordinator; };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (!prompts || (!prompts->has_active() && held_turns == 0))
+      return;
+    if (prompts->has_active())
+    {
+      if (held_turns++ == 0)
+      {
+        held_drains = drains;
+        held_reloads = reloads;
+        reload_ready = true;
+        bridge_busy = false;
+        // Deliver the result once. In the retry case, the due callback is the
+        // only reason to revisit the previously busy bridge; no result is sent.
+        if (!retry && ava::tests::require(requests.size() == 1 && static_cast<bool>(notify), "initial Mermaid request and notifier exist before host prompt"))
+        {
+          completions.push_back({.identity = requests.front().identity, .config_epoch = 1, .accepted = true, .text = "A --> B"});
+          notify();
+        }
+        probe.timer_now = Clock::now() + std::chrono::seconds(1);
+      }
+      else
+      {
+        held_unchanged &= drains == held_drains && reloads == held_reloads && reload_ready;
+        held_unchanged &= retry ? requests.empty() : completions.size() == 1;
+      }
+      if (held_turns == 3)
+      {
+        fresh_sent = true;
+        native_input(permission ? "a" : "1");
+      }
+      notify_before_block(loop, mode);
+      return;
+    }
+    // The answer is dispatched after this turn's presentation stage. Let its
+    // own wakeup schedule the next turn; do not publish another test notification.
+    if (drains == held_drains || reloads == held_reloads)
+      return;
+    resumed = reloads == held_reloads + 1 && !reload_ready && completions.empty() && requests.size() == 1;
+    gate.release();
+    loop.request_stop();
+  };
+  seed_submission();
+  int exit_code = -1;
+  {
+    ProbeScope scope(probe);
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    ReleaseWorker release(gate);
+    exit_code = session.run([] { return true; });
+  }
+  expect(held_turns == 3 && held_unchanged, "three host prompt turns preserve Mermaid completion/retry and due display reload");
+  expect(fresh_sent && resumed && answered.load(), "fresh answer resumes both held features without another producer notification");
+  expect(exit_code == 0 && !probe.timed_out && released.load(), "deferred display scenario exits normally and joins its held provider");
+  expect(!notify, "Session retires the Mermaid notifier before fixture storage is destroyed");
+}
+
 // S1: a previously granted session recipe must still return Io if its automatic
 // status handoff fails. The first request establishes the grant through fresh input.
 void test_reused_permission_grant_paint_failure()
@@ -1446,6 +1592,8 @@ extern "C" void session_wrap_due(TuiEventLoop* loop, Clock::time_point now)
     probe->turn().stages.push_back(Stage::Due);
     if (probe->before_due)
       probe->before_due(*loop, now);
+    if (probe->timer_now)
+      now = std::max(now, *probe->timer_now);
   }
   session_real_due(loop, now);
   if (probe && probe->after_due)
@@ -1634,6 +1782,8 @@ void run_tui_session_test_case(std::string_view test_case)
       break;
   if (test_case == "shutdown_outcome" || test_case == "shutdown_cleanup")
     run_tui_shutdown_test_case(test_case);
+  else if (test_case == "mermaid_missing_notifier")
+    run_tui_mermaid_missing_notifier_test();
   else if (test_case == "turn_order")
     test_turn_order();
   else if (test_case == "close_after_submit")
@@ -1660,6 +1810,11 @@ void run_tui_session_test_case(std::string_view test_case)
     }
     else
       test_prompt_exit(1, false);
+  }
+  else if (test_case == "prompt_deferred_permission" || test_case == "prompt_deferred_question")
+  {
+    for (bool retry : {false, true})
+      test_prompt_holds_display_work(test_case == "prompt_deferred_permission", retry);
   }
   else if (test_case == "frame_deadline")
     test_frame_deadline();

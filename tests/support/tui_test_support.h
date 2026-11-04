@@ -50,6 +50,9 @@ struct TuiFrontEndTestHooks
   std::function<ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>()> on_reload_display_settings;
   // TUI thread: supply effective settings used to capture or rebase a preview.
   std::function<ava::tui::TuiLocalDisplaySettings()> display_settings_snapshot;
+  // TUI thread before Session construction: supply an owned bridge whose callbacks
+  // retain or borrow test storage that outlives Session and notifier retirement.
+  std::function<ava::tui::TuiMermaidRenderBridge()> mermaid_bridge;
   // TUI thread: distinguish applied, unchanged and failed discovery without changing owner cadence.
   std::function<ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>>()> on_maybe_reload_display_settings;
   // Prepare a test-owned summary generation without starting a provider worker.

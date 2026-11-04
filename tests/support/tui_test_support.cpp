@@ -118,6 +118,11 @@ class TestTuiFrontEnd final : public ava::app::TuiFrontEnd
   {
     return hooks_.display_settings_snapshot ? hooks_.display_settings_snapshot() : ava::app::TuiFrontEnd::display_settings_snapshot();
   }
+  // TUI thread: install a controlled bridge while preserving Session's real notifier lifecycle.
+  ava::tui::TuiMermaidRenderBridge mermaid_bridge() const override
+  {
+    return hooks_.mermaid_bridge ? hooks_.mermaid_bridge() : ava::app::TuiFrontEnd::mermaid_bridge();
+  }
   // TUI thread: distinguish applied, unchanged and failed discovery without changing owner cadence.
   ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> on_maybe_reload_display_settings() override
   {

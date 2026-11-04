@@ -12,6 +12,7 @@
 #include <memory>
 #include <ranges>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
 namespace {
@@ -96,6 +97,9 @@ RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
 
 void RuntimeMermaidPresentationController::attach_loop(TuiEventLoop& loop)
 {
+  // Supply set_completion_notifier before attaching any nonempty bridge, even
+  // while disabled; otherwise accepted work can finish without waking its owner.
+  ASSERT((!bridge_.enqueue && !bridge_.cancel && !bridge_.drain) || bridge_.set_completion_notifier);
   retry_timer_ = loop.member_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
   if (bridge_.set_completion_notifier)
   {
