@@ -193,3 +193,10 @@ new feature owner. A summary always carries its saved view, so a summary request
 without restoration data cannot be constructed through the old field mismatch.
 Session reconciliation still precedes success/error feedback; draft completion
 and command drafting retain their different reset rules.
+
+These result records also retain public fields as a visibility exception. Each
+is a short-lived, owned value assembled once by its producer and consumed by its
+caller on the same thread. They own no registration, worker or coordinated
+mutable state. Public aggregate initialization makes each handoff explicit;
+private fields with matching setters would add no invariant. Feature owners
+remain private and expose operations instead of writable state.

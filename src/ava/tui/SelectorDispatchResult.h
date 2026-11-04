@@ -77,7 +77,7 @@ struct SelectorParentSummary
   // Complete prior view moved into the summary owner before it publishes progress.
   SelectListView previous_view;
   // Source row index paired with the saved view; dispatch validates the chosen row.
-  std::size_t selected_index;
+  std::size_t selected_index = 0;
   // TUI-thread diagnostics reveal only row position, never source identity or view text.
   void print_on(std::ostream& output) const { output << "{selected_index:" << selected_index << '}'; }
   // The handwritten printer avoids recursively traversing the sensitive saved view.

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "RuntimeInput.h"
+#include "ava/debug/print_members_on.h"
 
 namespace ava::tui::runtime_input {
 
