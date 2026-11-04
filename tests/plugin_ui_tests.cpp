@@ -1,3 +1,4 @@
+// Verify plugin UI validation, lifetime, interaction, and sanitized terminal rendering.
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/process_group_test_support.h"
@@ -1864,6 +1865,39 @@ void test_plugin_ui_centered_modal_insets_and_hit_geometry()
                           {"choice hit", ava::tui::detail::plugin_ui_option_for_modal_row(view, 5, 80, 14) == std::size_t{0}}});
 }
 
+// S2: even directly supplied view data cannot inject terminal controls through
+// plugin attribution, and geometry measures the literal sanitized replacements.
+void test_tui_plugin_binding_rendering_sanitizes_before_styles_and_width()
+{
+  ava::tui::TuiPluginUiBinding binding{.plugin_id = "plugin\x1b[999m", .command = "run\x1b]52;c;unsafe\a", .invocation_id = {}};
+  ava::tui::TuiPluginUiDockView dock{};
+  dock.binding = binding;
+  dock.status = "ready";
+  ava::tui::TuiPluginUiModalView modal{};
+  modal.binding = binding;
+  modal.kind = ava::tui::TuiPluginUiKind::Confirm;
+  modal.title = "Confirm";
+  for (auto const& lines : {ava::tui::detail::render_plugin_ui_dock(dock, 80, 8), ava::tui::detail::render_plugin_ui_modal(modal, 80, 12)})
+  {
+    std::string visible;
+    std::string raw;
+    for (auto const& line : lines)
+    {
+      visible += strip_sgr(line) + "\n";
+      raw += line + "\n";
+    }
+    expect(visible.find("plugin?[999m") != std::string::npos && visible.find("run?]52;c;unsafe?") != std::string::npos,
+           "dock and modal show sanitized plugin attribution literally");
+    expect(raw.find("\x1b[999m") == std::string::npos && raw.find("\x1b]52;") == std::string::npos && raw.find('\a') == std::string::npos,
+           "untrusted plugin attribution emits no SGR or OSC sequence while trusted renderer styles remain intact");
+  }
+  binding.plugin_id = std::string(50, 'i') + "\x1b[12345678901234567890m";
+  binding.command = "choose";
+  for (auto kind : {ava::tui::TuiPluginUiKind::Status, ava::tui::TuiPluginUiKind::Confirm})
+    expect(!ava::tui::plugin_ui_host_chrome_fits(binding, kind, 80, 12), "sanitized escape text cannot pass attribution width admission as invisible styling");
+}
+
+// S2: bounded modal rendering preserves attribution while neutralizing untrusted title controls.
 void test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -1880,6 +1914,7 @@ void test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned()
                                      .selected_option = 1};
   bool bounded = true;
   std::string visible;
+  std::string raw;
   for (std::size_t height = 8; height <= 12; ++height)
   {
     snapshot.height = height;
@@ -1888,11 +1923,16 @@ void test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned()
     if (height == 12)
     {
       for (auto const& line : frame)
+      {
         visible += strip_sgr(line) + "\n";
+        raw += line + "\n";
+      }
     }
   }
   ava::tests::expect_all("8-12-row renderer bounds and host chrome: \n" + visible,
                          {{"bounded", bounded},
+                          {"title sanitized", visible.find("Choose?[31m safely") != std::string::npos},
+                          {"title cannot emit controls", raw.find("Choose\x1b[31m safely") == std::string::npos},
                           {"plugin identity", visible.find("com.example.ui") != std::string::npos},
                           {"command", visible.find("choose") != std::string::npos},
                           {"first option", visible.find("Alpha") != std::string::npos},
@@ -1935,4 +1975,5 @@ void run_plugin_ui_tests()
   test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation();
   test_plugin_ui_centered_modal_insets_and_hit_geometry();
   test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned();
+  test_tui_plugin_binding_rendering_sanitizes_before_styles_and_width();
 }

@@ -1,3 +1,5 @@
+// Render plugin surfaces through the shared terminal-text contract before adding
+// trusted styles. Host attribution and geometry use the same sanitized values.
 #include "sys.h"
 #include "ava/tui/composer_internal.h"
 
@@ -7,14 +9,18 @@
 namespace ava::tui {
 namespace {
 
+// TUI thread: measure the identity as displayed, including replacements for
+// unsafe bytes. Binding validation is not a substitute for the renderer boundary.
 std::string plugin_id_host_text(TuiPluginUiBinding const& binding)
 {
-  return "Plugin ID · " + binding.plugin_id;
+  return "Plugin ID · " + sanitize_terminal_text(binding.plugin_id);
 }
 
+// TUI thread: command attribution must fit after sanitation; measuring raw SGR
+// would hide bytes that the screen shows as literal replacement text.
 std::string plugin_command_host_text(TuiPluginUiBinding const& binding)
 {
-  return "Command · " + binding.command;
+  return "Command · " + sanitize_terminal_text(binding.command);
 }
 
 std::string plugin_controls_host_text(TuiPluginUiKind kind)
@@ -124,6 +130,8 @@ std::pair<std::string, std::optional<std::string>> plugin_option_text(TuiPluginU
 
 }  // namespace
 
+// TUI thread: borrow the current dock only while producing owned, bounded rows.
+// Sanitize every binding/payload value before composing trusted terminal styles.
 std::vector<std::string> render_plugin_ui_dock(TuiPluginUiDockView const& view, std::size_t width, std::size_t max_lines)
 {
   auto const kind = view.widgets.empty() ? TuiPluginUiKind::Status : TuiPluginUiKind::Widget;
@@ -140,9 +148,11 @@ std::vector<std::string> render_plugin_ui_dock(TuiPluginUiDockView const& view, 
   };
 
   lines.push_back(plugin_surface_line(
-      std::string(kSgrAccent) + "Plugin ID" + std::string(kSgrReset) + std::string(kSgrScreenBg) + " · " + view.binding.plugin_id, width, kSgrScreenBg));
-  lines.push_back(plugin_surface_line(std::string(kSgrMuted) + "Command" + std::string(kSgrReset) + std::string(kSgrScreenBg) + " · " + view.binding.command,
-                                      width, kSgrScreenBg));
+      std::string(kSgrAccent) + "Plugin ID" + std::string(kSgrReset) + std::string(kSgrScreenBg) + " · " + sanitize_terminal_text(view.binding.plugin_id),
+      width, kSgrScreenBg));
+  lines.push_back(plugin_surface_line(
+      std::string(kSgrMuted) + "Command" + std::string(kSgrReset) + std::string(kSgrScreenBg) + " · " + sanitize_terminal_text(view.binding.command), width,
+      kSgrScreenBg));
   if (view.status)
   {
     push(std::string(kSgrMuted) + "status" + std::string(kSgrReset) + std::string(kSgrScreenBg) + "  " + sanitize_terminal_text(*view.status));
@@ -163,6 +173,8 @@ std::vector<std::string> render_plugin_ui_dock(TuiPluginUiDockView const& view, 
   return lines;
 }
 
+// TUI thread: build owned modal rows from a borrowed view; no field may supply
+// terminal controls. Sanitation also keeps row fitting consistent with admission.
 std::vector<std::string> render_plugin_ui_modal(TuiPluginUiModalView const& view, std::size_t width, std::size_t max_lines)
 {
   if (!plugin_ui_host_chrome_fits(view.binding, view.kind, width, max_lines))
@@ -177,8 +189,8 @@ std::vector<std::string> render_plugin_ui_modal(TuiPluginUiModalView const& view
 
   if (modal_vertical_inset(max_lines) != 0)
     push({});
-  push(std::string(kSgrAccent) + "Plugin ID" + std::string(kSgrReset) + std::string(kSgrComposerBg) + " · " + view.binding.plugin_id);
-  push(std::string(kSgrMuted) + "Command" + std::string(kSgrReset) + std::string(kSgrComposerBg) + " · " + view.binding.command);
+  push(std::string(kSgrAccent) + "Plugin ID" + std::string(kSgrReset) + std::string(kSgrComposerBg) + " · " + sanitize_terminal_text(view.binding.plugin_id));
+  push(std::string(kSgrMuted) + "Command" + std::string(kSgrReset) + std::string(kSgrComposerBg) + " · " + sanitize_terminal_text(view.binding.command));
   auto const kind_label = view.kind == TuiPluginUiKind::Confirm ? std::string("Confirm") : std::string("Select");
   push(std::string(kSgrBold) + kind_label + " · " + sanitize_terminal_text(view.title) + std::string(kSgrReset) + std::string(kSgrComposerBg));
   push(std::string(kSgrMuted) + sanitize_terminal_text(view.description) + std::string(kSgrReset) + std::string(kSgrComposerBg));
@@ -198,7 +210,8 @@ std::vector<std::string> render_plugin_ui_modal(TuiPluginUiModalView const& view
     push(std::move(line));
   }
   auto const bottom_inset = modal_vertical_inset(max_lines);
-  while (lines.size() + 1 + bottom_inset < max_lines) push({});
+  while (lines.size() + 1 + bottom_inset < max_lines)
+    push({});
   auto const enter = view.kind == TuiPluginUiKind::Confirm ? std::string("Enter confirm") : std::string("Enter select");
   push(std::string(kSgrMuted) + enter + " · Esc cancel · Ctrl+C stop · 120s max" + std::string(kSgrReset));
   if (bottom_inset != 0)
