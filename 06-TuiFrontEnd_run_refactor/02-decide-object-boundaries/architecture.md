@@ -242,8 +242,10 @@ units under GNU linker wrapping; footer-only drawing is outside its scope.
 Legacy input readers used only by tests are removed. Startup probes retain the
 native-terminal reader. Tests call the same `poll_curses_input` used by Session;
 PTY waits use a real loop timer, and drainage distinguishes `Discarded` from
-`Empty`. The local deadline helper is an anonymous test type, so its printer
-opt-out follows the internal-linkage rule.
+`Empty`. `InputReadDeadline` stays in this test translation unit because only
+its local wait helper uses it; this is a file-layout exception for test support.
+Its private flag changes only through the timer callback, and tests read it
+through a const observer. Its anonymous linkage requires the printer opt-out.
 
 The finished-tool merge helper is private to `ActiveRunEvents.cpp`. Tests through the owning reducer retain duplicate replacement, canceled/error cards, unattributed and
 unauthorized groups, and authorized/running exclusion. The removed direct

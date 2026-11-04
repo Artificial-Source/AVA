@@ -1817,14 +1817,19 @@ void test_osc11_theme_precedence_and_reset()
 }
 
 // Test-thread deadline target; its timer handle must retire before this stack value.
-struct InputReadDeadline
+class InputReadDeadline
 {
+ public:
   // A real timer callback ends the fixture wait without reading the terminal.
-  void expire(ava::tui::TuiEventLoop::Clock::time_point) { expired = true; }
-  // Written and read only by the test thread while it services its real loop.
-  bool expired = false;
+  void expire(ava::tui::TuiEventLoop::Clock::time_point) { expired_ = true; }
+  // Test thread: observe the real timer result without advancing or servicing it.
+  [[nodiscard]] bool expired() const noexcept { return expired_; }
   // This anonymous test helper has internal linkage and no generated printer.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  // Written and read only by the test thread while it services its real loop.
+  bool expired_ = false;
 };
 
 // Poll already-decoded bytes first, then wait on the live PTY with a real deadline.
@@ -1843,10 +1848,10 @@ ava::tui::runtime_input::InputPollResult wait_for_decoded_input(std::chrono::mil
   InputReadDeadline expired;
   auto timer = loop.member_timer(expired, &InputReadDeadline::expire);
   timer.arm_at(deadline);
-  while (!expired.expired && !loop.terminal_hangup() && !loop.terminal_error() && !loop.notification_failed())
+  while (!expired.expired() && !loop.terminal_hangup() && !loop.terminal_error() && !loop.notification_failed())
   {
     loop.service_due();
-    if (expired.expired)
+    if (expired.expired())
       break;
     if (input.kind == runtime_input::InputPollKind::Empty)
       loop.wait(TuiWaitMode::Block);

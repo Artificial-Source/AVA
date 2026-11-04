@@ -255,8 +255,11 @@ struct PromptSecurityFixture
     return false;
   }
 
+ private:
   // Own actual drawing observations without borrowing renderer caches or servicing a paint.
   tui_test_support::ScopedScreenDrawObserver paint_observer;
+
+ public:
   // Scheduler and descriptors outlive every timer below.
   EventLoopFixture event_loop;
   // Application session/frontend registration outlives projection and renderer.
