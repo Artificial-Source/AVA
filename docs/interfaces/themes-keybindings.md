@@ -146,10 +146,12 @@ reset before each interactive TUI session and again on every exit, is not
 re-probed on suspend/resume, and never flips the theme after first paint. Keys,
 resizes, and complete bracketed pastes observed while waiting for the reply are
 preserved in order for the composer; keyboard-protocol replies and OSC control
-replies remain discard-only. The main probe drain budget is 50 ms; escape
-assembly begun at that edge may still use its ordinary 50 ms budget, and a
-bracketed paste already begun may finish under its ordinary 1 s cap so the paste
-stays atomic.
+replies remain discard-only. The main probe drain budget is 50 ms. Once escape
+assembly begins, each continuation read can wait up to 100 ms. A bracketed paste
+uses a 1 s timeout for each continuation read. These are per-read timeouts, not
+whole-sequence limits, so decoding a sequence begun near the probe deadline can
+extend startup beyond 50 ms. `ESCDELAY` changes ncurses' Escape delay; it does not
+change these decoder timeouts.
 
 `COLORFGBG` remains a lower-precedence hint when OSC 11 is unavailable. AVA reads
 the final `;`- or `:`-separated numeric field as the terminal background color

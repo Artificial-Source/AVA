@@ -1,3 +1,4 @@
+// Shared terminal and composer defaults used by the TUI owners and input decoder.
 #pragma once
 
 #include <cstdint>
@@ -13,8 +14,9 @@ constexpr int cursor_visibility = 1;
 // Whether or not by default the cursor blinks or not.
 constexpr bool default_cursor_blink = true;
 
-// Time to wait after ESC is pressed until a single escape key press is considered not part of an escape sequence.
-// If the environment variable ESCDELAY is set, it takes precedence and this value is ignored.
+// Default ncurses delay for distinguishing Escape from a key sequence; ESCDELAY
+// overrides that ncurses setting. The TUI decoder independently uses this value
+// for each continuation read, even when ESCDELAY is set; it is not a total budget.
 constexpr int default_terminal_escape_delay_ms = 100;
 
 // The "info" color as used by opencode.

@@ -92,8 +92,9 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
            std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Navigation), std::bind_front(&TuiSession::handle_tail_input, this)}),
       control_timer_(loop_.member_timer(*this, &TuiSession::wake_for_control))
 {
-  // Owners now exist at stable addresses. Attach timers only after that point;
-  // construction must never dispatch a callback into a partially built session.
+  // Some members registered timers during initialization; the remaining owners
+  // attach here. Registration never dispatches callbacks. Only run() services
+  // due timers, after every member and attachment is ready at a stable address.
   renderer_.attach_loop(loop_);
   plugin_ui_.attach_loop(loop_);
   action_controller_.attach_loop(loop_);
@@ -842,8 +843,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     // Other timers that became due get the next control-first turn.
     if (!terminal_closing_ && !renderer_.paint_ready_frame())
     {
-      // The renderer only queued prompt paints earlier in this turn. Report the
-      // actual write failure before shutdown can answer the claim as interrupted.
+      // A deferred frame can fail after a prompt's opening handoff succeeded.
+      // Report the write failure before shutdown answers that prompt as interrupted.
       prompt_coordinator_.fail_active_render();
       apply_input_outcome(TuiInputOutcome::Failure);
       break;

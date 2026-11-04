@@ -392,8 +392,9 @@ RuntimeEventDrainResult ActiveRun::consume(std::size_t max_events)
     operation_->terminal_write_failed = true;
     return RuntimeEventDrainResult::RenderFailed;
   }
-  // Do not project provider events beneath a host prompt. Its worker may borrow
-  // the current view; queued events resume after the prompt has retired.
+  // Keep provider events queued while a host prompt is visible. TUI callbacks may
+  // borrow worker-stack data (for example, QuestionPrompt::auto_resolve); retire
+  // them before releasing that worker. Workers never read the prompt view.
   if (prompt_coordinator_.has_active())
     return RuntimeEventDrainResult::NoEvents;
   if (!spinner_.active())
@@ -450,8 +451,8 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
   }
   if (transcript_search_.is_open())
   {
-    // This binding is synchronous: the coordinator serializes claim-or-search,
-    // then drops its mutex before beginning a newly claimed modal operation.
+    // This binding is synchronous: the coordinator chooses a queued prompt or
+    // search under its mutex, then unlocks before invoking either callback.
     auto const outcome = prompt_coordinator_.dispatch_search_input_with_prompt_precedence(std::bind_front(&ActiveRun::handle_search_input_event, this, input),
                                                                                           std::bind_front(&ActiveRun::stop_requested, this),
                                                                                           std::bind_front(&ActiveRun::before_prompt, this));

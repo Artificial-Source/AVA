@@ -41,8 +41,9 @@ namespace ava::tui {
 class TuiSession final
 {
  public:
-  // TUI thread: construct once after terminal initialization. Build owners before
-  // registering their callbacks; all borrowed arguments must outlive the session.
+  // TUI thread: construct once after terminal initialization. Members may register
+  // timers while being built, but run() alone dispatches them after construction.
+  // All borrowed arguments must outlive the session.
   TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line);
   // TUI thread: retire producer admission and join active work while all feature
   // owners are still alive. This also covers exceptions and early run returns.
@@ -58,7 +59,8 @@ class TuiSession final
   // TUI thread, once per constructed session: run control/timers/updates/input/
   // paint/wait until exit, then retire work before invoking before_shutdown.
   // The callback is borrowed only for this call; the outer frontend guard covers
-  // early returns/exceptions. Return 130 for a signal, 1 for I/O failure, else 0.
+  // early returns/exceptions. Return 130 for a signal, 1 for I/O or cleanup failure,
+  // otherwise 0.
   [[nodiscard]] int run(std::function<bool()> const& before_shutdown);
 
   // Owned Composer, ActiveRun and presentation members deliberately opt out of

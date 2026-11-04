@@ -74,7 +74,8 @@ class ActiveRun final
   // keep provider projection queued until borrowed prompt callbacks retire.
   [[nodiscard]] RuntimeEventDrainResult consume(std::size_t max_events = 256);
   // TUI thread: arbitrate worker prompts, plugin dialogs and the atomic prompt/search
-  // race before ordinary input. No value leaves the key for ActiveRunInput.
+  // race before ordinary input. std::nullopt lets ActiveRunInput handle the key;
+  // true means it was consumed or discarded, and false reports input/render failure.
   [[nodiscard]] std::optional<bool> handle_modal_input(runtime_input::RuntimeInput const& input);
   // TUI thread: a ready result joins, freezes admission, drains, settles and retires
   // in this call. While active, no value means completion is not yet published.
@@ -82,7 +83,9 @@ class ActiveRun final
   // once published, joining may still wait for the worker epilogue.
   [[nodiscard]] std::optional<ActiveRunOutcome> complete();
   // TUI thread: resolve a ready automatic answer before control cancellation.
-  // Close/signals stop input admission; completion still owns worker join.
+  // Close/signals stop ordinary input; complete() or shutdown() joins the worker.
+  // True means cancellation was accepted, not that the worker has stopped. False
+  // means Stop could not request a frame because rendering has already failed.
   [[nodiscard]] bool cancel(ActiveRunCancel reason);
   // TUI thread: operation presence covers launch through post-join settlement.
   [[nodiscard]] bool active() const { return operation_.has_value(); }
@@ -101,9 +104,11 @@ class ActiveRun final
   // Active input calls this on the TUI thread with an operation present.
   // No queue or inbox reference escapes.
   // Stop is published before any queued prompt waiter is released.
+  // True means the feedback frame was requested; false means rendering already
+  // failed. Neither result means the worker has finished; complete/shutdown joins it.
   [[nodiscard]] bool request_stop();
   // TUI thread while active: retain the worker until completion/shutdown joins it;
-  // stop precedes queued-waiter release, and no new input is admitted.
+  // stop precedes queued-waiter release, and later keys are decoded and discarded.
   void request_close_after_submit();
   // TUI thread while active: true means the backend accepted the text and the
   // editor may clear it; false publishes why the draft must be retained.
@@ -154,8 +159,9 @@ class ActiveRun final
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
-  // TUI thread: bounded search-only callback run under the prompt admission lock.
-  // It must not submit commands or enqueue prompts, which would reenter that lock.
+  // TUI thread: synchronous search-only callback after the coordinator has decided
+  // no queued prompt takes this key. The queue mutex is unlocked before this call;
+  // prompts arriving during it wait for the next turn. False reports input failure.
   [[nodiscard]] bool handle_search_input_event(runtime_input::RuntimeInput const& input);
   // TUI thread with an operation: reduce FIFO events, then publish authorized
   // transcript changes with viewport/search bookkeeping before requesting paint.

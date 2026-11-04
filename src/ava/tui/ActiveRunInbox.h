@@ -51,8 +51,8 @@ class ActiveRunInbox final : public std::enable_shared_from_this<ActiveRunInbox>
   // TUI thread: retain the original callback and shared inbox; the worker updates
   // request context before invoking the original callback outside the mailbox lock.
   [[nodiscard]] FollowUpStarted wrap_follow_up_started(FollowUpStarted original);
-  // TUI before launch or producer thread: serialize identity with enqueue so later
-  // unstamped runtime events receive the new request and correlation IDs.
+  // TUI thread before launch: set the initial request and correlation IDs for
+  // unstamped events. Worker follow-ups update them through follow_up_started().
   void set_request_id(std::string request_id);
   // Either thread: publish the atomic cancellation predicate and wake on its first
   // transition. True identifies the first request; it does not mean work has stopped.
