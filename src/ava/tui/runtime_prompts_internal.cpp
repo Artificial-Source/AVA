@@ -876,9 +876,9 @@ void RuntimePromptCoordinator::fail_pending_requests()
     // Do not construct temporary deques here: even an empty deque can allocate.
     // Request interruption runs no user callback and takes only its own mutex.
     for (auto const& request : pending_permission_requests_)
-      request->interrupt();
+      request->interrupt_queued();
     for (auto const& request : pending_question_requests_)
-      request->interrupt();
+      request->interrupt_queued();
     pending_permission_requests_.clear();
     pending_question_requests_.clear();
   }

@@ -1,3 +1,4 @@
+// Protect prompt rendering, pending-request lifetimes and permission decisions.
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
@@ -52,7 +53,7 @@ template <typename Request, typename Prompt, typename Answer, typename IsCancele
 void test_unclaimed_interruption_and_first_result(Prompt prompt, Answer first, Answer second, IsCanceled is_canceled, IsFirst is_first, std::string_view label)
 {
   auto canceled = std::make_shared<Request>(prompt);
-  canceled->interrupt();
+  canceled->interrupt_queued();
   bool const canceled_claim_rejected = !canceled->begin_resolution();
   auto canceled_waiter = ava::core::make_async("pending_canceled", [canceled] { return canceled->await(); });
   bool const queued_settled = canceled_waiter.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
@@ -68,107 +69,86 @@ void test_unclaimed_interruption_and_first_result(Prompt prompt, Answer first, A
   completed->complete(first);
   bool const completed_claim_rejected = !completed->begin_resolution();
   completed->complete(second);
-  completed->interrupt();
+  completed->interrupt_queued();
   auto completed_waiter = ava::core::make_async("pending_completed", [completed] { return completed->await(); });
   auto completed_result = joined_prompt_result(completed_waiter, label);
   expect(claimed && completed_claim_rejected && !completed->begin_resolution() && is_first(completed_result),
          std::string(label) + " first completion wins over duplicate completion and later interruption");
 }
 
-// Protect the worker borrow until the UI retires its claimed permission callbacks.
-void test_claimed_permission_interruption_waits_for_retirement()
+// A claimed permission remains pending until the TUI retires it with an answer.
+// Queued interruption is no longer a permitted way to modify a displayed prompt.
+void test_claimed_permission_waits_for_retirement()
 {
   auto request = std::make_shared<ava::tui::PendingPermissionRequest>(ava::permissions::PermissionPrompt{});
   bool const claimed = request->begin_resolution();
   bool const duplicate_claim_rejected = !request->begin_resolution();
   std::promise<void> await_started;
   auto started = await_started.get_future();
-  auto waiter = ava::core::make_async("permission_waiter", [request, &await_started] {
-    await_started.set_value();
+  auto waiter = ava::core::make_async("permission_waiter", [request, started = &await_started] {
+    started->set_value();
     return request->await();
   });
   bool const worker_started = started.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
-  request->interrupt();
   bool const held_while_claimed = waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
-  bool const interrupted_claim_rejected = !request->begin_resolution();
-  // Always retire before any assertion, even if the waiter returned too early.
+  // Always retire before assertions. A legitimate answer must survive retirement;
+  // cancellation of other queued requests cannot preempt this claimed request.
   request->complete(ava::permissions::PermissionResolution::Allow);
   auto result = joined_prompt_result(waiter, "claimed permission");
-  expect(claimed && duplicate_claim_rejected && worker_started && held_while_claimed && interrupted_claim_rejected && !request->begin_resolution() && result &&
-             result->resolution == ava::permissions::PermissionResolution::Deny,
-         "claimed permission interruption retains the waiter until resolution retires and denial wins over its late allow");
+  expect(claimed && duplicate_claim_rejected && worker_started && held_while_claimed && !request->begin_resolution() && result &&
+             result->resolution == ava::permissions::PermissionResolution::Allow,
+         "claimed permission keeps its waiter until retirement and returns the TUI's accepted answer");
 }
 
-// Protect question data used by a UI callback until that callback scope has retired.
-void test_claimed_question_retains_borrowed_callback_scope()
+// The TUI invokes a worker-owned callback before completing or abandoning its
+// claim. Both paths must keep that worker's scope alive until callback retirement.
+void test_claimed_question_retains_borrowed_callback_scope(bool abandon)
 {
   std::promise<std::shared_ptr<ava::tui::PendingQuestionRequest>> published_request;
   auto published = published_request.get_future();
-  std::promise<void> await_started;
-  auto started = await_started.get_future();
-  std::promise<void> callback_entered;
-  auto entered = callback_entered.get_future();
-  std::promise<void> callback_returned;
-  auto returned = callback_returned.get_future();
-  std::promise<void> release_callback;
-  auto callback_gate = release_callback.get_future().share();
-  std::promise<void> release_resolution;
-  auto retirement_gate = release_resolution.get_future().share();
   std::weak_ptr<int> borrowed_scope;
   std::atomic<std::size_t> callback_calls = 0;
   std::atomic<bool> worker_scope_retired = false;
-  auto waiter = ava::core::make_async("question_waiter", [&] {
-    // The callback observes this worker-owned lifetime without extending it or
-    // risking a dangling reference if await incorrectly returns too early.
-    auto worker_scope = std::make_shared<int>(1);
-    borrowed_scope = worker_scope;
-    ava::agent::QuestionPrompt prompt{.header = {},
-                                      .question = "Borrowed callback lifetime",
-                                      .options = {},
-                                      .auto_resolve = [scope = std::weak_ptr<int>(worker_scope), callback_gate, &callback_calls, &callback_entered] {
-                                        ++callback_calls;
-                                        bool const alive_on_entry = !scope.expired();
-                                        callback_entered.set_value();
-                                        bool const released = callback_gate.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
-                                        return alive_on_entry && released && !scope.expired();
-                                      }};
-    auto request = std::make_shared<ava::tui::PendingQuestionRequest>(std::move(prompt));
-    published_request.set_value(request);
-    await_started.set_value();
-    auto result = request->await();
-    worker_scope.reset();
-    worker_scope_retired = true;
-    return result;
-  });
+  // These borrowed addresses outlive the joined worker. Publication through the
+  // future also synchronizes the one write to borrowed_scope before TUI reads.
+  auto waiter = ava::core::make_async(
+      "question_waiter", [published = &published_request, scope_observer = &borrowed_scope, calls = &callback_calls, retired = &worker_scope_retired] {
+        auto worker_scope = std::make_shared<int>(1);
+        *scope_observer = worker_scope;
+        ava::agent::QuestionPrompt prompt{
+            .header = {}, .question = "Borrowed callback lifetime", .options = {}, .auto_resolve = [scope = std::weak_ptr<int>(worker_scope), calls, retired] {
+              ++*calls;
+              return !scope.expired() && !retired->load();
+            }};
+        auto request = std::make_shared<ava::tui::PendingQuestionRequest>(std::move(prompt));
+        published->set_value(request);
+        auto result = request->await();
+        worker_scope.reset();
+        retired->store(true);
+        return result;
+      });
   auto request = joined_prompt_result(published, "question publication");
-  bool const worker_started = started.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
   bool const claimed = request->begin_resolution();
   bool const duplicate_claim_rejected = !request->begin_resolution();
-  auto resolver = ava::core::make_async("question_resolver", [request, claimed, retirement_gate, &callback_returned] {
-    bool const callback_succeeded = claimed && request->prompt().auto_resolve();
-    callback_returned.set_value();
-    bool const released = retirement_gate.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
-    request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "late answer"});
-    return callback_succeeded && released;
-  });
-  bool const callback_started = entered.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
-  request->interrupt();
-  bool const blocked_during_callback =
+  bool const held_before_callback =
       waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout && !worker_scope_retired && !borrowed_scope.expired();
-  release_callback.set_value();
-  bool const callback_finished = returned.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
-  bool const blocked_before_retirement =
+  // Callback execution stays on the TUI/test thread. Returning from the callback
+  // alone must not release the worker while the displayed request is still held.
+  bool const callback_succeeded = claimed && request->prompt().auto_resolve();
+  bool const held_before_retirement =
       waiter.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout && !worker_scope_retired && !borrowed_scope.expired();
-  // Release both phases and retire before inspecting any assertion outcome.
-  release_resolution.set_value();
-  bool const callback_succeeded = joined_prompt_result(resolver, "question resolver retirement");
-  request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "cleanup answer"});
+  if (abandon)
+    request->abandon();
+  else
+    request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "accepted answer"});
   auto result = joined_prompt_result(waiter, "claimed question");
-  request->interrupt();
+  // Duplicate notifications after retirement cannot replace the answer already
+  // returned to the worker or invoke the old borrowed callback again.
+  request->interrupt_queued();
   request->complete(ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = "after retirement"});
-  expect(worker_started && claimed && duplicate_claim_rejected && callback_started && blocked_during_callback && callback_finished &&
-             blocked_before_retirement && callback_succeeded && interrupted_question(result),
-         "claimed question interruption keeps the awaiting worker and borrowed auto-resolve scope alive through callback completion and resolution retirement");
+  bool const expected_result = abandon ? interrupted_question(result) : result && result->custom_text == "accepted answer";
+  expect(claimed && duplicate_claim_rejected && held_before_callback && callback_succeeded && held_before_retirement && expected_result,
+         "claimed question retains its borrowed scope through callback return, then answers or interrupts only on retirement");
   expect(worker_scope_retired && borrowed_scope.expired() && callback_calls == 1 && !request->begin_resolution(),
          "retired question releases the worker scope, rejects another claim, and never invokes its borrowed callback again");
 }
@@ -178,8 +158,9 @@ void test_claimed_question_retains_borrowed_callback_scope()
 // Run shared pending-request lifetime checks for both permission and question results.
 void run_tui_pending_request_tests()
 {
-  test_claimed_permission_interruption_waits_for_retirement();
-  test_claimed_question_retains_borrowed_callback_scope();
+  test_claimed_permission_waits_for_retirement();
+  test_claimed_question_retains_borrowed_callback_scope(false);
+  test_claimed_question_retains_borrowed_callback_scope(true);
   test_unclaimed_interruption_and_first_result<ava::tui::PendingPermissionRequest>(
       ava::permissions::PermissionPrompt{}, ava::permissions::PermissionResolutionDecision(ava::permissions::PermissionResolution::Allow),
       ava::permissions::PermissionResolutionDecision(ava::permissions::PermissionResolution::Deny),

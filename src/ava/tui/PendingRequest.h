@@ -1,13 +1,13 @@
 // Shared prompt rendezvous used by the TUI architecture's worker-to-UI handoff.
 #pragma once
 
-#include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
 
 #include <condition_variable>
 #include <mutex>
 #include <optional>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
 
@@ -25,9 +25,8 @@ class PendingRequest final
   // Worker thread, before enqueue. Allocation here may fail without leaving an
   // admitted waiter behind; later cancellation only moves the prepared result.
   explicit PendingRequest(Prompt prompt) : prompt_(std::move(prompt)), interrupted_(Interrupted()) { }
-  // A synchronization identity must not be duplicated while either side waits.
+  // Not copyable: each worker waits on this one synchronization identity.
   PendingRequest(PendingRequest const&) = delete;
-  // A live rendezvous cannot be replaced by another request's synchronization state.
   PendingRequest& operator=(PendingRequest const&) = delete;
 
   // Either participant may read while retaining shared ownership of this request.
@@ -50,8 +49,9 @@ class PendingRequest final
     resolving_ = true;
     return true;
   }
-  // TUI thread, after callbacks retire. Preserve any earlier cancellation result,
-  // release the claim, then wake the worker without retaining the request mutex.
+  // TUI thread, after callbacks retire. Record the first result, or preserve a
+  // result already stored for a retired request. Clear the claim before waking
+  // the worker, and do not keep the request mutex locked during notification.
   void complete(ava::core::Result<Answer> result)
   {
     {
@@ -62,12 +62,16 @@ class PendingRequest final
     }
     ready_.notify_one();
   }
-  // Either thread may cancel a queued request. A claimed request keeps the worker
-  // blocked until complete/abandon retires the claim; cancellation wins only once.
-  void interrupt()
+  // TUI thread: cancel a queued request only while no TUI claim holds it.
+  // The coordinator holds its queue lock so claiming cannot race this call.
+  // Preserve a result already stored for a retired request; never replace an answer.
+  void interrupt_queued()
   {
     {
       std::lock_guard lock(mutex_);
+      // Do not interrupt a claimed request. Retire its callbacks, then call
+      // complete() or abandon(); queued interruption must never choose its answer.
+      ASSERT(!resolving_);
       interrupt_locked();
     }
     ready_.notify_one();
@@ -94,7 +98,7 @@ class PendingRequest final
     if (!result_)
       result_ = std::move(interrupted_);
   }
-  // Initialized by the worker; immutable until both shared owners release it.
+  // Initialized by the worker; immutable until resolver, queue and TUI shares all retire.
   Prompt const prompt_;
   // Serializes claim and result transitions between worker and TUI threads.
   std::mutex mutex_;
