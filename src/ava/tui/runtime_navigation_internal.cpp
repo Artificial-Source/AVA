@@ -70,24 +70,16 @@ FileReferenceSelectionText RuntimeNavigationController::selected_completion_text
   return renderer_.selected_completion_text(selected);
 }
 
-bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, terminal::Context& terminal_context)
+std::optional<ComposerInputResult> RuntimeNavigationController::handle_pointer_input(InputEvent const& event)
 {
   using Key = terminal::Key;
   if (event.key != Key::MouseLeftPress && event.key != Key::MouseLeftClick && event.key != Key::MouseLeftDrag && event.key != Key::MouseLeftRelease &&
       event.key != Key::MousePointerCancel)
-    return false;
-  // Completion owns a click before the transcript or draft underneath it. Keep
-  // feedback here; the session requests the frame after this dispatch stage.
-  auto apply_feedback = [&](ComposerInputResult result) {
-    if (result.status)
-      presentation_.publish_status(*result.status);
-    if (result.beep)
-      terminal_context.beep();
-    return result.handled;
-  };
+    return std::nullopt;
+  // Completion owns a click before the transcript or draft underneath it. Return
+  // its owned feedback to Session; even a disabled row consumes this pointer event.
   draft_state_.cancel_escape();
   auto const begins_click = event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick;
-  bool palette_claimed = false;
   if (begins_click)
   {
     if (auto const clicked = slash_palette_selection_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
@@ -95,8 +87,7 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       renderer_.clear_transcript_selection();
       draft_state_.clear_selection();
       draft_state_.select_completion(*clicked);
-      static_cast<void>(apply_feedback(draft_state_.select_slash_command(presentation_.screen())));
-      palette_claimed = true;
+      return draft_state_.select_slash_command(presentation_.screen());
     }
     else if (auto const clicked = renderer_.file_reference_completion_at(event.mouse_row, event.mouse_column))
     {
@@ -106,8 +97,7 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       // Hit-test the published palette first, then apply the choice to the current
       // draft, which may have changed earlier in the same input batch.
       static_cast<void>(refresh_completion_cache());
-      static_cast<void>(apply_feedback(draft_state_.select_file_reference(renderer_.completion_cache(), presentation_.screen())));
-      palette_claimed = true;
+      return draft_state_.select_file_reference(renderer_.completion_cache(), presentation_.screen());
     }
     else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
     {
@@ -117,41 +107,36 @@ bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, 
       // Hit-test the published palette first, then apply the choice to the current
       // draft, which may have changed earlier in the same input batch.
       static_cast<void>(refresh_completion_cache());
-      static_cast<void>(apply_feedback(draft_state_.select_path_completion(renderer_.completion_cache(), presentation_.screen())));
-      palette_claimed = true;
+      return draft_state_.select_path_completion(renderer_.completion_cache(), presentation_.screen());
     }
   }
   // After palette precedence, transcript selection gets the report before the draft so only one surface starts
   // a new selection.
-  if (!palette_claimed)
+  auto const transcript_mouse = renderer_.handle_transcript_selection_mouse(event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, this),
+                                                                            std::bind_front(&RuntimeNavigationController::toggle_thinking_at, this));
+  if (transcript_mouse == TranscriptSelectionMouseResult::Ignored)
   {
-    auto const transcript_mouse =
-        renderer_.handle_transcript_selection_mouse(event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, this),
-                                                    std::bind_front(&RuntimeNavigationController::toggle_thinking_at, this));
-    if (transcript_mouse == TranscriptSelectionMouseResult::Ignored)
+    if (begins_click)
     {
-      if (begins_click)
+      if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
       {
-        if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
-        {
-          renderer_.clear_transcript_selection();
-          draft_state_.begin_pointer_selection(*cursor, event.key == Key::MouseLeftPress);
-          presentation_.publish_status("cursor moved");
-        }
-      }
-      else if (draft_state_.mouse_selecting())
-      {
-        if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
-        {
-          draft_state_.extend_pointer_selection(*cursor);
-          presentation_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
-        }
-        if (event.key == Key::MouseLeftRelease)
-          draft_state_.end_pointer_selection();
+        renderer_.clear_transcript_selection();
+        draft_state_.begin_pointer_selection(*cursor, event.key == Key::MouseLeftPress);
+        presentation_.publish_status("cursor moved");
       }
     }
+    else if (draft_state_.mouse_selecting())
+    {
+      if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
+      {
+        draft_state_.extend_pointer_selection(*cursor);
+        presentation_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
+      }
+      if (event.key == Key::MouseLeftRelease)
+        draft_state_.end_pointer_selection();
+    }
   }
-  return true;
+  return ComposerInputResult{.handled = true};
 }
 
 void RuntimeNavigationController::scroll_up(std::size_t amount)

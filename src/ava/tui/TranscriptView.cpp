@@ -14,14 +14,6 @@ std::size_t TranscriptView::scroll_offset() const noexcept
 {
   return scroll_offset_;
 }
-std::size_t TranscriptView::new_output_count() const noexcept
-{
-  return new_output_count_;
-}
-std::optional<SidebarSnapshot> const& TranscriptView::frozen_sidebar() const noexcept
-{
-  return frozen_sidebar_;
-}
 bool TranscriptView::has_deferred_update() const noexcept
 {
   return deferred_viewport_.has_value();
@@ -261,10 +253,6 @@ void TranscriptView::show_position_indicator(Clock::time_point now)
 {
   position_indicator_.show(now);
   presentation_.publish_position_indicator(true);
-}
-bool TranscriptView::position_indicator_visible() const noexcept
-{
-  return position_indicator_.visible();
 }
 bool TranscriptView::expire_position_indicator(Clock::time_point now)
 {

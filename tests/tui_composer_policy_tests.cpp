@@ -49,7 +49,9 @@ struct ComposerPolicyFixture
                                          bool transcript_selected = false)
   {
     prepare();
-    return composer.handle_key(input, bindings, snapshot, completions, transcript_selected, phase, context);
+    auto result = composer.handle_key(input, bindings, snapshot, completions, transcript_selected, phase, context);
+    composer.project_completion(snapshot);
+    return result;
   }
 
   // Install three deterministic slash candidates before any cache preparation.
@@ -64,7 +66,9 @@ struct ComposerPolicyFixture
   {
     composer.record_submission(std::move(text));
     composer.restore_draft("scratch");
-    return ava::tests::require(composer.browse_history(true) && composer.history_index() == 0 && composer.saved_draft() == "scratch",
+    return ava::tests::require(composer.browse_history(true) && composer.history_index() == 0 && composer.browse_history(false) &&
+                                   composer.draft().text == "scratch" && !composer.history_index() && composer.browse_history(true) &&
+                                   composer.history_index() == 0,
                                "composer policy fixture enters history browsing");
   }
 
@@ -145,13 +149,14 @@ void test_clear_context_controls_forcing_and_feedback()
     fixture.composer.restore_draft("alp");
     fixture.prepare();
     auto const forced = fixture.composer.force_path_completion(fixture.snapshot, context);
-    if (!ava::tests::require(forced.handled && forced.status == "path suggestions" && fixture.composer.path_completion_forced(),
+    fixture.composer.project_completion(fixture.snapshot);
+    if (!ava::tests::require(forced.handled && forced.status == "path suggestions" && fixture.snapshot.path_completion_force_active,
                              "clear context fixture starts with forced path suggestions"))
       return;
     auto const cleared = fixture.dispatch({.event = {.key = Key::F8}, .text = {}}, ComposerInputPhase::Editor, context);
     bool const active = context == ComposerEditContext::ActiveRun;
     expect(cleared.handled && cleared.request == ComposerInputRequest::None && !cleared.beep && fixture.composer.draft().text.empty() &&
-               fixture.composer.path_completion_forced() == active && (active ? !cleared.status : cleared.status == "input cleared"),
+               fixture.snapshot.path_completion_force_active == active && (active ? !cleared.status : cleared.status == "input cleared"),
            "ClearInput dispatch retains active forcing and existing feedback but clears idle forcing with explicit feedback");
     auto const empty = fixture.dispatch({.event = {.key = Key::F8}, .text = {}}, ComposerInputPhase::Editor, context);
     expect(empty.handled && empty.request == ComposerInputRequest::None && !empty.beep && (active ? !empty.status : empty.status == "input already empty"),
@@ -181,12 +186,15 @@ void test_unsuccessful_edit_context_resets_history()
           fixture.dispatch({.event = {.key = Key::F8}, .text = {}}, active ? ComposerInputPhase::Editor : ComposerInputPhase::Navigation, context);
       expect(result.handled && result.request == ComposerInputRequest::None && !result.beep && fixture.composer.draft().text == "recorded" &&
                  fixture.composer.draft().cursor == 0 && fixture.composer.history_index().has_value() == !active &&
-                 fixture.composer.saved_draft() == (active ? "" : "scratch") && fixture.composer.completion_index() == (active ? 0 : 1) &&
-                 (redo && !active ? result.status == "nothing to redo" : !result.status),
+                 fixture.composer.completion_index() == (active ? 0 : 1) && (redo && !active ? result.status == "nothing to redo" : !result.status),
              "unsuccessful edit dispatch applies active history/reset policy and preserves idle cursor/redo policy");
       auto const escaped = fixture.composer.handle_escape();
       expect(escaped.status == "press Esc again to clear" && fixture.composer.draft().text == "recorded",
              "unsuccessful editing disarms pending Escape in both contexts");
+      // Observe restoration only after the Escape assertion; browsing disarms Escape itself.
+      bool const restored = fixture.composer.browse_history(false);
+      expect(restored == !active && fixture.composer.draft().text == (active ? "recorded" : "scratch") && !fixture.composer.history_index(),
+             "unsuccessful idle editing preserves scratch restoration while active editing retires it");
     }
   }
 }
@@ -274,8 +282,10 @@ void test_previous_navigation_precedes_next_navigation()
     fixture.composer.restore_draft("/");
     auto const history = fixture.dispatch(input, ComposerInputPhase::Navigation, context);
     expect(history.handled && history.request == ComposerInputRequest::None && history.status == "history previous" &&
-               fixture.composer.draft().text == "older" && fixture.composer.saved_draft() == "/" && fixture.composer.history_index() == 0,
+               fixture.composer.draft().text == "older" && fixture.composer.history_index() == 0,
            "history Previous beats palette Next even when the slash palette is visible");
+    expect(fixture.composer.browse_history(false) && fixture.composer.draft().text == "/" && !fixture.composer.history_index(),
+           "the winning history branch restores the prior slash draft when browsing forward");
 
     ComposerPolicyFixture empty;
     empty.configure_bindings({{TuiAction::HistoryPrev, Key::F8}, {TuiAction::HistoryNext, Key::F8}});
@@ -369,34 +379,45 @@ void test_forced_completion_context_retains_active_history()
 {
   for (auto const context : {ComposerEditContext::Idle, ComposerEditContext::ActiveRun})
   {
-    ComposerPolicyFixture fixture;
-    fixture.snapshot.file_references = {{.value = "alpha.txt", .description = "Alpha"}};
-    if (!fixture.recall("alp"))
-      return;
-    static_cast<void>(fixture.composer.apply_action(TuiAction::CursorLineEnd));
-    fixture.composer.select_completion(1);
-    auto const armed = fixture.composer.handle_escape();
-    if (!ava::tests::require(armed.status == "press Esc again to clear", "forced acceptance fixture starts with pending Escape"))
-      return;
-    bool const active = context == ComposerEditContext::ActiveRun;
-    auto const accepted =
-        fixture.dispatch({.event = {.key = Key::Tab}, .text = {}}, active ? ComposerInputPhase::Completion : ComposerInputPhase::Editor, context);
-    expect(accepted.handled && accepted.request == ComposerInputRequest::None && accepted.status == "path selected" && !accepted.beep &&
-               fixture.composer.draft().text == "alpha.txt" && !fixture.composer.path_completion_forced() &&
-               fixture.composer.history_index().has_value() == active && fixture.composer.saved_draft() == (active ? "scratch" : "") &&
-               fixture.composer.completion_index() == (active ? 1 : 0),
-           "forced one-match acceptance uses active history/row preservation and idle resets");
-    auto const escaped = fixture.composer.handle_escape();
-    expect(escaped.status == (active ? "input cleared" : "press Esc again to clear"), "forced acceptance preserves active Escape and disarms idle Escape");
+    // Escape and forward history each consume interaction state. Separate fixtures
+    // keep both observations tied to the same original acceptance preconditions.
+    for (bool inspect_history : {false, true})
+    {
+      ComposerPolicyFixture fixture;
+      fixture.snapshot.file_references = {{.value = "alpha.txt", .description = "Alpha"}};
+      if (!fixture.recall("alp"))
+        return;
+      static_cast<void>(fixture.composer.apply_action(TuiAction::CursorLineEnd));
+      fixture.composer.select_completion(1);
+      auto const armed = fixture.composer.handle_escape();
+      if (!ava::tests::require(armed.status == "press Esc again to clear", "forced acceptance fixture starts with pending Escape"))
+        return;
+      bool const active = context == ComposerEditContext::ActiveRun;
+      auto const accepted =
+          fixture.dispatch({.event = {.key = Key::Tab}, .text = {}}, active ? ComposerInputPhase::Completion : ComposerInputPhase::Editor, context);
+      expect(accepted.handled && accepted.request == ComposerInputRequest::None && accepted.status == "path selected" && !accepted.beep &&
+                 fixture.composer.draft().text == "alpha.txt" && !fixture.snapshot.path_completion_force_active &&
+                 fixture.composer.history_index().has_value() == active && fixture.composer.completion_index() == (active ? 1 : 0),
+             "forced one-match acceptance uses active history/row preservation and idle resets");
+      if (inspect_history)
+      {
+        bool const restored = fixture.composer.browse_history(false);
+        expect(restored == active && fixture.composer.draft().text == (active ? "scratch" : "alpha.txt") && !fixture.composer.history_index(),
+               "forced active acceptance restores saved scratch while idle acceptance leaves the accepted text");
+        continue;
+      }
+      auto const escaped = fixture.composer.handle_escape();
+      expect(escaped.status == (active ? "input cleared" : "press Esc again to clear"), "forced acceptance preserves active Escape and disarms idle Escape");
 
-    fixture.composer.cancel_escape();
-    fixture.composer.restore_draft("unmatched");
-    fixture.composer.dismiss_completion();
-    auto const unmatched =
-        fixture.dispatch({.event = {.key = Key::Tab}, .text = {}}, active ? ComposerInputPhase::Completion : ComposerInputPhase::Editor, context);
-    expect(!unmatched.handled && unmatched.request == ComposerInputRequest::None && !unmatched.status && !unmatched.beep &&
-               fixture.composer.draft().text == "unmatched" && fixture.composer.palette_suppressed() && !fixture.composer.path_completion_forced(),
-           "failed forced completion yields while restoring suppression and leaving no forced palette");
+      fixture.composer.cancel_escape();
+      fixture.composer.restore_draft("unmatched");
+      fixture.composer.dismiss_completion();
+      auto const unmatched =
+          fixture.dispatch({.event = {.key = Key::Tab}, .text = {}}, active ? ComposerInputPhase::Completion : ComposerInputPhase::Editor, context);
+      expect(!unmatched.handled && unmatched.request == ComposerInputRequest::None && !unmatched.status && !unmatched.beep &&
+                 fixture.composer.draft().text == "unmatched" && fixture.composer.palette_suppressed() && !fixture.snapshot.path_completion_force_active,
+             "failed forced completion yields while restoring suppression and leaving no forced palette");
+    }
   }
 }
 
@@ -463,7 +484,8 @@ void test_document_boundary_context_resets_history_and_forcing()
     static_cast<void>(fixture.composer.apply_action(TuiAction::CursorLineEnd));
     fixture.prepare();
     auto const forced = fixture.composer.force_path_completion(fixture.snapshot, ComposerEditContext::ActiveRun);
-    if (!ava::tests::require(forced.handled && fixture.composer.path_completion_forced() && fixture.composer.history_index() == 0,
+    fixture.composer.project_completion(fixture.snapshot);
+    if (!ava::tests::require(forced.handled && fixture.snapshot.path_completion_force_active && fixture.composer.history_index() == 0,
                              "boundary fixture has active forcing and retained history"))
       return;
     bool const active = context == ComposerEditContext::ActiveRun;
@@ -476,7 +498,7 @@ void test_document_boundary_context_resets_history_and_forcing()
     auto const moved = fixture.dispatch(input, active ? ComposerInputPhase::Primary : ComposerInputPhase::Navigation, context);
     expect(moved.handled && moved.request == ComposerInputRequest::None && !moved.status && !moved.beep && fixture.composer.draft().text == "alp" &&
                fixture.composer.draft().cursor == 0 && fixture.composer.history_index().has_value() == !active &&
-               fixture.composer.path_completion_forced() == !active,
+               fixture.snapshot.path_completion_force_active == !active,
            "Ctrl+Home dispatch resets active history/forcing and retains idle history/forcing");
   }
 }

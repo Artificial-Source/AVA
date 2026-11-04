@@ -172,12 +172,15 @@ void test_prompt_stash_runtime_controller()
   attachments.clear();
   draft_state.record_submission("prior submitted prompt");
   draft_state.replace_draft("history browsing scratch");
-  expect(draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.saved_draft() == "history browsing scratch",
+  expect(draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.browse_history(false) &&
+             draft_state.draft().text == "history browsing scratch" && draft_state.browse_history(true) && draft_state.history_index() == 0,
          "prompt stash fixture starts with active history browsing and a saved draft");
   draft_state.replace_draft("attachment-owned draft", 4);
   expect(controller.trigger() && draft_state.draft().text.empty() && controller.stash().size() == 1 && !draft_state.history_index() &&
-             draft_state.saved_draft().empty() && !draft_state.selection_bounds() && transcript_unchanged() && presentation.screen().status == "prompt stashed",
+             !draft_state.selection_bounds() && transcript_unchanged() && presentation.screen().status == "prompt stashed",
          "prompt stash trigger stores and clears a nonempty draft while excluding history-browsing and selection state without transcript mutation");
+  // Browsing itself clears selection; check restoration only after the stash assertions.
+  expect(!draft_state.browse_history(false) && draft_state.draft().text.empty(), "a stashed draft cannot restore the old history scratch");
 
   expect(controller.trigger() && active_list.kind() == ava::tui::ActiveSelectList::PromptStash && presentation.screen().select_list.has_value() &&
              presentation.screen().status == "prompt stash opened",

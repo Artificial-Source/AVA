@@ -140,7 +140,7 @@ enum class TranscriptUpdateMode
   Immediate
 };
 
-// Session-owned, nonmoving TUI-thread coordinator for layout caches, TranscriptView, and painting. Feature
+// Session-owned TUI-thread coordinator for layout caches, TranscriptView, and painting. Feature
 // owners mutate viewport only through its named operations and read const views. The session serializes all
 // access; there is no UI mutex. Borrowed frontend, projection, Composer, Context, and attached loop outlive it;
 // member timers retire before callback targets are destroyed.
@@ -228,8 +228,6 @@ class RuntimeRenderer final
   [[nodiscard]] detail::TranscriptLayoutCache const& prepared_transcript_layout() const noexcept;
   // TUI thread: borrow renderer-owned completion matches until the next refresh/paint mutates it.
   [[nodiscard]] detail::CompletionMatchCache const& completion_cache() const noexcept;
-  // TUI thread: inspect last paint rows; the borrow is invalidated by a later paint or session reset.
-  [[nodiscard]] detail::ScreenRowCache const& painted_frame() const noexcept;
   // TUI thread: rebuild from published Composer/catalog facts; returned model pointer expires on cache refresh
   // or renderer destruction.
   [[nodiscard]] detail::CompletionMatchModel const* refresh_completion_cache();

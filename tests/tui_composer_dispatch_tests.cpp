@@ -160,8 +160,11 @@ void test_empty_history_requests_transcript_scroll()
   auto const recalled =
       fixture.composer.handle_key(input, bindings, fixture.presentation.screen(), fixture.completions(), false, ComposerInputPhase::Navigation);
   expect(recalled.handled && recalled.request == ComposerInputRequest::None && recalled.status == "history previous" &&
-             fixture.composer.draft().text == "previous prompt" && fixture.composer.saved_draft() == "first line\nsecond line",
+             fixture.composer.draft().text == "previous prompt",
          "composer HistoryPrev recalls available history instead of requesting transcript scrolling");
+  expect(fixture.composer.browse_history(false) && fixture.composer.draft().text == "first line\nsecond line" &&
+             fixture.composer.draft().cursor == fixture.composer.draft().text.size() && !fixture.composer.history_index(),
+         "forward history restores the complete multiline scratch draft at its end");
 }
 
 // Submit bound to Space is returned before Tail considers inserting a literal space.
@@ -309,24 +312,27 @@ void test_forced_completion_uses_current_editor_flags()
   fixture.composer.dismiss_completion();
   static_cast<void>(fixture.completions());
   auto const accepted = fixture.composer.force_path_completion(fixture.presentation.screen());
+  fixture.presentation.publish_completion(fixture.composer);
   expect(accepted.handled && accepted.status == "path selected" && !accepted.beep && fixture.composer.draft().text == "alpha.txt" &&
-             !fixture.composer.path_completion_forced(),
+             !fixture.presentation.screen().path_completion_force_active,
          "forcing a suppressed bare prefix ranks with the proposed flags and accepts its one match");
 
   fixture.composer.restore_draft("unmatched");
   fixture.composer.dismiss_completion();
   static_cast<void>(fixture.completions());
   auto const unmatched = fixture.composer.force_path_completion(fixture.presentation.screen());
-  expect(
-      !unmatched.handled && fixture.composer.palette_suppressed() && !fixture.composer.path_completion_forced() && fixture.composer.draft().text == "unmatched",
-      "an unmatched force attempt restores suppression without changing the draft");
+  fixture.presentation.publish_completion(fixture.composer);
+  expect(!unmatched.handled && fixture.composer.palette_suppressed() && !fixture.presentation.screen().path_completion_force_active &&
+             fixture.composer.draft().text == "unmatched",
+         "an unmatched force attempt restores suppression without changing the draft");
 
   ComposerDispatchFixture disabled(file_options({{.value = "alpha.txt", .description = "Alpha file", .enabled = false, .disabled_reason = "not available"}}));
   disabled.composer.restore_draft("alp");
   static_cast<void>(disabled.completions());
   auto const rejected = disabled.composer.force_path_completion(disabled.presentation.screen(), ava::tui::ComposerEditContext::ActiveRun);
+  disabled.presentation.publish_completion(disabled.composer);
   expect(rejected.handled && rejected.beep && rejected.status == "path disabled: not available" && disabled.composer.draft().text == "alp" &&
-             !disabled.composer.path_completion_forced(),
+             !disabled.presentation.screen().path_completion_force_active,
          "active-run forcing reports a disabled candidate without accepting its text");
 }
 

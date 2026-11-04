@@ -1,5 +1,6 @@
 // Exercises prompt input boundaries and callback locking through real TUI owners.
 #include "sys.h"
+#include "support/ScopedScreenDrawObserver.h"
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
@@ -234,9 +235,9 @@ struct PromptSecurityFixture
   // Inspect actual painted rows without servicing a pending frame on the test's behalf.
   [[nodiscard]] bool painted_prompt(bool permission) const
   {
-    auto const& frame = renderer.painted_frame();
+    auto const& frame = paint_observer.frame();
     auto const marker = permission ? "SECURITY-PERMISSION-MARKER" : "SECURITY-QUESTION-MARKER";
-    return frame.valid && tui_test_support::join_visible_lines(frame.surfaces).find(marker) != std::string::npos;
+    return paint_observer.observed_result() == true && frame.valid && tui_test_support::join_visible_lines(frame.surfaces).find(marker) != std::string::npos;
   }
 
   // Consume setup resize events under the same quarantine as Session. A bounded
@@ -254,6 +255,8 @@ struct PromptSecurityFixture
     return false;
   }
 
+  // Own actual drawing observations without borrowing renderer caches or servicing a paint.
+  tui_test_support::ScopedScreenDrawObserver paint_observer;
   // Scheduler and descriptors outlive every timer below.
   EventLoopFixture event_loop;
   // Application session/frontend registration outlives projection and renderer.

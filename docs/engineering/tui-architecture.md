@@ -137,6 +137,15 @@ registry outlive the feature. `render()` requests a batch paint;
 synchronous output when a prompt or terminal handoff requires it. Plugin expiry
 comes from its timer; polling only consumes the resulting transport updates.
 
+Pointer navigation returns owned editor feedback to `TuiSession`. A clicked
+completion row consumes the pointer event even when that row cannot insert text;
+the event does not start a transcript selection underneath the palette.
+
+Tests inspect public screen publications and editing behavior. Tests that need
+to prove a prompt was painted use a scoped observer of real drawing, without
+servicing pending frames during observation. Keep that distinction when changing
+tests for prompts or frame order.
+
 ## Debug output
 
 Print TUI owners on the TUI thread. Generated printers show reference and raw

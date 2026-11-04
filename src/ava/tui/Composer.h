@@ -104,16 +104,12 @@ class Composer final
   [[nodiscard]] std::vector<std::string> const& history() const noexcept;
   // TUI thread: distinguish a recalled entry from the live draft; no index means live editing.
   [[nodiscard]] std::optional<std::size_t> history_index() const noexcept;
-  // TUI thread: borrow the pre-history draft that browsing forward can restore.
-  [[nodiscard]] std::string const& saved_draft() const noexcept;
   // TUI thread: tell input routing whether the next printable character is a jump target.
   [[nodiscard]] ComposerJumpMode jump_mode() const noexcept;
   // TUI thread: supply the selected slash/reference/path row for display and acceptance.
   [[nodiscard]] std::size_t completion_index() const noexcept;
   // TUI thread: let completion preparation honor explicit palette dismissal.
   [[nodiscard]] bool palette_suppressed() const noexcept;
-  // TUI thread: let preparation include paths even without an ordinary completion trigger.
-  [[nodiscard]] bool path_completion_forced() const noexcept;
   // TUI thread: expose the requested top draft row; layout clamps it before painting.
   [[nodiscard]] std::size_t scroll_offset() const noexcept;
   // TUI thread: identify a live draft drag so pointer routing can extend or finish it.
@@ -215,9 +211,6 @@ class Composer final
   [[nodiscard]] std::size_t max_draft_scroll_offset(ComposerSnapshot const& snapshot, std::size_t height) const;
   // TUI thread: reduce the requested scroll after layout shrinks the available range.
   void clamp_scroll(std::size_t maximum);
-  // TUI thread: clamp a requested top row to current layout; the caller disarms Escape
-  // when scrolling should interrupt a pending clear.
-  void scroll_to(std::size_t offset, ComposerSnapshot const& snapshot, std::size_t height);
   // TUI thread: copy draft, completion, scroll and selection fields without changing
   // editor state. Mutations establish cursor validity; retain no snapshot reference.
   void project(ComposerSnapshot& snapshot) const;

@@ -60,12 +60,6 @@ using runtime_commands::is_compact_command;
 using runtime_commands::shell_helper_submission;
 using runtime_transcript::apply_assistant_turn_meta;
 using runtime_transcript::assistant_meta_for_snapshot;
-using runtime_transcript::capture_thinking_expansion;
-using runtime_transcript::capture_tool_detail_visibility;
-using runtime_transcript::carry_thinking_expansion;
-using runtime_transcript::carry_tool_detail_visibility;
-using runtime_transcript::push_fallback_assistant_outputs;
-using runtime_transcript::push_transcript;
 
 ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
                      RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,

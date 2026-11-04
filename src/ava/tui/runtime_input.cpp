@@ -382,15 +382,6 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
   return decode_terminal_input(terminal_context).value_or(unknown_input());
 }
 
-// TUI thread with Application initialized: consume older startup replay first, then
-// use the terminal's current timeout. No queue or Context reference escapes the call.
-RuntimeInput read_curses_input()
-{
-  if (auto queued = take_startup_input())
-    return *queued;
-  return read_curses_input_from_terminal();
-}
-
 // TUI decoding paths use this pure borrowed-value check to suppress unsupported
 // events. It cannot prove the native queue is empty; resize and empty paste still
 // count as real events because their flags convey work independently of text.
@@ -418,24 +409,6 @@ InputPollResult poll_curses_input()
   return {.kind = InputPollKind::Input, .input = std::move(*input)};
 }
 
-// TUI legacy caller with Application initialized: prefer replay, otherwise scope
-// the initial-read timeout and restore it on return. Nullopt includes consumed
-// unsupported input, so this API is unsuitable for deciding the event loop may sleep.
-std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout)
-{
-  if (auto queued = take_startup_input())
-    return queued;
-  RuntimeInput input;
-  {
-    auto& terminal_context = core::Application::instance().terminal_context();
-    auto scoped_timeout = terminal_context.timeout(timeout);
-    input = read_curses_input_from_terminal();
-  }
-  if (empty_curses_input(input))
-    return std::nullopt;
-  return input;
-}
-
 // TUI startup stage with Application initialized: preserve user input while query
 // replies are consumed. deadline is an outer duration checked between decodes;
 // a started escape/paste decode may exceed it. Stop before reading past FIFO capacity.
@@ -444,8 +417,8 @@ void drain_startup_probe_input(std::chrono::milliseconds deadline)
   using clock = std::chrono::steady_clock;
   auto& terminal_context = core::Application::instance().terminal_context();
   auto const started = clock::now();
-  // Bypass the startup queue below; reading through read_curses_input would take
-  // the oldest saved event and enqueue it again instead of draining the terminal.
+  // Bypass the startup queue below; polling replay would take the oldest saved
+  // event and enqueue it again instead of draining the native terminal.
   while (input_replay().startup.size() < kStartupInputQueueCap)
   {
     auto const elapsed = clock::now() - started;

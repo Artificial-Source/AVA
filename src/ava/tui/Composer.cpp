@@ -446,10 +446,6 @@ std::optional<std::size_t> Composer::history_index() const noexcept
 {
   return history_index_;
 }
-std::string const& Composer::saved_draft() const noexcept
-{
-  return draft_input_;
-}
 ComposerJumpMode Composer::jump_mode() const noexcept
 {
   return jump_mode_;
@@ -461,10 +457,6 @@ std::size_t Composer::completion_index() const noexcept
 bool Composer::palette_suppressed() const noexcept
 {
   return slash_palette_suppressed_;
-}
-bool Composer::path_completion_forced() const noexcept
-{
-  return path_completion_force_active_;
 }
 std::size_t Composer::scroll_offset() const noexcept
 {
@@ -740,10 +732,6 @@ ComposerInputResult Composer::handle_escape()
 void Composer::clamp_scroll(std::size_t maximum)
 {
   draft_scroll_offset_ = std::min(draft_scroll_offset_, maximum);
-}
-void Composer::scroll_to(std::size_t offset, ComposerSnapshot const& snapshot, std::size_t height)
-{
-  draft_scroll_offset_ = std::min(offset, max_draft_scroll_offset(snapshot, height));
 }
 void Composer::project_completion(ComposerSnapshot& snapshot) const
 {

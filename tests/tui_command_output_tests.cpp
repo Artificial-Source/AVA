@@ -322,34 +322,6 @@ void test_unauthorized_command_event_tool_merge()
              std::ranges::none_of(merged,
                                   [](ava::tui::ToolTimelineItem const& tool) { return tool.call_id == "authorized-call" || tool.call_id == "running-call"; }),
          "unauthorized command event tools merge by stable identity in local chronology while excluding authorized and unsettled lifecycle cards");
-
-  // Seed the storage boundary directly: ToolResultEvent moves canceled cards
-  // into the transcript, so it cannot exercise a settled card still pending.
-  ava::tui::TuiEventState pending_state;
-  auto canceled = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Canceled,
-                                             .name = "bash",
-                                             .result_summary = "canceled before transcript insertion",
-                                             .call_id = "pending-canceled",
-                                             .lifecycle = ava::tui::ToolLifecycleState::Canceled};
-  pending_state.pending_tools.push_back({.call_id = canceled.call_id, .backend_call_id = {}, .request_id = {}, .correlation_id = {}, .item = canceled});
-  pending_state.pending_tools.push_back(
-      {.call_id = "still-running",
-       .backend_call_id = {},
-       .request_id = {},
-       .correlation_id = {},
-       .item = {
-           .status = ava::tui::ToolTimelineStatus::Running, .name = "bash", .call_id = "still-running", .lifecycle = ava::tui::ToolLifecycleState::Progress}});
-  auto stale = canceled;
-  stale.status = ava::tui::ToolTimelineStatus::Success;
-  stale.lifecycle = ava::tui::ToolLifecycleState::Complete;
-  stale.result_summary = "stale backend card";
-  std::vector<ava::tui::ToolTimelineItem> pending_merged{std::move(stale)};
-  ava::tui::detail::merge_settled_tools(pending_merged, pending_state);
-  expect(pending_merged.size() == 1 && pending_merged.front().call_id == canceled.call_id &&
-             pending_merged.front().status == ava::tui::ToolTimelineStatus::Canceled &&
-             pending_merged.front().lifecycle == ava::tui::ToolLifecycleState::Canceled && pending_merged.front().result_summary == canceled.result_summary &&
-             pending_state.pending_tools.size() == 2,
-         "settled canceled pending card replaces its stale identity while running pending cards remain excluded and source state stays owned");
 }
 
 void test_buffered_runtime_event_completion_settlement()

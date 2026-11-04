@@ -107,8 +107,8 @@ void test_detached_chrome_and_tail_transitions()
   detach_with_output(fixture);
   fixture.presentation.publish_activity_item({.id = "responding", .label = "new live activity"});
   fixture.view.freeze_sidebar();
-  expect(fixture.view.scroll_offset() == 3 && fixture.view.new_output_count() == 2 && fixture.view.has_deferred_update() &&
-             screen.transcript_scroll_offset == 3 && screen.transcript_new_output_count == 0,
+  expect(fixture.view.scroll_offset() == 3 && fixture.view.has_deferred_update() && screen.transcript_scroll_offset == 3 &&
+             screen.transcript_new_output_count == 0,
          "detached output updates scroll immediately while its badge waits for a frame");
 
   fixture.view.begin_frame();
@@ -118,26 +118,51 @@ void test_detached_chrome_and_tail_transitions()
          "detached frames publish the badge and first captured sidebar despite newer live activity");
 
   fixture.view.request_live_tail();
-  expect(fixture.view.scroll_offset() == 0 && fixture.view.new_output_count() == 2 && fixture.view.frozen_sidebar() && fixture.view.has_deferred_update() &&
-             screen.transcript_new_output_count == 2,
+  expect(fixture.view.scroll_offset() == 0 && fixture.view.has_deferred_update() && screen.transcript_new_output_count == 2 && screen.sidebar &&
+             !screen.sidebar->activity.empty() && screen.sidebar->activity.front().label == "before detachment",
          "request_live_tail retains detached chrome and deferred work until the frame boundary");
+  // Re-enter history before painting: retained state must still be observable.
+  fixture.view.scroll_up(3, 8);
   fixture.view.begin_frame();
-  expect(fixture.view.new_output_count() == 0 && !fixture.view.frozen_sidebar() && !fixture.view.has_deferred_update() &&
-             screen.transcript_scroll_offset == 0 && screen.transcript_new_output_count == 0 && screen.sidebar && screen.sidebar->activity.size() == 1 &&
-             screen.sidebar->activity.front().label == "new live activity",
+  expect(screen.transcript_new_output_count == 2 && screen.sidebar && !screen.sidebar->activity.empty() &&
+             screen.sidebar->activity.front().label == "before detachment" && fixture.view.has_deferred_update(),
+         "an unpainted live-tail request retains its frozen sidebar and output count");
+  fixture.view.request_live_tail();
+  fixture.view.begin_frame();
+  expect(!fixture.view.has_deferred_update() && screen.transcript_scroll_offset == 0 && screen.transcript_new_output_count == 0 && screen.sidebar &&
+             screen.sidebar->activity.size() == 1 && screen.sidebar->activity.front().label == "new live activity",
          "begin_frame commits a live-tail request and publishes the current sidebar");
+  fixture.view.scroll_up(3, 8);
+  fixture.view.begin_frame();
+  expect(screen.transcript_new_output_count == 0 && screen.sidebar && !screen.sidebar->activity.empty() &&
+             screen.sidebar->activity.front().label == "new live activity",
+         "a later detachment cannot revive count or sidebar retired by the live-tail frame");
 
-  detach_with_output(fixture);
+  fixture.view.complete_transcript_update(ava::tui::TranscriptUpdate(true, {.valid = true, .content_relative = true, .item_index = 0}), 0, 2);
+  fixture.presentation.publish_activity_item({.id = "responding", .label = "after local command"});
   fixture.view.reset_for_local_command();
-  expect(fixture.view.scroll_offset() == 0 && fixture.view.new_output_count() == 0 && !fixture.view.frozen_sidebar() && fixture.view.has_deferred_update(),
+  expect(fixture.view.scroll_offset() == 0 && fixture.view.has_deferred_update(),
          "local-command reset clears detached count and sidebar immediately but retains layout work");
+  // A zero-offset frame would clear stale state itself and hide a broken reset.
+  fixture.view.scroll_up(3, 8);
+  fixture.view.begin_frame();
+  expect(screen.transcript_new_output_count == 0 && screen.sidebar && !screen.sidebar->activity.empty() &&
+             screen.sidebar->activity.front().label == "after local command" && fixture.view.has_deferred_update(),
+         "re-entering history proves local-command count and sidebar cleanup before a live-tail frame");
 
+  fixture.view.return_to_live_tail();
   detach_with_output(fixture);
+  fixture.presentation.publish_activity_item({.id = "responding", .label = "after explicit return"});
   fixture.view.return_to_live_tail();
   fixture.view.publish_chrome();
-  expect(fixture.view.scroll_offset() == 0 && fixture.view.new_output_count() == 0 && !fixture.view.frozen_sidebar() && !fixture.view.has_deferred_update() &&
-             screen.transcript_scroll_offset == 0 && screen.transcript_new_output_count == 0,
+  expect(fixture.view.scroll_offset() == 0 && !fixture.view.has_deferred_update() && screen.transcript_scroll_offset == 0 &&
+             screen.transcript_new_output_count == 0,
          "explicit return_to_live_tail also discards the pending anchor before chrome publication");
+  fixture.view.scroll_up(3, 8);
+  fixture.view.begin_frame();
+  expect(screen.transcript_new_output_count == 0 && screen.sidebar && !screen.sidebar->activity.empty() &&
+             screen.sidebar->activity.front().label == "after explicit return" && !fixture.view.has_deferred_update(),
+         "explicit return retires internal count and sidebar before another detached frame");
 }
 
 // Synchronize two leading evictions against one retained anchor and committed selection on the test thread.
@@ -161,7 +186,7 @@ void test_first_deferred_anchor_and_accumulated_shifts()
   fixture.view.complete_transcript_update(ava::tui::TranscriptUpdate(true, {.valid = true, .content_relative = true, .item_index = 4, .line_offset = 1}), -1,
                                           2);
   fixture.view.publish_selection(original_layout, ava::tui::TranscriptSelectionProjection::Frozen);
-  expect(fixture.view.has_deferred_update() && fixture.view.new_output_count() == 3 && screen.transcript_selection_anchor_item == 3,
+  expect(fixture.view.has_deferred_update() && screen.transcript_new_output_count == 0 && screen.transcript_selection_anchor_item == 3,
          "deferred output keeps selection bound to its painted item indices until synchronization");
 
   auto const current_layout = layout_for(screen);
@@ -222,33 +247,41 @@ void test_indicator_renewal_expiry_and_session_reset()
   auto const started = ava::tui::TranscriptView::Clock::time_point{};
   fixture.view.show_position_indicator(started);
   auto const first_deadline = fixture.view.indicator_deadline();
-  expect(first_deadline && *first_deadline == started + std::chrono::seconds(1) && fixture.view.position_indicator_visible() &&
-             screen.transcript_position_indicator_visible,
+  expect(first_deadline && *first_deadline == started + std::chrono::seconds(1) && screen.transcript_position_indicator_visible,
          "show_position_indicator publishes visibility and a one-second semantic deadline");
   fixture.view.show_position_indicator(started + std::chrono::milliseconds(500));
   auto const renewed_deadline = fixture.view.indicator_deadline();
   expect(renewed_deadline && *renewed_deadline == started + std::chrono::milliseconds(1500) &&
              !fixture.view.expire_position_indicator(started + std::chrono::seconds(1)) && screen.transcript_position_indicator_visible,
          "renewal prevents the earlier indicator deadline from hiding the current indicator");
-  expect(fixture.view.expire_position_indicator(started + std::chrono::milliseconds(1500)) && !fixture.view.position_indicator_visible() &&
-             !fixture.view.indicator_deadline() && !screen.transcript_position_indicator_visible &&
-             !fixture.view.expire_position_indicator(started + std::chrono::seconds(2)),
+  expect(fixture.view.expire_position_indicator(started + std::chrono::milliseconds(1500)) && !fixture.view.indicator_deadline() &&
+             !screen.transcript_position_indicator_visible && !fixture.view.expire_position_indicator(started + std::chrono::seconds(2)),
          "indicator expiry changes publication once at the renewed deadline");
 
   fixture.presentation.publish_transcript(transcript_items(3));
   auto const layout = layout_for(screen);
   if (!select_row(fixture, layout, 3))
     return;
+  fixture.presentation.publish_activity_item({.id = "reset", .label = "before reset"});
   detach_with_output(fixture);
+  fixture.presentation.publish_activity_item({.id = "reset", .label = "after reset"});
   fixture.view.show_position_indicator(started + std::chrono::seconds(3));
   fixture.view.begin_frame();
+  expect(screen.transcript_new_output_count == 2 && screen.sidebar && !screen.sidebar->activity.empty() &&
+             screen.sidebar->activity.front().label == "before reset",
+         "session reset fixture publishes old detached count and sidebar before retirement");
   fixture.view.reset_for_session_transition();
-  expect(!fixture.view.has_selection() && !fixture.view.has_deferred_update() && !fixture.view.frozen_sidebar() && fixture.view.scroll_offset() == 0 &&
-             fixture.view.new_output_count() == 0 && !fixture.view.indicator_deadline() && !fixture.view.autoscroll_deadline() &&
-             !fixture.view.position_indicator_visible() && screen.transcript_selection_anchor_item == std::string::npos &&
+  expect(!fixture.view.has_selection() && !fixture.view.has_deferred_update() && fixture.view.scroll_offset() == 0 && !fixture.view.indicator_deadline() &&
+             !fixture.view.autoscroll_deadline() && screen.transcript_selection_anchor_item == std::string::npos &&
              screen.transcript_selection_focus_item == std::string::npos && screen.transcript_scroll_offset == 0 && screen.transcript_new_output_count == 0 &&
              !screen.transcript_position_indicator_visible,
          "session transition retires old viewport, selection, detached chrome, and indicator state together");
+  // Re-detach before paint so begin_frame cannot repair a reset that left old state behind.
+  fixture.view.scroll_up(3, 8);
+  fixture.view.begin_frame();
+  expect(
+      screen.transcript_new_output_count == 0 && screen.sidebar && !screen.sidebar->activity.empty() && screen.sidebar->activity.front().label == "after reset",
+      "session reset prevents old count or sidebar from reappearing on the next detachment");
 }
 
 }  // namespace

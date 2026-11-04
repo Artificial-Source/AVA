@@ -317,6 +317,7 @@ set(AVA_TESTS_SOURCES
   "tui_shutdown_tests.cpp"
   "tui_mermaid_contract_tests.cpp"
   "tui_prompt_security_tests.cpp"
+  "support/ScopedScreenDrawObserver.cpp"
   "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
   "tui_transcript_view_tests.cpp"
@@ -353,6 +354,7 @@ add_executable(ava_tests ${AVA_TESTS_SOURCES})
 # Observe the real Session turn in isolated tests without adding production hooks.
 # Each wrapper forwards normally unless that test's TUI thread installs its probe.
 target_link_options(ava_tests PRIVATE
+  "LINKER:--wrap=_ZN3ava3tui6detail18draw_screen_cachedEPNS0_11TuiFrontEndERKNS0_16ComposerSnapshotERNS1_20CompletionMatchCacheEmRNS1_21TranscriptLayoutCacheEmRNS1_14ScreenRowCacheEbb"
   "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop12repeat_timerEmNSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE"
   "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinatorC1ERNS0_12TuiEventLoopERNS0_24RuntimePresentationStateE"
   "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox12request_stopEv"

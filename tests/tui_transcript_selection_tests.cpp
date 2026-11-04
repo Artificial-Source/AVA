@@ -371,7 +371,7 @@ void run_tui_transcript_selection_tests()
       transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "streaming", .stream_id = "live", .append_only_stream = true});
     });
     streaming_snapshot_presentation.invalidate_transcript_layout();
-    auto const streaming_stays_hidden = !streaming_renderer.transcript().position_indicator_visible();
+    auto const streaming_stays_hidden = !streaming_snapshot_presentation.screen().transcript_position_indicator_visible;
     expect(top.visible && top.thumb_start == 0 && middle.visible && middle.thumb_start > top.thumb_start && middle.thumb_start < bottom.thumb_start &&
                bottom.visible && bottom.thumb_start + bottom.thumb_length == 10 && proportional.thumb_length == 5 && !fits.visible && styled_content_survives &&
                only_thumb_rows_styled && exact_thumb_widths && no_destructive_glyphs && plain_unchanged && waits_one_second && early_visible && expired &&

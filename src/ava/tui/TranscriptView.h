@@ -48,11 +48,6 @@ class TranscriptView final
   // TUI thread: report distance from live tail; zero requests live following, but sidebar/count cleanup may await the
   // next frame.
   [[nodiscard]] std::size_t scroll_offset() const noexcept;
-  // TUI thread: read accumulated detached output; the screen count and painted badge can lag this value.
-  [[nodiscard]] std::size_t new_output_count() const noexcept;
-  // TUI thread: borrow the captured sidebar until a live-tail transition/reset clears it; never retain nested
-  // content across mutation.
-  [[nodiscard]] std::optional<SidebarSnapshot> const& frozen_sidebar() const noexcept;
   // TUI thread: tell the renderer to preserve painted layout or synchronize before geometry-dependent
   // navigation.
   [[nodiscard]] bool has_deferred_update() const noexcept;
@@ -131,8 +126,6 @@ class TranscriptView final
   [[nodiscard]] bool service_autoscroll(detail::TranscriptLayoutCache const& layout, bool authority_ready, Clock::time_point now);
   // TUI thread: renew the deadline and publish visibility; renderer must reconcile its timer afterward.
   void show_position_indicator(Clock::time_point now);
-  // TUI thread: report indicator intent; expiry is applied explicitly by its renderer timer callback.
-  [[nodiscard]] bool position_indicator_visible() const noexcept;
   // TUI thread: retire a due indicator and report whether its projected visibility changed.
   [[nodiscard]] bool expire_position_indicator(Clock::time_point now);
   // TUI thread: copy the absolute expiry so RuntimeRenderer can arm/cancel its timer without borrowing

@@ -218,3 +218,47 @@ test-support headers are outside production printer discovery. Existing local
 fixture classes remain local; no new production adapter or test mode is added.
 The close/poll race keeps poll on the TUI thread and invalidates the endpoint on
 a joined worker, with a deadline on both the race gate and teardown.
+
+
+## Final R16 test boundaries and remaining layout decision
+
+Production no longer exposes saved draft, forced completion, frozen sidebar,
+new-output count, indicator visibility or painted-cache getters for tests.
+Editor tests observe published completion fields and actual forward history
+restoration. Transcript tests re-enter detached history before a frame to expose
+stale count/sidebar state; a live-tail paint cannot silently repair the reset
+being checked. Tests still check that the count waits for a paint.
+
+A test-only `ScopedScreenDrawObserver` wraps the real full-screen draw call,
+then owns a copy of the resulting cache and return value. It neither requests a
+frame nor computes substitute output. This preserves prompt-before-answer and
+frame-coalescing assertions while removing `RuntimeRenderer::painted_frame`.
+Its scoped thread-local registration and direct wrapper friendship are test
+instrumentation exceptions; no production owner exposes new mutable state.
+The copied frame contains user text, so this test class deliberately opts out
+of generated printing. It observes full-screen calls from other translation
+units under GNU linker wrapping; footer-only drawing is outside its scope.
+
+Legacy input readers used only by tests are removed. Startup probes retain the
+native-terminal reader. Tests call the same `poll_curses_input` used by Session;
+PTY waits use a real loop timer, and drainage distinguishes `Discarded` from
+`Empty`. The local deadline helper is an anonymous test type, so its printer
+opt-out follows the internal-linkage rule.
+
+The finished-tool merge helper is private to `ActiveRunEvents.cpp`. Tests through the owning reducer retain duplicate replacement, canceled/error cards, unattributed and
+unauthorized groups, and authorized/running exclusion. The removed direct
+helper case manufactured a canceled card still in `pending_tools`; current
+`ToolResultEvent` producers instead move canceled cards into the transcript.
+The defensive internal pending-card merge remains. No state injection API
+replaces the export.
+
+`Composer::scroll_to` was the sole producer of a nonzero draft scroll offset,
+and only a test called it. The assertion that injected a nonzero offset is removed;
+the independently reachable jump-reset case remains. This does not add or
+remove user scrolling behavior. Pointer completion now returns owned feedback
+to Session; even a disabled clicked row consumes the pointer event before
+transcript or draft selection. No shared local-command router is introduced.
+
+The `Composer` and `composer` filenames remain distinct only by case, as the
+maintainer explicitly requested. Case-insensitive checkout support still needs
+a separate filename decision.

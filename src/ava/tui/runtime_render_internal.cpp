@@ -284,10 +284,6 @@ detail::CompletionMatchCache const& RuntimeRenderer::completion_cache() const no
 {
   return completion_cache_;
 }
-detail::ScreenRowCache const& RuntimeRenderer::painted_frame() const noexcept
-{
-  return screen_row_cache_;
-}
 detail::CompletionMatchModel const* RuntimeRenderer::refresh_completion_cache()
 {
   detail::refresh_completion_match_cache(completion_cache_, presentation_.screen(), presentation_.screen().file_references_generation);

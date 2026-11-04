@@ -449,7 +449,6 @@ TuiInputOutcome TuiSession::handle_primary_input(runtime_input::RuntimeInput con
   }
   else
     return TuiInputOutcome::Pass;
-  return render_input();
 }
 
 // This stage follows editor clearing. For example Ctrl+C clears a nonempty
@@ -603,8 +602,16 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
   }
   // Pointer hit testing is last: a configured transcript binding has already
   // had its chance to consume the event against the current viewport.
-  else if (!navigation_.handle_pointer_input(event, terminal_context_))
-    return TuiInputOutcome::Pass;
+  else
+  {
+    auto result = navigation_.handle_pointer_input(event);
+    if (!result)
+      return TuiInputOutcome::Pass;
+    if (result->status)
+      presentation_state_.publish_status(std::move(*result->status));
+    if (result->beep)
+      terminal_context_.beep();
+  }
   return render_input();
 }
 

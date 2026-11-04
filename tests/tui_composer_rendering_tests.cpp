@@ -1,5 +1,6 @@
 // Exercise TUI owner interactions and rendered prompt, selector and transcript behavior.
 #include "sys.h"
+#include "support/ScopedScreenDrawObserver.h"
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
@@ -416,9 +417,20 @@ bool test_changed_session_snapshot_resets_presentation()
   static_cast<void>(presentation.append_transcript({.label = "ava", .text = "pending output two"}));
   presentation.invalidate_transcript_layout();
   renderer.complete_transcript_update(detached_update, 0, 2);
-  bool const detached_state_seeded = renderer.transcript().scroll_offset() == 3 && renderer.transcript().new_output_count() == 2 &&
-                                     renderer.transcript().frozen_sidebar() && renderer.transcript().has_deferred_update() &&
-                                     renderer.prepared_transcript_layout().valid;
+  bool const count_waited_for_paint = presentation.screen().transcript_new_output_count == 0;
+  auto const layout_builds_before_probe = renderer.prepared_transcript_layout().layout_build_count;
+  presentation.publish_activity_item({.id = "activity-old", .label = "tool", .detail = "new live activity while detached"});
+  // The open output/search modal freezes the prepared transcript. This frame
+  // publishes the count/sidebar without consuming the deferred anchor under test.
+  bool const detached_frame = renderer.render() && renderer.paint_ready_frame();
+  auto const& detached_sidebar = presentation.screen().sidebar;
+  bool const detached_state_seeded = count_waited_for_paint && detached_frame && renderer.transcript().scroll_offset() == 3 &&
+                                     presentation.screen().transcript_new_output_count == 2 && detached_sidebar && detached_sidebar->activity.size() == 1 &&
+                                     detached_sidebar->activity.front().detail == "old activity" && presentation.sidebar().activity.size() == 1 &&
+                                     presentation.sidebar().activity.front().detail == "new live activity while detached" &&
+                                     renderer.transcript().has_deferred_update() && renderer.prepared_transcript_layout().valid &&
+                                     renderer.prepared_transcript_layout().layout_build_count == layout_builds_before_probe;
+  expect(detached_state_seeded, "transition fixture publishes detached output and its captured sidebar while preserving the pending anchor");
   auto const previous_generation = presentation.screen().transcript_generation;
   auto const replaced_session = frontend.replace_session_identity();
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
@@ -437,17 +449,34 @@ bool test_changed_session_snapshot_resets_presentation()
       presentation.sidebar().activity.empty() && presentation.sidebar().modified_files.empty() && presentation.sidebar().todos.size() == 1 &&
       presentation.sidebar().todos.front().content == "new todo" && presentation.sidebar().session_entry_count == std::nullopt &&
       draft_state.draft().text.empty() && draft_state.history().empty() && !history_restored && !draft_state.selection_bounds() &&
-      draft_state.saved_draft().empty() && !draft_state.history_index() && draft_state.jump_mode() == ava::tui::ComposerJumpMode::None &&
-      draft_state.scroll_offset() == 0 && presentation.screen().input.empty() && presentation.screen().input_cursor == 0 &&
-      presentation.screen().input_selection_start == std::string::npos && presentation.screen().input_selection_end == std::string::npos &&
-      presentation.screen().transcript_selection_anchor_item == std::string::npos &&
+      !draft_state.history_index() && draft_state.jump_mode() == ava::tui::ComposerJumpMode::None && draft_state.scroll_offset() == 0 &&
+      presentation.screen().input.empty() && presentation.screen().input_cursor == 0 && presentation.screen().input_selection_start == std::string::npos &&
+      presentation.screen().input_selection_end == std::string::npos && presentation.screen().transcript_selection_anchor_item == std::string::npos &&
       presentation.screen().transcript_selection_focus_item == std::string::npos && !presentation.screen().command_output &&
       !presentation.screen().local_command_feedback && presentation.screen().tool_index.empty() &&
       presentation.screen().evicted_tool_index_identities.empty() && presentation.screen().next_tool_index_sequence == 0 && !attachments.has_pending() &&
       presentation.screen().pending_attachments.empty() && !presentation.screen().sidebar_drawer_visible &&
-      presentation.screen().sidebar_drawer_scroll_offset == 0 && renderer.transcript().scroll_offset() == 0 && renderer.transcript().new_output_count() == 0 &&
-      !renderer.transcript().frozen_sidebar() && !renderer.transcript().has_deferred_update() && !renderer.prepared_transcript_layout().valid &&
+      presentation.screen().sidebar_drawer_scroll_offset == 0 && renderer.transcript().scroll_offset() == 0 &&
+      presentation.screen().transcript_new_output_count == 0 && !renderer.transcript().has_deferred_update() && !renderer.prepared_transcript_layout().valid &&
       !transcript_search.is_open() && active_select_list.kind() == ava::tui::ActiveSelectList::None;
+
+  // Save every transition assertion before browsing or painting can clear state itself.
+  bool const old_history_unavailable = !draft_state.browse_history(false) && draft_state.draft().text.empty();
+  std::string reset_probe_text = "new session viewport";
+  for (int row = 0; row < 30; ++row)
+    reset_probe_text += "\nnew session viewport";
+  presentation.publish_transcript({{.label = "ava", .text = std::move(reset_probe_text)}});
+  presentation.publish_activity_item({.id = "new-session-probe", .label = "new session activity"});
+  // Re-scroll before the first new-session frame. Painting at live tail would
+  // repair a broken frozen-sidebar/count reset and conceal the regression.
+  navigation.scroll_up(3);
+  bool const reset_probe_painted = renderer.render() && renderer.paint_ready_frame();
+  auto const& reset_sidebar = presentation.screen().sidebar;
+  bool const detached_reset_observed = reset_probe_painted && renderer.transcript().scroll_offset() > 0 &&
+                                       presentation.screen().transcript_new_output_count == 0 && reset_sidebar && reset_sidebar->activity.size() == 1 &&
+                                       reset_sidebar->activity.front().label == "new session activity";
+  expect(detached_reset_observed && old_history_unavailable, "session transition prevents prior count, frozen sidebar and history scratch from reappearing");
+  renderer.show_live_tail(ava::tui::LiveTailReason::Navigation);
 
   presentation.publish_transcript({{.label = "ava", .text = "new receipt only"}});
   presentation.invalidate_transcript_layout();
@@ -471,7 +500,8 @@ bool test_changed_session_snapshot_resets_presentation()
   // History browsing clears selection, so exercise its reset in this transition.
   draft_state.record_submission("old session prompt");
   draft_state.replace_draft("history scratch");
-  bool const history_browsing_started = draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.saved_draft() == "history scratch";
+  bool const history_browsing_started = draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.browse_history(false) &&
+                                        draft_state.draft().text == "history scratch" && draft_state.browse_history(true) && draft_state.history_index() == 0;
   // The drawer hides the transcript, so exercise its reset outside the detached-view probe.
   presentation.publish_sidebar_drawer(true, 4);
   draft_state.replace_draft("draft from previous session");
@@ -489,9 +519,10 @@ bool test_changed_session_snapshot_resets_presentation()
                                      presentation.screen().transcript_generation == before_replacements + 1 && !presentation.screen().sidebar_drawer_visible &&
                                      presentation.screen().sidebar_drawer_scroll_offset == 0;
   expect(rapid_replacements_ok, "two replacements before one boundary reset presentation exactly once to the final identity");
-  bool const history_browsing_reset =
-      history_browsing_started && transitioned && draft_state.history().empty() && !draft_state.history_index() && draft_state.saved_draft().empty();
+  bool const history_browsing_reset = history_browsing_started && transitioned && draft_state.history().empty() && !draft_state.history_index();
   expect(history_browsing_reset, "session transition clears active history browsing and its saved draft");
+  bool const scratch_cannot_return = !draft_state.browse_history(false) && draft_state.draft().text.empty();
+  expect(scratch_cannot_return, "forward history after session replacement cannot restore a prior session scratch draft");
 
   // The control seam compares committed identities, not unobservable backend
   // generations. A -> B -> A between boundaries leaves an A-bound view intact.
@@ -505,20 +536,14 @@ bool test_changed_session_snapshot_resets_presentation()
                                       presentation.screen().input == "same-identity draft" && presentation.screen().transcript_generation == before_round_trip;
   expect(identity_round_trip_ok, "identity A-to-B-to-A before one boundary preserves the A-bound presentation without a reset");
 
-  // Jump mode clears history browsing; scrolling requires a draft taller than its viewport.
-  draft_state.replace_draft(std::string(1024, 'x'));
+  // Jump mode clears browsing and must retire when the committed session changes.
+  draft_state.replace_draft("jump target draft");
   draft_state.begin_jump(ava::tui::ComposerJumpMode::Forward);
-  ava::tui::ComposerSnapshot scroll_snapshot;
-  scroll_snapshot.width = 40;
-  scroll_snapshot.height = 10;
-  scroll_snapshot.input = draft_state.draft().text;
-  draft_state.scroll_to(2, scroll_snapshot, scroll_snapshot.height);
-  bool const jump_and_scroll_started = draft_state.jump_mode() == ava::tui::ComposerJumpMode::Forward && draft_state.scroll_offset() == 2;
+  bool const jump_started = draft_state.jump_mode() == ava::tui::ComposerJumpMode::Forward;
   auto const jump_session_replaced = frontend.replace_session_identity();
   auto const jump_transitioned = session_transition.apply(frontend.frontend()->read_committed_session_id());
-  bool const jump_and_scroll_reset = jump_and_scroll_started && jump_session_replaced && jump_transitioned &&
-                                     draft_state.jump_mode() == ava::tui::ComposerJumpMode::None && draft_state.scroll_offset() == 0;
-  expect(jump_and_scroll_reset, "session transition resets active jump mode and a scrolled composer draft");
+  bool const jump_reset = jump_started && jump_session_replaced && jump_transitioned && draft_state.jump_mode() == ava::tui::ComposerJumpMode::None;
+  expect(jump_reset, "session transition resets active jump mode");
 
   presentation.publish_transcript({{.label = "ava", .text = "selection before session transition"}});
   presentation.publish_command_output(std::nullopt);
@@ -546,7 +571,8 @@ bool test_changed_session_snapshot_resets_presentation()
   expect(selection_reset, "session transition retires actual transcript selection authority");
 
   return changed_state_ok && unchanged_state_ok && jobs_still_available && rapid_replacements_ok && identity_round_trip_ok && history_browsing_reset &&
-         jump_and_scroll_reset && sidebar_count_reset && tool_history_seeded && selection_reset;
+         jump_reset && sidebar_count_reset && tool_history_seeded && selection_reset && old_history_unavailable && detached_reset_observed &&
+         scratch_cannot_return;
 }
 
 // Protect committed-session transitions from late events and retained keys belonging to the previous run.
@@ -1361,14 +1387,24 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
   navigation.jump_to_bottom("live tail");
   auto const live_before_wheel = renderer.transcript().scroll_offset();
+  presentation.publish_activity_item({.id = "wheel-probe", .label = "before wheel detachment"});
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
   auto const wheel_up_offset = renderer.transcript().scroll_offset();
-  bool const wheel_up_detached = wheel_up_offset == ava::tui::kTranscriptWheelScrollRows && renderer.transcript().frozen_sidebar().has_value();
+  presentation.publish_activity_item({.id = "wheel-probe", .label = "new live wheel activity"});
+  bool const detached_painted = renderer.render() && renderer.paint_ready_frame();
+  bool const wheel_up_detached = detached_painted && wheel_up_offset == ava::tui::kTranscriptWheelScrollRows && presentation.screen().sidebar &&
+                                 presentation.screen().sidebar->activity.size() == 1 &&
+                                 presentation.screen().sidebar->activity.front().label == "before wheel detachment";
   navigation.scroll_down(ava::tui::kTranscriptWheelScrollRows);
   auto const wheel_down_live = renderer.transcript().scroll_offset();
-  bool const wheel_reverse_reattached =
-      live_before_wheel == 0 && wheel_down_live == 0 && !renderer.transcript().frozen_sidebar().has_value() && renderer.transcript().new_output_count() == 0;
+  bool const wheel_reverse_at_tail = live_before_wheel == 0 && wheel_down_live == 0 && presentation.screen().transcript_new_output_count == 0;
+  presentation.publish_activity_item({.id = "wheel-probe", .label = "after wheel reattachment"});
+  // Use the existing first upward step before a live-tail frame could clear stale state.
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
+  bool const reattached_painted = renderer.render() && renderer.paint_ready_frame();
+  bool const wheel_reverse_reattached = wheel_reverse_at_tail && reattached_painted && presentation.screen().transcript_new_output_count == 0 &&
+                                        presentation.screen().sidebar && presentation.screen().sidebar->activity.size() == 1 &&
+                                        presentation.screen().sidebar->activity.front().label == "after wheel reattachment";
   navigation.scroll_up(ava::tui::kTranscriptWheelScrollRows);
   auto const two_wheel_ups = renderer.transcript().scroll_offset();
   navigation.scroll_down(1);
@@ -1474,6 +1510,8 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 // Protect the frozen detached window while completion publishes a newer transcript underneath it.
 bool test_detached_completion_publish_preserves_numbered_window()
 {
+  // Observe real draw output; reading the copy never services a pending frame.
+  tui_test_support::ScopedScreenDrawObserver paint_observer;
   EventLoopFixture event_loop;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(32, 120));
@@ -1538,7 +1576,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
   auto const detached_scroll = renderer.transcript().scroll_offset();
   auto const detached_update = renderer.begin_transcript_update();
-  auto const before_numbers = numbered_window(renderer.painted_frame().surfaces);
+  auto const before_numbers = numbered_window(paint_observer.frame().surfaces);
   auto const draft_before = draft_state.draft().text;
   auto const snapshot_count_before = presentation.screen().transcript_new_output_count;
 
@@ -1552,8 +1590,8 @@ bool test_detached_completion_publish_preserves_numbered_window()
   presentation.publish_run_frame(false);
 
   auto const rendered = renderer.render() && renderer.paint_ready_frame();
-  auto const after_numbers = numbered_window(renderer.painted_frame().surfaces);
-  auto const surfaces_joined = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces);
+  auto const after_numbers = numbered_window(paint_observer.frame().surfaces);
+  auto const surfaces_joined = tui_test_support::join_visible_lines(paint_observer.frame().surfaces);
   auto const hint_visible =
       surfaces_joined.find(std::to_string(kNewOutputCount) + " new") != std::string::npos && surfaces_joined.find("Ctrl+End") != std::string::npos;
   bool const passed = rendered && !renderer.render_failed() && snapshot_count_before == 0 && detached_scroll > 0 && detached_update.anchor().valid &&
@@ -1562,24 +1600,24 @@ bool test_detached_completion_publish_preserves_numbered_window()
                       presentation.screen().transcript_scroll_offset == renderer.transcript().scroll_offset() && renderer.transcript().scroll_offset() > 0 &&
                       draft_state.draft().text == draft_before && presentation.screen().input == draft_before && !presentation.screen().processing;
 
-  auto const before_attached_paint = renderer.painted_frame().surfaces;
+  auto const before_attached_paint = paint_observer.frame().surfaces;
   renderer.show_live_tail(ava::tui::LiveTailReason::Navigation);
   static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"}));
   presentation.invalidate_transcript_layout();
   bool const footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
   bool const full_queued = renderer.render();
   bool const later_footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
-  bool const painting_deferred = renderer.painted_frame().surfaces == before_attached_paint;
+  bool const painting_deferred = paint_observer.frame().surfaces == before_attached_paint;
   bool const batch_painted = renderer.paint_ready_frame();
-  bool const full_dominated_footer = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("ATTACHED-FULL-FRAME") != std::string::npos;
+  bool const full_dominated_footer = tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("ATTACHED-FULL-FRAME") != std::string::npos;
 
-  auto const before_handoff = renderer.painted_frame().surfaces;
+  auto const before_handoff = paint_observer.frame().surfaces;
   static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "HANDOFF-FULL-FRAME"}));
   presentation.invalidate_transcript_layout();
   bool const handoff_queued = renderer.render();
-  bool const handoff_still_deferred = renderer.painted_frame().surfaces == before_handoff;
+  bool const handoff_still_deferred = paint_observer.frame().surfaces == before_handoff;
   bool const handoff_painted = renderer.paint_for_handoff();
-  bool const handoff_visible = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("HANDOFF-FULL-FRAME") != std::string::npos;
+  bool const handoff_visible = tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("HANDOFF-FULL-FRAME") != std::string::npos;
   bool const attached_contract = footer_queued && full_queued && later_footer_queued && painting_deferred && batch_painted && full_dominated_footer &&
                                  handoff_queued && handoff_still_deferred && handoff_painted && handoff_visible;
   expect(attached_contract, "attached renderer defers urgent painting to the batch, retains Full over Footer, and paints synchronously for a handoff");
@@ -1590,7 +1628,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   std::this_thread::sleep_until(std::chrono::steady_clock::now() + ava::tui::FrameScheduler::kFrameInterval);
   bool const painted_without_timer_dispatch = renderer.paint_ready_frame();
   bool const deadline_visible =
-      tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("DEADLINE-CROSSED-DURING-INPUT") != std::string::npos;
+      tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("DEADLINE-CROSSED-DURING-INPUT") != std::string::npos;
   bool const no_stale_frame_timer = !event_loop.loop().has_due_work();
   expect(scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer,
          "end-of-batch paint consumes its elapsed deadline without an extra ready-only turn");

@@ -19,19 +19,11 @@ namespace ava::tui::runtime_input {
 // Reject paste, control keys, ASCII controls and invalid UTF-8 byte shapes; this does
 // not check full Unicode scalar validity. Returned bytes own their storage; no terminal read occurs.
 [[nodiscard]] std::optional<std::string> printable_jump_target(RuntimeInput const& input);
-// TUI thread with an initialized Application terminal: consume startup replay first,
-// then decode using the current terminal timeout. Unknown conflates no input with
-// discarded input here; the session uses poll_curses_input to tell them apart.
-[[nodiscard]] RuntimeInput read_curses_input();
 // TUI thread with an initialized Application terminal: take startup replay first,
 // otherwise decode without waiting for an initial key. Restore the previous timeout
 // before returning. Escape/paste assembly may still wait after the first byte; poll
 // again after Discarded and apply the turn budget before deciding to block.
 [[nodiscard]] InputPollResult poll_curses_input();
-// TUI thread with an initialized Application terminal: take replay first or apply
-// timeout to the initial read, restoring the prior setting on return. Return no value
-// for both discarded and absent input; escape/paste continuation has its own timeout.
-[[nodiscard]] std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout);
 
 // TUI thread: discard owned startup replay without changing native input, timeout
 // or incomplete-paste tracking. Prompt input cleanup uses this while preserving

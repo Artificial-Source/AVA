@@ -1,6 +1,7 @@
 // Routes user navigation through the renderer and updates visible status and editor data.
 #pragma once
 
+#include "ComposerInputResult.h"
 #include "ava/debug/print_members_on.h"
 
 #include <cstddef>
@@ -9,10 +10,6 @@
 #include <string_view>
 
 namespace ava::tui {
-
-namespace terminal {
-class Context;
-}
 
 class RuntimePresentationState;
 
@@ -58,9 +55,10 @@ class RuntimeNavigationController final
   [[nodiscard]] FileReferenceSelectionText selected_completion_text(std::size_t selected);
 
   // TUI thread: route pointer input through completion, transcript, then draft.
-  // The context is borrowed only for this call. The caller paints after a true
-  // result; false leaves non-pointer input to the next dispatcher stage.
-  [[nodiscard]] bool handle_pointer_input(InputEvent const& event, terminal::Context& terminal_context);
+  // No value leaves non-pointer input to the next dispatcher stage. An owned
+  // result consumes the pointer event even when a clicked completion declined
+  // its edit. Session applies feedback and a bell before requesting paint.
+  [[nodiscard]] std::optional<ComposerInputResult> handle_pointer_input(InputEvent const& event);
 
   // TUI thread: disarm consecutive Escape clearing, publish terminal dimensions, then ask the renderer to
   // scroll toward history.

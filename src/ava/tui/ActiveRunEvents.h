@@ -23,12 +23,6 @@ namespace detail {
 [[nodiscard]] bool command_event_request_has_conversation_authority(std::optional<std::string> const& event_request_id,
                                                                     std::span<std::string const> ordinary_turn_request_ids) noexcept;
 
-// Merge finished cards from a caller-selected local-output partition, preserving
-// transcript-before-pending order and replacing matching identities. The caller
-// selects local-output events first. This synchronous value operation may run on
-// any thread with exclusive access to tools and stable state; neither is retained.
-void merge_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState const& state);
-
 } // namespace detail
 
 // ActiveRun::Operation owns this TUI-thread event reducer until completion cleanup
