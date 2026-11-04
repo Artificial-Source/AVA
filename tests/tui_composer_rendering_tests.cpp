@@ -1,3 +1,4 @@
+// Exercise TUI owner interactions and rendered prompt, selector and transcript behavior.
 #include "sys.h"
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
@@ -10,6 +11,7 @@
 #include "ava/tui/Composer.h"
 #include "ava/tui/PendingAttachments.h"
 #include "ava/tui/SelectorHost.h"
+#include "ava/tui/SelectorInputController.h"
 #include "ava/tui/SessionSelector.h"
 #include "ava/tui/SessionTransitionCoordinator.h"
 #include "ava/tui/SettingsDialog.h"
@@ -1608,16 +1610,24 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
   return initial && applied_once && backend_refresh && local_refresh && known_empty;
 }
 
-// Closing all of Settings must retire display preview, while selection keeps one row allocation.
-bool test_settings_close_restores_preview_and_selector_storage()
+// Archive input must close nested Settings and restore its preview through the
+// real selector dispatcher, while highlighting keeps the same row allocation.
+bool test_settings_archive_restores_preview_and_selector_storage()
 {
+  EventLoopFixture event_loop;
   tui_test_support::TuiFrontEndFixture frontend;
+  auto& terminal = ava::core::Application::instance().terminal_context();
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  ava::tui::Composer composer;
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation, composer, &terminal);
+  renderer.attach_loop(event_loop.loop());
   auto display = frontend.frontend()->display_settings_snapshot();
   display.show_images = true;
   presentation.apply_local_display_settings(*frontend.frontend(), display);
   ava::tui::SelectorHost selectors(presentation);
-  ava::tui::SettingsDialog settings(*frontend.frontend(), presentation, selectors, ava::core::Application::instance().terminal_context());
+  ava::tui::SelectorInputController classifier(*frontend.frontend(), presentation, selectors, renderer, terminal);
+  ava::tui::SettingsDialog settings(*frontend.frontend(), presentation, selectors, terminal);
+  ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, terminal);
   settings.open();
   auto row_for = [&](std::string_view value) {
     auto const& rows = selectors.view()->items;
@@ -1632,9 +1642,14 @@ bool test_settings_close_restores_preview_and_selector_storage()
   settings.highlight(row_for(ava::tui::runtime_views::kSettingsImagesOff), {});
   bool const previewed = !presentation.screen().show_images;
   bool const one_view = &*selectors.view() == &*presentation.screen().select_list && selectors.view()->items.data() == row_storage;
-  // The Archive route must call close(), which exits the entire nested dialog.
-  settings.close();
-  return previewed && one_view && presentation.screen().show_images && !settings.is_open() && !selectors.view();
+  // Check immediately after host dispatch, while all owners still exist. A later
+  // destructor or synchronize_selector() must not be what repairs the preview.
+  auto const result = selectors.dispatch({.event = {.key = ava::tui::terminal::Key::CtrlD}, .text = {}}, classifier, settings, sessions);
+  bool const closed = result.request == ava::tui::SelectorDispatchRequest::None && presentation.screen().show_images && !settings.is_open() &&
+                      selectors.kind() == ava::tui::ActiveSelectList::None && !selectors.view() && !presentation.screen().select_list &&
+                      presentation.screen().status == "view canceled";
+  expect(closed, "Archive dispatch immediately closes nested Settings, restores Images On and publishes cancellation status");
+  return previewed && one_view && closed;
 }
 
 // Protect explicit reload outcomes and rebasing of an open settings preview.
@@ -2145,7 +2160,8 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "display_reload_poll")
   {
-    expect(test_settings_close_restores_preview_and_selector_storage(), "whole Settings closure restores preview without copying selector rows");
+    expect(test_settings_archive_restores_preview_and_selector_storage(),
+           "Archive through SelectorHost restores nested Settings preview without copying selector rows");
     expect(test_composer_draw_preserves_context_color_pair_allocations(),
            "composer draw allocates its 4x6 semantic rendition table through Context after existing pairs, preserves a preallocated pair, and stores the "
            "custom text/default-background pair in the rendered cell");
