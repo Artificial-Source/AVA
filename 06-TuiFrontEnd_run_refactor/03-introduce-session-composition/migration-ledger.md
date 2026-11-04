@@ -2,10 +2,11 @@
 
 ## Current status after the final review round
 
-The listed findings and an additional prompt callback locking correction are
-implemented through `12108a7b`. Complete-diff reviewers found additional timer,
-decoder encapsulation and comment gaps. Their corrections and closure reviews
-are in progress before final validation. Start with
+Implementation and all five complete-diff self-review angles are complete
+through `0d6173b0`. Final review corrected workspace timer-stage reads, private
+decoder state and stale comments. S4 all-green certification remains deferred
+because the environment blocks existing subprocess paths; no code finding
+remains open. Start with
 [the TUI architecture guide](../../docs/engineering/tui-architecture.md).
 [Merge notes and the full finding report](../11-review-design-and-close-migration/refactor-handoff.md)
 record commits, security bounds, comment counts, test evidence and remaining
@@ -13,7 +14,7 @@ limits. Those two documents supersede the historical checkpoints below.
 
 | Area | Current code and checks |
 | --- | --- |
-| Session loop | Control → due timers → application updates → input → paint → wait. Input has a 32-result fairness budget. Close-after-submit drains and discards bytes. The nominal 100 ms timer only wakes; control/display repeats share an origin. Tests observe the actual control deadline, timeout and callback. |
+| Session loop | Control → due timers → application updates → input → paint → wait. Input has a 32-result fairness budget. Close-after-submit drains and discards bytes. The nominal 100 ms timer only wakes; control/display repeats share an origin. Tests observe the actual control deadline, timeout and callback. Workspace timers only mark reads due; application servicing consumes them. |
 | Active run and shutdown | `ActiveRun` owns its optional operation and joined worker; `ActiveRunInput` owns run-specific keys. Final completion drains the finite backlog before publishing its outcome. Release failure logs, latches and terminates before a possibly blocked join; later cleanup errors preserve a nonzero outcome. |
 | Host prompts | Claimed requests retain their claim until callbacks retire. Stale input is quarantined, paste cannot trigger answers, and prompt/result handoffs perform real paints. Pending permissions deny or interrupt on signals, HUP, I/O failure and exceptions. Ready automatic question answers keep baseline cancellation precedence. Host prompts hold provider/plugin/spinner/Mermaid/display updates as required. Callback copying and last-owner retirement happen outside prompt mutexes; closed queues reject new claims. |
 | Screen and editor | Per-feature operations publish to private state; readers receive const views. Correlated run/frame/progress values are grouped. Draft mutations publish themselves; projection is const. Composer phase methods and an edit-action table serve idle and active input with their original ordering. |
@@ -29,12 +30,19 @@ Synchronous callbacks and final-event drainage can delay the next control stage.
 No terminal-thread assertion, ncurses threading rule, signal policy, utils code,
 RPC contract, backend decision or production dependency changed.
 
-The dev build and every focused group passed. The first final-code full run has
-189 passes, the same 46 failure names as local baseline, and 31 skips. The tmux
-suite cannot reach usable screens because child processes cannot load
-`libdw.so.1`; no child-environment policy workaround was made. Sanitizer refresh,
-repeat checks, final self-review and the final merge check are recorded in the
-handoff as they finish. Compilation does not establish behavioral correctness.
+The dev build and every focused group passed. After final self-review, the full
+dev suite recorded 194 passes, the same 46 failure names as local baseline, and
+31 skips. All 59 TUI/plugin tests passed 20 repeats (1,180 executions). ASan/UBSan
+recorded 196 passes, the same 46 failures and 31 skips, with no diagnostics.
+TSan reported no races: its preset retained one known ACP helper failure; all
+40 requested TUI checks and two additional checks passed.
+
+All 23 tmux scenarios failed before usable screens because a child could not
+load `libdw.so.1`; no child-environment policy workaround was made. The final
+code merges cleanly with freshly fetched `origin/develop` (`d1b6db7b`) without
+merging or rebasing this branch. Full evidence, warning limits, deferred
+certification and comment counts are in the handoff. Compilation does not
+establish behavioral correctness.
 
 ## Historical implementation checkpoints through ab5189c
 

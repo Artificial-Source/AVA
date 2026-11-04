@@ -2,12 +2,16 @@
 
 ## Merge notes
 
-The requested finding groups are implemented through `12108a7b`. Final
-verification also found and fixed callback copying and destruction under prompt
-mutexes. The five complete-diff reviews found a workspace timer-stage violation, public
-decoder state and stale or repeated comments. Corrections and closure reviews
-are in progress, followed by final validation. This is not yet a merge-ready
-declaration.
+Implementation and final self-review are complete through `0d6173b0` on
+`astra/06-TuiFrontEnd_run_refactor`. All five review angles pass. Every requested
+validation command was run again after those reviews, with no new failures
+against the separately built local baseline and no sanitizer diagnostics.
+
+This is not an all-green merge certification. S4 certification remains deferred:
+the full instrumented suites retain environment failures, and all 23 tmux
+scenarios exit before usable screens because a child cannot load `libdw.so.1`.
+R5 was not assigned in the supplied review. No implementation finding remains
+open. The branch merges cleanly with the freshly fetched `origin/develop`.
 
 Start with [the TUI architecture guide](../../docs/engineering/tui-architecture.md).
 The preserved [second review](../review-astra-d48292c.md) defines R1–R20;
@@ -17,14 +21,15 @@ subject to the explicit final-round decisions recorded below.
 
 ### Finding status
 
-“Fixed” means the implementation and focused review are complete. The validation
-section separately states what was exercised and what the environment prevented.
+“Fixed” means the requested implementation and review are complete. Validation
+limits are separate from code correctness; the S4 row explicitly records the
+remaining certification gap.
 
 | Finding | Status and commits | Result |
 | --- | --- | --- |
 | R1 | Fixed — `0d162cfe` | Close-after-submit decodes and discards bytes while its worker finishes; a held-worker session test bounds loop turns. |
-| R2 | Fixed — `7104bd58`, `457b9c79` | Correct return-value, timing, ownership and shutdown comments; distinguish scheduling from successful drawing. |
-| R3 | Fixed — `f610d6ce`, `f866a139` | Glossary, concrete extension steps, ordinary language, consolidated comments, and final-result names replace ambiguous terminal-result names. |
+| R2 | Fixed — `7104bd58`, `457b9c79`, `ed206ec7`, `0d6173b0` | Correct return-value, timing, ownership and shutdown comments; distinguish scheduling from successful drawing. |
+| R3 | Fixed — `f610d6ce`, `f866a139`, `ed206ec7` | Glossary, concrete extension steps, ordinary language, consolidated comments, and final-result names replace ambiguous terminal-result names. |
 | R4 | Fixed — `4b2b9914` | Completing a host prompt wakes the loop after the worker can resume, so queued plugin work is reconsidered. |
 | R5 | Deferred — no finding supplied | The second review skips R5. There is no identified change to implement. |
 | R6 | Fixed — `d8e0d872` | The 100 ms control and 500 ms display timers share one origin and keep their phase when skipping missed ticks. |
@@ -45,7 +50,7 @@ section separately states what was exercised and what the environment prevented.
 | S1 | Fixed — `155a018b`, `02f2559d`, `f6758348`, `42d8d6c3` | Typeahead quarantine, paste rejection, real prompt/result paints, fail-closed cancellation and unlocked callable copying/retirement. |
 | S2 | Fixed — `70bac50d` | Sanitize plugin binding identities in width and visible-text paths; adversarial controls are covered by regression tests. |
 | S3 | Fixed — `5ee43632` | Preserve baseline queue limits, invoke Mermaid callbacks outside locks, and reserve result storage before removing completions. Local unbounded queues are reported below. |
-| S4 | Fixed validation work — `a431d68f`, `c90bb262`; final reruns pending | Both sanitizer runtimes work here. Initial runs had no sanitizer report, but known environment failures prevent complete execution. Final-code results are recorded below when finished. |
+| S4 | Deferred — all-green sanitizer-job certification; validation work `a431d68f`, warning fix `c90bb262` | Both instrumented builds and all required runs completed without sanitizer diagnostics. ASan/UBSan retains the baseline 46 failures; the TSan preset retains its known ACP helper failure. Fixing environment policy is outside the allowed scope. |
 | S5 | Fixed — `6617a980` | Raw C-string, object, incomplete, array and function pointers cannot print pointed-to content. |
 
 The maintainer explicitly retained the 100 ms control timer, Runtime names,
@@ -55,6 +60,16 @@ were not changed. No production dependency was added. No unresolved instruction
 conflict required a new user-visible behavior choice.
 
 ### Security checks and limits
+
+The following paths were checked against `ec4143e`; paths without a prefix
+below are under `src/ava/tui/`.
+
+| Check | Paths traced |
+| --- | --- |
+| S1 | `TuiSession.cpp`, `ActiveRun.cpp`, `ActiveRunInbox.cpp`, `PendingRequest.h`, `runtime_prompts_internal.cpp`, `runtime_input.cpp`, `terminal/Context.cxx`, `session_grants.cpp`, `SessionTransitionCoordinator.cpp`; real session, prompt, paste and shutdown regressions. |
+| S2 | `runtime_state.cpp`, `composer.cpp`, `composer_transcript.cpp`, `composer_permission.cpp`, `composer_select_list.cpp`, `composer_palette.cpp`, `composer_plugin_ui.cpp`, `tool_cards.cpp`, `command_output.cpp`, `runtime_plugin_ui_internal.cpp`, plus `src/ava/app/terminal_text.cpp`. |
+| S3 | `ActiveRunInbox.cpp`, `runtime_state.cpp`, `runtime_prompts_internal.cpp`, `runtime_plugin_ui_internal.cpp`, `runtime_mermaid_internal.cpp`, `runtime_input.cpp`, plus `src/ava/app/mermaid_render_coordinator.cpp` and `src/ava/app/tui/mermaid_tui_bridge.cpp`. |
+| Debug output | `src/ava/debug/MemberPointer.h`, `MemberReference.h`, `print_reference.h`, `generate_print_members.py`, generated member selection and `ActiveRun::Operation`'s restricted printer. |
 
 Permission and question paths were traced from `ActiveRunInbox` and resolver
 queues through `PendingRequest`, `RuntimePromptCoordinator`, `ActiveRun`,
@@ -107,23 +122,25 @@ through `scripts/build.sh`; header changes first generated print members.
 Changed C++ was formatted and diffs checked before commits. clang-tidy and
 clang-tidy-22 are not installed, so that optional analysis could not run.
 
-| Check | Current result |
+| Check | Final result after self-review |
 | --- | --- |
-| Dev build through `42d8d6c3` | Passed without new warnings; 48 focused callback/session/shutdown/documentation checks passed. |
-| Full dev suite before final self-review | 189 passed, 46 failed, 31 skipped; 266 total. Failure names exactly match the local `ec4143e` baseline. |
+| Dev build at `0d6173b0` | Passed, BetaTest and EnableDebug=ON, no new warnings. |
+| Full dev suite | 194 passed, 46 failed, 31 skipped; 271 total, 79.52 seconds. Failure names exactly match local `ec4143e`; no new failed test. |
 | Local baseline `ec4143e` | 154 passed, the same 46 failed, 31 skipped; 231 total. |
 | Local pre-final-round `d48292c` | 165 passed, the same 46 failed, 31 skipped; 242 total. |
 | Reviewer reference | Seven environment failures and 23/23 tmux passes on both baseline and pre-final branch. This cloud environment differs; comparisons use its separately built baseline. |
-| tmux before final self-review | 23/23 scenarios failed before usable screens; captured loader error: missing `libdw.so.1`. Terminal smoke behavior could not be exercised. |
-| TUI/plugin repeat 20 before final self-review | 54/54 tests passed every repetition: 1,080 successful executions, 269.74 seconds. |
-| ASan/UBSan at `640c4b49` before final self-review | Build clean; full suite 191 passed, the baseline 46 failure names, 31 skipped; 268 total. No ASan, LeakSanitizer or UBSan diagnostic. |
-| TSan before final callback correction | Preset 3 passed/1 known ACP helper failure; requested TUI 35/35 and additional composer/notification tests 2/2 passed. No TSan diagnostic. Final rerun pending. |
-| Final self-review and subsequent validation | Pending. |
-| Merge with freshly fetched origin/develop | `640c4b49` merges cleanly with `d1b6db7b` in a throwaway merge tree. Repeat after final review; branch itself is not merged or rebased. |
+| tmux | 23/23 scenarios failed before usable screens. Suspend/resume captured missing `libdw.so.1`. Behavioral smoke verification is unavailable here; no child-environment workaround was made. |
+| TUI/plugin repeat 20 | 59/59 tests passed every repetition: 1,180 successful executions, 270.16 seconds. |
+| ASan/UBSan | Configure and full build passed. Full suite: 196 passed, the baseline 46 failures, 31 skipped; 273 total, 212.83 seconds. No ASan, LeakSanitizer or UBSan diagnostic. |
+| TSan | Configure/build passed. Preset: 3 passed, 1 known ACP helper failure. Requested TUI tests: 40/40 passed; additional composer/notification tests: 2/2 passed. No TSan diagnostic. |
+| Final self-review | All five angles PASS after correcting every finding. All commands below were rerun afterward. |
+| Merge with origin/develop | `0d6173b0` merges cleanly with freshly fetched `d1b6db7b96a9783afe9893e6a6f7c8986dcdd1ee`; throwaway tree `fda5ed82d910571bd6042040e66fee1c158ff81f`. No merge or rebase of this branch. |
 
 The failed subprocess paths are not proven safe by the passing tests. This
 machine's existing child environment prevents some helpers from loading
-`libdw.so.1`; no loader-policy workaround or sanitizer suppression was added.
+`libdw.so.1`; other failures report unavailable procfs child-accounting paths.
+No loader-policy workaround or sanitizer suppression was added. Failure-name
+sets match baseline; individual downstream assertion messages can vary.
 The tmux runner also retained a lock because PID 1 had not reaped a terminated
 client. Manual recovery verified the runner was absent and its process group
 contained only a zombie before removing that stale lock.
@@ -143,32 +160,91 @@ cmake --preset tsan
 scripts/build.sh --build-dir build-tsan --jobs 2 --target ava_tests
 ctest --preset tsan
 ctest --test-dir build-tsan -R '^ava_tests\.(tui_event_loop|tui_pending_requests|tui_session\..*|plugin_ui|tui_permission|tui_composer_rendering.*)$'
+ctest --test-dir build-tsan -R '^ava_tests\.(tui_composer|mermaid_notifications)$'
 ```
 
-No sanitizer diagnostic was observed in the runs above, so there are no
-third-party sanitizer stacks or suppressions to list. TSan compilation exposed
+Both sanitizer runtimes worked. No sanitizer diagnostic was observed in the
+runs above, so there are no third-party sanitizer stacks or suppressions to list. TSan compilation exposed
 a new GCC 16 initializer-list warning in the yank regression; `c90bb262` removed
 the temporary initializer list while preserving both values and all assertions.
-Two pre-existing compiler warnings remain in TSan's optimized build:
+The final TSan build emitted one inherited GCC warning:
 `pending_attachment_graphic` reports `Iterm2ImageOptions::name` as possibly
-uninitialized, and `bound_read_authority` reports an optional shared pointer as
-possibly uninitialized. The former function body and the latter file are unchanged
+uninitialized. Earlier TSan compilation also reported an optional shared pointer
+as possibly uninitialized in `bound_read_authority`. The former function body and the latter file are unchanged
 from `ec4143e`; both appeared in the first S4 build. They are compiler warnings,
 not sanitizer runtime reports. No warning or sanitizer suppression was added.
-Final runs must be inspected separately; compilation is not behavioral proof.
+The final logs were inspected separately. No new compiler warning was found;
+compilation and absence of sanitizer reports do not prove unexecuted paths safe.
+
+The following 46 test names failed in local baseline, final dev and final
+ASan/UBSan runs. This comparison uses names because test numbers change when
+regressions are added. All runs used UTF-8 locale. No failing test was disabled,
+weakened or skipped to obtain these results.
+
+```text
+ava_benchmark.process_smoke
+ava_benchmark.smoke
+ava_build.parallel_test_runner
+ava_cli.acp_subprocess
+ava_cli.doctor_support
+ava_cli.headless_e2e_model_smoke
+ava_cli.headless_mode_json_alias
+ava_cli.headless_parallel_read_search_tools
+ava_cli.headless_performance_smoke
+ava_cli.headless_print_file_args
+ava_cli.headless_print_no_session
+ava_cli.headless_print_positional_prompt
+ava_cli.headless_print_prompt_overrides
+ava_cli.headless_print_session_startup_options
+ava_cli.headless_rpc_active_run_rejection
+ava_cli.headless_rpc_bash_process_cleanup
+ava_cli.headless_rpc_command_registry
+ava_cli.headless_rpc_compact_success
+ava_cli.headless_rpc_permission_grant
+ava_cli.headless_rpc_permission_grant_lifecycle
+ava_cli.headless_rpc_permission_reply
+ava_cli.headless_rpc_provider_error
+ava_cli.headless_rpc_question_reply
+ava_cli.headless_rpc_question_reply_multi
+ava_cli.headless_rpc_tool_failure
+ava_cli.headless_tool_visibility
+ava_cli.interactive_startup
+ava_cli.isolated_env
+ava_cli.runtime_diagnostics
+ava_release.package_timeout_cleanup
+ava_tests.acp
+ava_tests.app_command_registry
+ava_tests.app_interactive
+ava_tests.app_rpc
+ava_tests.app_runtime
+ava_tests.benchmark_driver
+ava_tests.clipboard_image_process
+ava_tests.curl_transport_process
+ava_tests.live_acp_dogfood_launcher
+ava_tests.live_dogfood_launchers
+ava_tests.lsp
+ava_tests.mcp
+ava_tests.mermaid_render
+ava_tests.plugin
+ava_tests.plugin_runner_process
+ava_tests.tools
+```
 
 ### Final self-review
 
-Five fresh reviewers inspected the complete `ec4143e..6a2b7d1c` diff.
-Closure reviews will verify the corrections before final validation:
+Five fresh read-only reviewers inspected the complete `ec4143e..6a2b7d1c`
+diff. Each then reviewed the corrections relevant to its angle. Correctness,
+security, design and tests passed at `ed206ec7`; readability passed at
+`0d6173b0`, whose only additional change corrected one timer comment. Each
+correction group also received a separate independent review.
 
 | Angle | Result | What it caught |
 | --- | --- | --- |
-| Correctness, threads and lifetimes | Closure pending | Workspace timer performed frontend reads during timer dispatch; `d866ea6f` moves them to application servicing. |
-| Security, bounds and debug output | Initial PASS; delta review pending | No new security defect. Verified host-prompt boundaries and baseline queue limits. |
-| Design and repository rules | Closure pending | Persistent InputReplay exposed mutable fields and lacked a layout exception; `12108a7b` fixes both. |
-| Comments and newcomer readability | Closure pending | Stale printer/thread/attachment descriptions, repeated contracts and per-operator filler; corrections in progress. |
-| Tests and timing | Closure pending | Workspace test expected frontend calls during timers; new regression separates timer and application stages and preserves visible assertions. |
+| Correctness, threads and lifetimes | PASS | Workspace timer performed frontend reads during timer dispatch; `d866ea6f` moves them to application servicing. |
+| Security, bounds and debug output | PASS | No new security defect. Verified host-prompt boundaries, sanitized rendering and baseline queue limits. |
+| Design and repository rules | PASS | Persistent InputReplay exposed mutable fields and lacked a layout exception; `12108a7b` fixes both. |
+| Comments and newcomer readability | PASS | Stale printer/thread/lifetime/attachment descriptions, repeated contracts and per-operator filler; `ed206ec7` corrects them. `0d6173b0` attributes waking to the timer deadline rather than its empty callback. |
+| Tests and timing | PASS | Workspace test expected frontend calls during timers; the new regression separates stages, preserves visible assertions and checks coalescing plus open/close reset. |
 
 Earlier group reviews caught unsafe default termination diagnostics, an
 explicit-only death test accidentally registered in an aggregate, missing
@@ -249,10 +325,11 @@ selectors, transcript behavior and backend decisions stay at baseline behavior.
 | --- | --- |
 | Composer.h/composer.h and .cpp case collision | Retained explicitly by the maintainer. A later coordinated rename for case-insensitive filesystems is small. |
 | Hard limits for event/prompt queues | Baseline queues have no local cap. Designing fail-closed overflow/backpressure semantics is a separate medium-sized policy change. |
-| Cloud child runtime libraries | Complete subprocess/tmux execution needs standard runtime availability without changing child-environment policy; environment work, small to medium. |
+| S4 and tmux certification | All-green jobs need working child runtime libraries and procfs accounting. Changing protected execution/child-environment policy to make tests pass would risk behavior; use a suitable runner. Environment work plus suite reruns, small to medium. |
 | R5 | No finding was supplied; no implementation estimate is possible. |
 
-No additional maintainer design decision is currently required. Three remaining
+No additional maintainer design decision is required. An all-green CI and tmux
+run is still needed before claiming the environment-blocked paths are verified. Three remaining
 places may confuse a newcomer:
 
 1. `Composer` edits the draft while lowercase `composer` renders screen values.
@@ -410,7 +487,14 @@ class declarations.
 | `ava::tui::RuntimeRenderer` | 61/61 |
 | `ava::tui::RuntimePromptCoordinator` | 69/69 |
 | `ava::tui::RuntimePluginUiCoordinator` | 18/18 |
+| `ava::tui::RuntimePluginUiCoordinatorState` | 32/32 |
 | `ava::tui::RuntimeNavigationController` | 30/30 |
 | `ava::tui::RuntimeSubmitController` | 17/17 |
+| `ava::tui::RuntimeActionController` | 31/31 |
+| `ava::tui::RuntimeEventQueue` | 9/9 |
+| `ava::tui::RuntimePromptStashController` | 17/17 |
 | `ava::tui::RuntimeMermaidPresentationController` | 39/39 |
+| `ava::tui::RuntimeMermaidPresentationController::Record` | 9/9 |
 | `ava::tui::RuntimeSubagentWorkspaceController` | 42/42 |
+| `ava::tui::RuntimeTranscriptSelectionState` | 73/73 |
+| `ava::tui::RuntimeTranscriptSelectionState::ItemSourceAuthority` | 12/12 |
