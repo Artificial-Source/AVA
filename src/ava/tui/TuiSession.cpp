@@ -40,7 +40,7 @@ constexpr std::size_t kInputBatchLimit = 32;
 // Signals only set atomic bits, and the OS wait retries EINTR. This retained
 // timer supplies a nominal 100 ms observation cadence (ten idle wakes/second).
 // Decode, callbacks and synchronous work can delay the next control turn.
-// The callback only wakes the loop so the next control stage can observe those bits.
+// The timer deadline wakes the loop so the next control stage can observe those bits.
 constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
 } // namespace
 using Key = terminal::Key;
