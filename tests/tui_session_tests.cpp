@@ -1175,23 +1175,36 @@ void test_prompt_handoff_failure(bool permission, bool at_answer, std::size_t ta
   expect(!at_answer || (active && fresh_sent), "answer failure is injected only after a visible prompt and fresh key");
 }
 
-// S1: a visible permission fails closed on explicit shutdown, eventfd failure,
-// an exception while repainting, or a signal during a successful answer paint.
-void test_permission_exit(int cause)
+// S1/R8: a visible prompt fails closed on exit. Transport failure reports Io;
+// ordinary permission shutdown, repaint exceptions and signals still deny.
+void test_prompt_exit(int cause, bool permission = true)
 {
   SessionInput input;
   SessionSignals signals;
-  std::atomic_bool denied{false};
+  std::atomic_bool failed_closed{false};
   std::atomic_bool returned{false};
   tui_test_support::TuiFrontEndFixture frontend;
-  frontend.hooks().on_submit = [denied = &denied, returned = &returned](std::string const&, ava::tui::TuiSubmitContext context) {
-    ava::permissions::PermissionPrompt prompt;
-    prompt.operation = ava::permissions::Operation::RunCommand;
-    prompt.mode = ava::core::Mode::Build;
-    prompt.command = "echo security";
-    prompt.tool_name = "bash";
-    auto result = context.permission_resolver(prompt);
-    denied->store(result && *result == ava::permissions::PermissionResolution::Deny);
+  frontend.hooks().on_submit = [failed_closed = &failed_closed, returned = &returned, cause, permission](std::string const&,
+                                                                                                         ava::tui::TuiSubmitContext context) {
+    if (permission)
+    {
+      ava::permissions::PermissionPrompt prompt;
+      prompt.operation = ava::permissions::Operation::RunCommand;
+      prompt.mode = ava::core::Mode::Build;
+      prompt.command = "echo security";
+      prompt.tool_name = "bash";
+      auto result = context.permission_resolver(prompt);
+      failed_closed->store(cause == 1 ? !result && result.error().category() == ava::core::ErrorCategory::Io
+                                      : result && *result == ava::permissions::PermissionResolution::Deny);
+    }
+    else
+    {
+      ava::agent::QuestionPrompt prompt;
+      prompt.question = "Choose a result";
+      prompt.options = {{.value = "first", .label = "First"}, {.value = "second", .label = "Second"}};
+      auto result = context.question_resolver(prompt);
+      failed_closed->store(!result && result.error().category() == ava::core::ErrorCategory::Io);
+    }
     returned->store(true);
     return ava::tui::TuiSubmitResult{};
   };
@@ -1251,7 +1264,11 @@ void test_permission_exit(int cause)
   {
     caught = std::string_view(error.what()) == "injected prompt handoff exception";
   }
-  expect(active && triggered && !probe.timed_out && denied.load() && returned.load(), "pending permission never allows on exit or exception");
+  expect(active && triggered && !probe.timed_out && failed_closed.load() && returned.load(),
+         "pending prompt returns its fail-closed result on exit or exception");
+  if (cause == 1)
+    expect(probe.failed_notify_writes == 1 && probe.turns.back().stages == std::vector<Stage>{Stage::Control},
+           "notification failure resolves the held prompt without another input, paint or wait stage");
   if (cause >= 3)
     expect(signal_sent && answer_handoffs == (cause == 4 ? 2u : 1u), "signal reaches the requested answer paint boundary");
   expect(cause == 2 ? caught : exit_code == (cause >= 3 ? 130 : cause == 1 ? 1 : 0), "permission exit preserves its original reason");
@@ -1638,9 +1655,11 @@ void run_tui_session_test_case(std::string_view test_case)
     {
       test_prompt_handoff_failure(true, true, 2);
       for (int cause : {0, 1, 2, 3, 4})
-        test_permission_exit(cause);
+        test_prompt_exit(cause);
       test_reused_permission_grant_paint_failure();
     }
+    else
+      test_prompt_exit(1, false);
   }
   else if (test_case == "frame_deadline")
     test_frame_deadline();

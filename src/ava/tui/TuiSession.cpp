@@ -846,9 +846,6 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     // Other timers that became due get the next control-first turn.
     if (!terminal_closing_ && !renderer_.paint_ready_frame())
     {
-      // A deferred frame can fail after a prompt's opening handoff succeeded.
-      // Report the write failure before shutdown answers that prompt as interrupted.
-      prompt_coordinator_.fail_active_render();
       apply_input_outcome(TuiInputOutcome::Failure);
       break;
     }
@@ -858,6 +855,10 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
 
   // Release worker waits before joining, then retire producer transports while
   // the frontend and terminal still exist. Preserve exit causes across cleanup.
+  // Every failed loop exit, including a handoff or update failure, must report
+  // Io to a held prompt before ordinary shutdown can answer it as interrupted.
+  if (terminal_write_failed_)
+    prompt_coordinator_.fail_active_render();
   control_timer_.cancel();
   auto const stopped = active_run_controller_.shutdown();
   terminal_write_failed_ = terminal_write_failed_ || stopped.terminal_write_failed();
