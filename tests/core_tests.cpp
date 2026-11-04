@@ -235,7 +235,7 @@ constexpr std::array<std::string_view, 13> kComposerRenderingCases{"search_tail"
                                                                    "prompt_completion_wakeup_permission",
                                                                    "prompt_completion_wakeup_question"};
 // Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
-constexpr std::array<std::string_view, 20> kSessionCases{"turn_order",
+constexpr std::array<std::string_view, 19> kSessionCases{"turn_order",
                                                          "frame_deadline",
                                                          "hangup",
                                                          "descriptor_error",
@@ -253,8 +253,7 @@ constexpr std::array<std::string_view, 20> kSessionCases{"turn_order",
                                                          "shutdown_outcome",
                                                          "shutdown_cleanup",
                                                          "prompt_deferred_permission",
-                                                         "prompt_deferred_question",
-                                                         "mermaid_missing_notifier"};
+                                                         "prompt_deferred_question"};
 
 // Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
 void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)
@@ -336,6 +335,13 @@ std::unique_ptr<ava::debug::LibcwdOutputSink> TestRunnerApplication::s_output_si
 bool TestRunnerApplication::s_marker_pending_ = false;
 #endif
 
+// Accept the deliberate assertion case only for explicit single-case dispatch.
+// It is absent from suite.cases, so aggregate runs never execute an expected death.
+bool has_terminal_case(IsolatedTerminalSuite const& suite, std::string_view test_case)
+{
+  return std::ranges::find(suite.cases, test_case) != suite.cases.end() || (suite.name == "tui_session" && test_case == "mermaid_missing_notifier");
+}
+
 // Derive the per-suite token used to name the libcwd log file
 // (ava_tests.<token>.libcwd.log). "all" when no suite argument is given,
 // the suite name when it matches a registered suite, "invalid" otherwise
@@ -360,7 +366,7 @@ std::string libcwd_suite_token(int argc, char** argv)
         if (argc == 2)
           return std::string(suite.name);
         std::string_view const requested_case = argv[2];
-        if (std::ranges::find(suite.cases, requested_case) != suite.cases.end())
+        if (has_terminal_case(suite, requested_case))
           return std::string(suite.name) + "." + std::string(requested_case);
       }
     }
@@ -389,12 +395,6 @@ IsolatedTerminalSuite const* find_isolated_terminal_suite(std::string_view name)
       return &suite;
   }
   return nullptr;
-}
-
-// Report whether `test_case` is registered for this isolated terminal suite.
-bool has_terminal_case(IsolatedTerminalSuite const& suite, std::string_view test_case)
-{
-  return std::ranges::find(suite.cases, test_case) != suite.cases.end();
 }
 
 // Report whether an ordinary suite needs the process Application's terminal Context.
