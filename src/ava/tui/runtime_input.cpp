@@ -34,31 +34,86 @@ constexpr std::size_t kStartupInputQueueCap = 64;
 // The decoder's session state is shared by startup probing and normal polling.
 // Only the registered TUI thread uses it; session entry/exit resets it. It owns
 // replay values and a bounded paste-marker cursor, never terminal storage.
-struct InputReplay
+class InputReplay final
 {
-  // Startup probing appends at most 64 owned events; ordinary polling removes them.
-  std::deque<RuntimeInput> startup;
-  // A truncated/timed-out paste still owns later bytes. Polling discards its tail
-  // until a full closing marker, even if a prompt flush removed earlier bytes.
-  bool discard_paste_tail = false;
-  // TUI decoder's matched prefix of ESC[201~; preserved across timeouts and batches.
-  std::size_t paste_end_prefix = 0;
-
-  // TUI thread: track one literal character, including escape-parser consumption.
+ public:
+  // TUI startup: preserve an owned event in arrival order, without exceeding
+  // the replay capacity. False leaves a full queue unchanged.
+  [[nodiscard]] bool enqueue(RuntimeInput input)
+  {
+    if (startup_.size() >= kStartupInputQueueCap)
+      return false;
+    startup_.push_back(std::move(input));
+    return true;
+  }
+  // TUI polling: transfer the oldest saved event before reading newer native
+  // input. No value means the caller may continue with the terminal decoder.
+  [[nodiscard]] std::optional<RuntimeInput> take_startup()
+  {
+    if (startup_.empty())
+      return std::nullopt;
+    auto input = std::move(startup_.front());
+    startup_.pop_front();
+    return input;
+  }
+  // TUI startup checks capacity before reading another event it must preserve.
+  [[nodiscard]] std::size_t startup_size() const noexcept { return startup_.size(); }
+  // TUI prompt cleanup: discard replay without releasing an unfinished paste's
+  // ownership of future bytes. Those bytes must never become prompt shortcuts.
+  void clear_startup() { startup_.clear(); }
+  // TUI session entry/exit only: retire both replay and paste ownership before
+  // another terminal session begins decoding. Prompt flushes must not call this.
+  void reset_session()
+  {
+    clear_startup();
+    discard_paste_tail_ = false;
+    paste_end_prefix_ = 0;
+  }
+  // TUI decoder after a paste-start marker: begin a new terminator match while
+  // retaining ownership if collection later hits its size limit or times out.
+  void begin_paste()
+  {
+    discard_paste_tail_ = true;
+    paste_end_prefix_ = 0;
+  }
+  // TUI decoder: track one literal character, including escape-parser consumption.
   // True means the full marker ended paste ownership; no text is retained here.
   bool observe_paste_character(wchar_t character)
   {
     constexpr std::wstring_view end = L"\x1b[201~";
-    paste_end_prefix = character == end[paste_end_prefix] ? paste_end_prefix + 1 : (character == end.front() ? 1 : 0);
-    if (paste_end_prefix != end.size())
+    paste_end_prefix_ = character == end[paste_end_prefix_] ? paste_end_prefix_ + 1 : (character == end.front() ? 1 : 0);
+    if (paste_end_prefix_ != end.size())
       return false;
-    paste_end_prefix = 0;
-    discard_paste_tail = false;
+    paste_end_prefix_ = 0;
+    discard_paste_tail_ = false;
+    return true;
+  }
+  // TUI polling: consume one decoded native item while an unfinished paste owns
+  // its tail. Special keys break a partial marker; only a literal full marker
+  // ends ownership. True charges this discarded item to the normal input budget.
+  [[nodiscard]] bool discard_tail(Key key, wint_t value)
+  {
+    if (!discard_paste_tail_)
+      return false;
+    if (key == Key::WideCharacter || key == Key::Escape)
+      static_cast<void>(observe_paste_character(static_cast<wchar_t>(value)));
+    else
+      paste_end_prefix_ = 0;
     return true;
   }
 
   // Internal-linkage decoder state contains user input and cannot be debug-printed.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  // Startup probing appends at most 64 owned events; ordinary polling removes them.
+  std::deque<RuntimeInput> startup_;
+  // TUI-only paste ownership, set at its start and cleared by its full closing
+  // marker or a terminal-session boundary. Prompt cleanup preserves it.
+  bool discard_paste_tail_ = false;
+  // TUI decoder's matched prefix of ESC[201~; always below the marker length.
+  // Literal characters advance it; special keys, completion and session reset clear it.
+  std::size_t paste_end_prefix_ = 0;
 };
 
 // TUI thread only: one state owner spans startup and interactive decoding. The
@@ -148,8 +203,7 @@ std::string read_escape_sequence_body(terminal::Context& terminal_context)
 RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
 {
   auto& replay = input_replay();
-  replay.discard_paste_tail = true;
-  replay.paste_end_prefix = 0;
+  replay.begin_paste();
   std::string pasted;
   {
     auto scoped_timeout = terminal_context.timeout(std::chrono::milliseconds(1000));
@@ -221,18 +275,6 @@ std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& termin
   return unknown_input();
 }
 
-// TUI thread: transfer the oldest preserved startup event out of the FIFO before
-// touching newer terminal input; absence leaves the caller free to perform a native read.
-std::optional<RuntimeInput> take_startup_input()
-{
-  auto& queue = input_replay().startup;
-  if (queue.empty())
-    return std::nullopt;
-  auto input = std::move(queue.front());
-  queue.pop_front();
-  return input;
-}
-
 }  // namespace
 
 // TUI input handlers borrow input only for this call; return owned bytes for one
@@ -279,33 +321,26 @@ std::optional<std::string> printable_jump_target(RuntimeInput const& input)
 // Keep incomplete-paste tracking so a delayed tail cannot become ordinary keys.
 void clear_startup_input_queue()
 {
-  input_replay().startup.clear();
+  input_replay().clear_startup();
 }
 
 // TUI session entry/exit: clear replay and paste tracking before another session decodes input.
 void reset_input_decoder()
 {
-  auto& replay = input_replay();
-  replay.startup.clear();
-  replay.discard_paste_tail = false;
-  replay.paste_end_prefix = 0;
+  input_replay().reset_session();
 }
 
 // TUI startup code uses this nonconsuming count to avoid reading beyond replay capacity.
 std::size_t startup_input_queue_size()
 {
-  return input_replay().startup.size();
+  return input_replay().startup_size();
 }
 
 // TUI startup decoder: save an actionable owned event in arrival order. Full means
 // the passed value is not saved; callers must check capacity before reading more input.
 bool enqueue_startup_input(RuntimeInput input)
 {
-  auto& queue = input_replay().startup;
-  if (queue.size() >= kStartupInputQueueCap)
-    return false;
-  queue.push_back(std::move(input));
-  return true;
+  return input_replay().enqueue(std::move(input));
 }
 
 // TUI thread with a live Context: decode one native/replayed item using the current
@@ -322,16 +357,10 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
   // preserve the existing CtrlC routing for a terminal signal already observed here.
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
-  if (auto& replay = input_replay(); replay.discard_paste_tail)
-  {
-    // A cap or timeout ends the retained prefix, not the terminal's paste. Spend
-    // one input-budget item per tail character; never turn it into prompt keys.
-    if (key == Key::WideCharacter || key == Key::Escape)
-      static_cast<void>(replay.observe_paste_character(static_cast<wchar_t>(value)));
-    else
-      replay.paste_end_prefix = 0;
+  // A cap or timeout ends the retained prefix, not the terminal's paste. Spend
+  // one input-budget item per tail character; never turn it into prompt keys.
+  if (input_replay().discard_tail(*key, value))
     return unknown_input();
-  }
   if (key == Key::WideCharacter)
   {
     wchar_t const character = static_cast<wchar_t>(value);
@@ -395,7 +424,7 @@ bool empty_curses_input(RuntimeInput const& input)
 // returning. Callers charge both Input and Discarded against the turn's input budget.
 InputPollResult poll_curses_input()
 {
-  if (auto queued = take_startup_input())
+  if (auto queued = input_replay().take_startup())
     return {.kind = InputPollKind::Input, .input = std::move(*queued)};
   // Only the initial native read is nonblocking. The decoder temporarily applies
   // its existing escape/paste continuation timeouts once a sequence has started.
@@ -419,7 +448,7 @@ void drain_startup_probe_input(std::chrono::milliseconds deadline)
   auto const started = clock::now();
   // Bypass the startup queue below; polling replay would take the oldest saved
   // event and enqueue it again instead of draining the native terminal.
-  while (input_replay().startup.size() < kStartupInputQueueCap)
+  while (input_replay().startup_size() < kStartupInputQueueCap)
   {
     auto const elapsed = clock::now() - started;
     if (elapsed >= deadline)

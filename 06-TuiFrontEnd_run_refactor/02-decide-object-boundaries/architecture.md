@@ -328,3 +328,19 @@ It now checks unchanged call counts and projection during timer dispatch, then
 checks the original updates after explicit application service. The existing
 unchanged-result no-redraw check remains. Added cases cover coalesced ticks,
 closure and replacement of a selector while a read is pending.
+
+## Final self-review: decoder state
+
+`InputReplay` is a file-local implementation owner in `runtime_input.cpp` because
+only the native decoder, startup probe and prompt cleanup use this state. This
+is a deliberate class/file-layout exception; exporting a header would expose a
+decoder detail without another consumer. Its internal-linkage printer opts out
+because the FIFO contains user input.
+
+Its queue and correlated paste flag/marker cursor are private. Bounded enqueue,
+FIFO transfer, replay clearing, terminal-session reset and paste transitions
+maintain those invariants. Prompt cleanup clears only replay; terminal-session
+entry/exit clears paste ownership too. Decoder functions cannot reset the marker
+without preserving the rule that an unfinished paste owns subsequent bytes.
+The existing cross-file startup APIs remain; no new production test accessor is
+introduced. The 64-event, one-MiB paste and 16-KiB escape limits are unchanged.
