@@ -118,6 +118,9 @@ struct SessionProbe
   std::size_t failed_paint_flushes = 0;
   // Real-time bound also covers regressions that spin through closing control.
   Clock::time_point deadline = Clock::now() + std::chrono::seconds(5);
+  // Only the turn-order and frame-deadline cases postpone recurring timers,
+  // so unrelated control/spinner/reload ticks cannot change their wait policy.
+  bool defer_recurring_timers = false;
   // A test failure records whether the guard, rather than the scenario, stopped execution.
   bool timed_out = false;
   // A conservative cadence origin recorded after every real paint entry returns.
@@ -449,6 +452,7 @@ void test_turn_order()
     return ava::tui::TuiSubmitResult{};
   };
   SessionProbe probe;
+  probe.defer_recurring_timers = true;
   probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
     if (probe.turns.size() == 1)
     {
@@ -577,6 +581,7 @@ void test_frame_deadline()
   SessionInput input;
   tui_test_support::TuiFrontEndFixture frontend;
   SessionProbe probe;
+  probe.defer_recurring_timers = true;
   bool delayed = false;
   probe.after_poll = [&](ava::tui::runtime_input::InputPollResult const& result) {
     if (probe.turns.size() == 2 && result.kind == InputPollKind::Input)
@@ -1335,6 +1340,12 @@ extern "C" void session_real_due(TuiEventLoop*, Clock::time_point) asm(
 // Record the TUI due stage before forwarding; optional injection happens after control.
 extern "C" void session_wrap_due(TuiEventLoop*, Clock::time_point) asm(
     "__wrap__ZN3ava3tui12TuiEventLoop11service_dueENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE");
+// Preserve timer registration and interval; selected fixtures adjust only its origin.
+extern "C" void session_real_repeat(TuiEventLoop*, std::uint64_t, Clock::duration, Clock::time_point) asm(
+    "__real__ZN3ava3tui12TuiEventLoop12repeat_timerEmNSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE");
+// Deferral is scoped to fixtures that assert frame/input wait policy in isolation.
+extern "C" void session_wrap_repeat(TuiEventLoop*, std::uint64_t, Clock::duration, Clock::time_point) asm(
+    "__wrap__ZN3ava3tui12TuiEventLoop12repeat_timerEmNSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE");
 // Preserve the production waiter and its borrowed loop resources.
 extern "C" void session_real_wait(TuiEventLoop*, TuiWaitMode) asm("__real__ZN3ava3tui12TuiEventLoop4waitENS0_11TuiWaitModeE");
 // Observe the selected policy before the real wait; no owner state is exposed.
@@ -1415,6 +1426,15 @@ extern "C" void session_wrap_due(TuiEventLoop* loop, Clock::time_point now)
   session_real_due(loop, now);
   if (probe && probe->after_due)
     probe->after_due(*loop);
+}
+
+// Recurring timers remain real registrations, but these two cases cannot reach
+// them before their watchdog. One-shot frame timers retain their original timing.
+extern "C" void session_wrap_repeat(TuiEventLoop* loop, std::uint64_t id, Clock::duration interval, Clock::time_point now)
+{
+  if (auto* probe = session_probe; probe && probe->defer_recurring_timers)
+    now = probe->deadline + std::chrono::seconds(1);
+  session_real_repeat(loop, id, interval, now);
 }
 
 // Preserve the mode chosen by Session and always execute the real wait afterward.

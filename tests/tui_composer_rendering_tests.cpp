@@ -43,6 +43,7 @@
 #include "ava/core/Application.h"
 #include "ava/core/UniqueFd.h"
 #include "ava/core/thread.h"
+#include "utils/at_scope_end.h"
 
 #include <algorithm>
 #include <array>
@@ -53,6 +54,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <iterator>
@@ -102,11 +104,11 @@ class EventLoopFixture final
   ava::tui::TuiEventLoop loop_;
 };
 
-// Stack-owned callback target for a bounded publication wait on the test thread.
+// Stack-owned timeout target for a bounded event-loop wait on the test thread.
 // Declare its timer afterward so the registration retires before this target.
-struct PromptPublicationDeadline
+struct LoopWaitDeadline
 {
-  // The loop callback ends the wait without consuming or claiming a prompt.
+  // The timer only ends the fixture wait; it never consumes application work.
   void expire(ava::tui::TuiEventLoop::Clock::time_point) { expired = true; }
   // Test-thread timeout latch; only expire sets it, and the waiting test reads it.
   bool expired = false;
@@ -114,11 +116,53 @@ struct PromptPublicationDeadline
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Normal submissions retire in the same complete() call that consumes their published result.
+// A stopped or failed loop cannot dispatch the fallback timer. Treat that as
+// failure immediately rather than spinning on wait(), which would return at once.
+bool loop_wait_failed(ava::tui::TuiEventLoop const& loop)
+{
+  return loop.stopped() || loop.terminal_hangup() || loop.terminal_error() || loop.notification_failed();
+}
+
+// Wait for worker publication without claiming the request. The caller retains
+// ownership of the next input event and decides when to display the prompt.
+bool wait_for_pending_prompt(ava::tui::RuntimePromptCoordinator& coordinator, ava::tui::TuiEventLoop& loop)
+{
+  LoopWaitDeadline deadline;
+  auto timeout = loop.member_timer(deadline, &LoopWaitDeadline::expire);
+  timeout.arm_at(ava::tests::now_plus_seconds(2));
+  // Publication unlocks the queue before notifying. Recheck after every wake;
+  // consuming a wake does not remove the pending request or claim its input.
+  while (!coordinator.has_pending_requests() && !deadline.expired && !loop_wait_failed(loop))
+  {
+    loop.service_due();
+    if (coordinator.has_pending_requests() || deadline.expired || loop_wait_failed(loop))
+      break;
+    loop.wait(ava::tui::TuiWaitMode::Block);
+  }
+  return coordinator.has_pending_requests() && !loop_wait_failed(loop);
+}
+
+// Call only after releasing the worker's gates and canceling its request owners.
+// If cleanup regresses, fail this process instead of hanging in future destruction.
+template <typename Value>
+Value join_released_worker(std::future<Value>& worker, char const* label)
+{
+  if (worker.wait_until(ava::tests::now_plus_seconds(2)) != std::future_status::ready)
+  {
+    expect(false, std::string(label) + " did not return after its waits were released");
+    std::abort();
+  }
+  return worker.get();
+}
+
+// Normal submissions retire in the same complete() call that consumes their
+// published result. Real notifications/timers drive retries instead of a spin.
 std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, ava::tui::TuiEventLoop& loop)
 {
-  auto const deadline = ava::tests::now_plus_seconds(2);
-  while (std::chrono::steady_clock::now() < deadline)
+  LoopWaitDeadline deadline;
+  auto timeout = loop.member_timer(deadline, &LoopWaitDeadline::expire);
+  timeout.arm_at(ava::tests::now_plus_seconds(2));
+  while (!deadline.expired && !loop_wait_failed(loop))
   {
     loop.service_due();
     if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
@@ -131,7 +175,12 @@ std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui:
       expect(!active_run.active(), "completed submission retires its operation before returning the outcome");
       return outcome;
     }
-    std::this_thread::yield();
+    if (deadline.expired || loop_wait_failed(loop))
+      break;
+    // A bounded consume may leave a real inbox backlog. Keep that work runnable;
+    // otherwise wait for its producer or the next timer, including the fallback.
+    bool const pending = active_run.has_pending_updates() || loop.has_due_work();
+    loop.wait(pending ? ava::tui::TuiWaitMode::ReadyOnly : ava::tui::TuiWaitMode::Block);
   }
   active_run.shutdown();
   expect(false, "active fixture submission completes through bounded consume/complete servicing");
@@ -263,15 +312,20 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   // modal handoff so its cached underlying geometry is already established.
   renderer.attach_loop(event_loop.loop());
   auto const scheduled = renderer.request_render(ava::tui::FrameRenderKind::Full);
-  // Wait for the frame deadline rather than bypassing cadence with a fixture flush.
+  // The real frame timer must wake this wait. A separate fallback makes a lost
+  // registration fail the test instead of blocking forever.
+  LoopWaitDeadline deadline;
+  auto timeout = event_loop.loop().member_timer(deadline, &LoopWaitDeadline::expire);
+  timeout.arm_at(ava::tests::now_plus_seconds(2));
   event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
   event_loop.loop().service_due();
+  timeout.cancel();
   auto const flushed = renderer.paint_ready_frame();
   auto const after_flush = controller.diagnostics();
   auto const scheduled_render_passed =
-      scheduled && flushed && !renderer.render_failed() && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&
-      renderer.prepared_transcript_layout().width == 141 && renderer.transcript().has_deferred_update() &&
-      after_flush.authoritative_mutation_item_render_count == after.authoritative_mutation_item_render_count &&
+      scheduled && !deadline.expired && !loop_wait_failed(event_loop.loop()) && flushed && !renderer.render_failed() &&
+      renderer.prepared_transcript_layout().layout_build_count == full_layout_builds && renderer.prepared_transcript_layout().width == 141 &&
+      renderer.transcript().has_deferred_update() && after_flush.authoritative_mutation_item_render_count == after.authoritative_mutation_item_render_count &&
       after_flush.projection_build_count == after.projection_build_count && after_flush.layout_position_visit_count == after.layout_position_visit_count &&
       after_flush.match_projection_evaluation_count == after.match_projection_evaluation_count &&
       after_flush.match_entry_realign_count == after.match_entry_realign_count && after_flush.match_entry_splice_count == after.match_entry_splice_count &&
@@ -648,23 +702,8 @@ bool test_active_run_session_transition_discards_prior_session_events()
   if (!ava::tests::require(active_run.start("PROMPT SUBMISSION"), "start a submission with a pending question"))
     return false;
   draft_state.replace_draft("retained draft", 14);
-  auto const claim_deadline = ava::tests::now_plus_seconds(2);
-  PromptPublicationDeadline deadline;
-  auto publication_timeout = event_loop.loop().member_timer(deadline, &PromptPublicationDeadline::expire);
-  publication_timeout.arm_at(claim_deadline);
-  // Publication unlocks the prompt queue before notifying this real loop. Recheck
-  // the predicate after each wake because spinner/timer notifications can coalesce.
-  // Do not consume the run here: the retained-key path must claim the prompt itself.
-  while (!prompt_coordinator.has_pending_requests() && !deadline.expired)
-  {
-    event_loop.loop().service_due();
-    if (prompt_coordinator.has_pending_requests() || deadline.expired || event_loop.loop().terminal_hangup() || event_loop.loop().terminal_error() ||
-        event_loop.loop().notification_failed())
-      break;
-    event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
-  }
-  publication_timeout.cancel();
-  bool const prompt_published = prompt_coordinator.has_pending_requests();
+  // Do not consume here: retained input must perform the claim itself.
+  bool const prompt_published = wait_for_pending_prompt(prompt_coordinator, event_loop.loop());
   if (!prompt_published)
   {
     active_run.shutdown();
@@ -720,11 +759,15 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::event::RuntimeEventSink run_events;
       std::promise<std::optional<ava::tui::TuiPluginUiEndpoint>> endpoint_promise;
       auto endpoint_future = endpoint_promise.get_future();
-      frontend.hooks().on_submit = [&](std::string const&, ava::tui::TuiSubmitContext context) {
-        invocation_id = context.request_id;
-        run_events = context.event_sink;
-        endpoint_promise.set_value(context.plugin_ui);
-        run_release.wait();
+      // The endpoint future publishes these values to the test thread. Every
+      // borrowed object is declared before ActiveRun and survives its worker join.
+      frontend.hooks().on_submit = [id = &invocation_id, events = &run_events, endpoint = &endpoint_promise, release = &run_release](
+                                       std::string const&, ava::tui::TuiSubmitContext context) {
+        *id = context.request_id;
+        *events = context.event_sink;
+        endpoint->set_value(context.plugin_ui);
+        expect(release->wait_until(ava::tests::now_plus_seconds(30)) == std::future_status::ready,
+               "fixture releases the provider before its emergency timeout");
         return ava::tui::TuiSubmitResult{};
       };
       ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
@@ -750,18 +793,27 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
                                      subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
 
+      // Declare after ActiveRun so every return or exception opens the worker's
+      // gate before ActiveRun destruction can join it. once() prevents duplicate release.
+      auto release_run = at_scope_end([finish = &finish_run] { finish->set_value(); });
       if (!active_run.start("/plugin run demo choose {}"))
+        return false;
+      bool const endpoint_ready = endpoint_future.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+      if (!ava::tests::require(endpoint_ready, "active worker publishes its plugin endpoint before waiting"))
         return false;
       auto endpoint = endpoint_future.get();
       if (!endpoint)
       {
-        finish_run.set_value();
+        release_run.once();
         static_cast<void>(active_run.shutdown());
         return false;
       }
       std::promise<void> enqueued;
       auto enqueue_ready = enqueued.get_future();
-      plugin_ui.set_after_enqueue_for_test([&] { enqueued.set_value(); });
+      plugin_ui.set_after_enqueue_for_test([enqueued = &enqueued] { enqueued->set_value(); });
+      // Clear the borrowed observer after workers below have joined, before its
+      // promise goes away, including when setup fails before the enqueue occurs.
+      auto clear_enqueue_observer = at_scope_end([ui = &plugin_ui] { ui->set_after_enqueue_for_test({}); });
       ava::tui::TuiPluginUiRequest request;
       request.binding = {.plugin_id = "demo", .command = "choose", .invocation_id = invocation_id};
       request.request_id = "preserved-modal";
@@ -770,12 +822,16 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       request.options = {{.id = "chosen", .label = "Choose me", .description = {}}};
       auto plugin_worker = ava::core::make_async(
           "plugin_prompt", [endpoint = *endpoint, request] { return endpoint.present(request, endpoint.deadline, [] { return false; }); });
-      bool const published = enqueue_ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+      // This guard must follow the future: cancellation then runs before that
+      // future's destructor can join, and releases queued as well as visible UI.
+      auto cancel_plugin = at_scope_end([ui = &plugin_ui] { ui->cancel_active(); });
+      bool const published = enqueue_ready.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
       if (published && already_visible)
         static_cast<void>(active_run.consume());
       bool const initial_projection = presentation.screen().plugin_ui_modal.has_value() == already_visible;
 
-      auto prompt_worker = ava::core::make_async("host_prompt", [&] {
+      auto prompt_worker = ava::core::make_async("host_prompt", [permission, permission_resolver = prompt_coordinator.permission_resolver(),
+                                                                 question_resolver = prompt_coordinator.question_resolver()] {
         if (permission)
         {
           ava::permissions::PermissionPrompt prompt;
@@ -783,14 +839,15 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
           prompt.mode = ava::core::Mode::Build;
           prompt.command = "echo permission";
           prompt.tool_name = "bash";
-          return prompt_coordinator.permission_resolver()(prompt).has_value();
+          return permission_resolver(prompt).has_value();
         }
         ava::agent::QuestionPrompt prompt{.header = "Host question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
-        return prompt_coordinator.question_resolver()(prompt).has_value();
+        return question_resolver(prompt).has_value();
       });
-      auto const deadline = ava::tests::now_plus_seconds(2);
-      while (!prompt_coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
-        std::this_thread::yield();
+      // Close admission before this future is destroyed. A late resolver must
+      // receive cancellation rather than enqueue a new wait during unwinding.
+      auto cancel_prompt = at_scope_end([coordinator = &prompt_coordinator] { coordinator->shutdown(); });
+      expect(wait_for_pending_prompt(prompt_coordinator, event_loop.loop()), "host prompt is published before servicing");
       static_cast<void>(active_run.consume());
       bool const active = prompt_coordinator.has_active();
       // A prompt freezes both animation and event projection until it retires.
@@ -815,11 +872,11 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       bool const displayed_afterward = presentation.screen().plugin_ui_modal && presentation.screen().plugin_ui_modal->request_id == "preserved-modal";
       static_cast<void>(plugin_ui.handle_input(enter.event));
     // Always unblock and join workers before assertions, including failing paths.
-      prompt_coordinator.shutdown();
-      plugin_ui.cancel_active();
-      auto const reply = plugin_worker.get();
-      static_cast<void>(prompt_worker.get());
-      finish_run.set_value();
+      cancel_prompt.once();
+      cancel_plugin.once();
+      auto const reply = join_released_worker(plugin_worker, "plugin prompt");
+      static_cast<void>(join_released_worker(prompt_worker, "host prompt"));
+      release_run.once();
       static_cast<void>(active_run.shutdown());
       passed = published && initial_projection && active && frozen && preserved && host_retired && displayed_afterward &&
                reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen" && passed;
@@ -845,31 +902,31 @@ bool test_attached_prompt_render_failure_returns_io()
   for (bool permission : {false, true})
   {
     coordinator.open_admission();
-    auto worker = ava::core::make_async("paint_failure_prompt", [&] {
-      if (permission)
-      {
-        ava::permissions::PermissionPrompt prompt;
-        prompt.operation = ava::permissions::Operation::RunCommand;
-        prompt.mode = ava::core::Mode::Build;
-        prompt.command = "echo permission";
-        prompt.tool_name = "bash";
-        auto result = coordinator.permission_resolver()(prompt);
-        return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render permission prompt";
-      }
-      ava::agent::QuestionPrompt prompt{.header = "Question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
-      auto result = coordinator.question_resolver()(prompt);
-      return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render question prompt";
-    });
-    auto const deadline = ava::tests::now_plus_seconds(2);
-    while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
-      std::this_thread::yield();
+    auto worker = ava::core::make_async(
+        "paint_failure_prompt", [permission, permission_resolver = coordinator.permission_resolver(), question_resolver = coordinator.question_resolver()] {
+          if (permission)
+          {
+            ava::permissions::PermissionPrompt prompt;
+            prompt.operation = ava::permissions::Operation::RunCommand;
+            prompt.mode = ava::core::Mode::Build;
+            prompt.command = "echo permission";
+            prompt.tool_name = "bash";
+            auto result = permission_resolver(prompt);
+            return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render permission prompt";
+          }
+          ava::agent::QuestionPrompt prompt{.header = "Question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
+          auto result = question_resolver(prompt);
+          return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render question prompt";
+        });
+    auto cancel_prompt = at_scope_end([owner = &coordinator] { owner->shutdown(); });
+    expect(wait_for_pending_prompt(coordinator, event_loop.loop()), "paint-failure prompt is published before servicing");
     auto const started = coordinator.start_pending();
     bool const projected = permission ? snapshot.permission_prompt.has_value() : snapshot.question_prompt.has_value();
     // Exercise the end-of-batch failure notification directly: this does not inject an actual terminal write failure.
     static_cast<void>(coordinator.fail_active_render());
     bool const cleared = !coordinator.has_active() && !snapshot.permission_prompt && !snapshot.question_prompt;
-    coordinator.shutdown();
-    bool const io = worker.get();
+    cancel_prompt.once();
+    bool const io = join_released_worker(worker, "paint-failure prompt");
     passed = started == ava::tui::PromptServiceOutcome::Active && projected && cleared && io && passed;
   }
   return passed;
@@ -892,21 +949,25 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
     coordinator.open_admission();
     std::atomic_bool worker_returned = false;
     bool callback_kept_worker = false;
-    auto worker = ava::core::make_async("cancel_claim", [&] {
-      ava::agent::QuestionPrompt prompt{
-          .header = "Automatic answer", .question = "Wait for callback", .options = {{.value = "done", .label = "Done"}}, .auto_resolve = [&] {
-            callback_kept_worker = !worker_returned.load();
-            if (throws)
-              throw std::runtime_error("test callback failure");
-            return true;
-          }};
-      auto answer = coordinator.question_resolver()(prompt);
-      worker_returned = true;
-      return answer.has_value();
-    });
-    auto const deadline = ava::tests::now_plus_seconds(2);
-    while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
-      std::this_thread::yield();
+    // The copied resolver only enqueues on the worker. The nested callback runs
+    // on the TUI thread; these observations outlive its retirement and worker join.
+    auto worker =
+        ava::core::make_async("cancel_claim", [resolver = coordinator.question_resolver(), throws, returned = &worker_returned, kept = &callback_kept_worker] {
+          ava::agent::QuestionPrompt prompt{.header = "Automatic answer",
+                                            .question = "Wait for callback",
+                                            .options = {{.value = "done", .label = "Done"}},
+                                            .auto_resolve = [throws, returned, kept] {
+                                              *kept = !returned->load();
+                                              if (throws)
+                                                throw std::runtime_error("test callback failure");
+                                              return true;
+                                            }};
+          auto answer = resolver(prompt);
+          returned->store(true);
+          return answer.has_value();
+        });
+    auto cancel_prompt = at_scope_end([owner = &coordinator] { owner->shutdown(); });
+    expect(wait_for_pending_prompt(coordinator, event_loop.loop()), "automatic question is published before servicing");
     bool caught = false;
     try
     {
@@ -916,8 +977,8 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
     {
       caught = true;
     }
-    coordinator.shutdown();
-    bool const answered = worker.get();
+    cancel_prompt.once();
+    bool const answered = join_released_worker(worker, "automatic question");
     passed = callback_kept_worker && answered == !throws && caught == throws && !coordinator.has_active() && passed;
   }
   return passed;
@@ -954,34 +1015,44 @@ bool test_atomic_search_input_prompt_precedence()
     bool provider_timed_out = false;
     std::vector<std::string> order;
     ava::core::Result<ava::agent::QuestionAnswer> answer = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question resolver did not run"));
-    ava::agent::QuestionPrompt prompt{
-        .header = "Atomic prompt", .question = "Resolve after retained search input", .options = {{.value = "done", .label = "Done"}}, .auto_resolve = [&]() {
-          std::lock_guard lock(mutex);
-          order.push_back("resolver");
-          return true;
-        }};
+    ava::agent::QuestionPrompt prompt{.header = "Atomic prompt",
+                                      .question = "Resolve after retained search input",
+                                      .options = {{.value = "done", .label = "Done"}},
+                                      .auto_resolve = [mutex = &mutex, order = &order] {
+                                        std::lock_guard lock(*mutex);
+                                        order->push_back("resolver");
+                                        return true;
+                                      }};
 
-    ava::core::JoinThread provider = ava::core::JoinThread::create("provider", [&]() {
-      {
-        std::unique_lock lock(mutex);
-        if (!changed.wait_for(lock, std::chrono::seconds(1), [&]() { return start_provider; }))
-        {
-          provider_timed_out = true;
-          changed.notify_all();
-          return;
-        }
-        provider_attempted = true;
-      }
-      changed.notify_all();
-      answer = resolver(prompt);
-      {
-        std::lock_guard lock(mutex);
-        provider_resolved = true;
-        if (!dispatch_returned)
-          order.push_back("resolved-before-dispatch-returned");
-      }
-      changed.notify_all();
-    });
+    // Every pointed-to value outlives the joined provider. Shared observations
+    // use mutex; the copied resolver and prompt keep callback identities stable.
+    ava::core::JoinThread provider = ava::core::JoinThread::create(
+        "provider", [resolver, prompt, mutex = &mutex, changed = &changed, start = &start_provider, attempted = &provider_attempted,
+                     dispatched = &dispatch_returned, resolved = &provider_resolved, timed_out = &provider_timed_out, order = &order, answer = &answer] {
+          {
+            std::unique_lock lock(*mutex);
+            if (!changed->wait_until(lock, ava::tests::now_plus_seconds(1), [start] { return *start; }))
+            {
+              *timed_out = true;
+              changed->notify_all();
+              return;
+            }
+            *attempted = true;
+          }
+          changed->notify_all();
+          auto result = resolver(prompt);
+          {
+            std::lock_guard lock(*mutex);
+            *answer = std::move(result);
+            *resolved = true;
+            if (!*dispatched)
+              order->push_back("resolved-before-dispatch-returned");
+          }
+          changed->notify_all();
+        });
+    // Retire callbacks and close admission before JoinThread's destructor on an
+    // exceptional/failing path. Successful iterations leave the coordinator open.
+    auto cancel_pending = at_scope_end([owner = &coordinator] { owner->shutdown(); });
 
     auto const initial = coordinator.dispatch_search_input_with_prompt_precedence([&]() {
       std::unique_lock lock(mutex);
@@ -997,34 +1068,32 @@ bool test_atomic_search_input_prompt_precedence()
       dispatch_returned = true;
     }
     changed.notify_all();
-    std::this_thread::yield();
-
-    auto queued = ava::tui::SearchInputPromptDispatchResult::InputHandled;
+    bool const published = wait_for_pending_prompt(coordinator, event_loop.loop());
     bool queued_attempt_dispatched = false;
-    auto const claim_deadline = ava::tests::now_plus_seconds(1);
-    while (queued == ava::tui::SearchInputPromptDispatchResult::InputHandled && std::chrono::steady_clock::now() < claim_deadline)
-    {
-      queued_attempt_dispatched = false;
-      queued = coordinator.dispatch_search_input_with_prompt_precedence(
-          [&]() {
-            queued_attempt_dispatched = true;
-            return true;
-          },
-          {},
-          [&]() {
-            std::lock_guard lock(mutex);
-            order.push_back("before-prompt");
-          });
-      if (queued == ava::tui::SearchInputPromptDispatchResult::InputHandled)
-        std::this_thread::yield();
-    }
-    auto const service_deadline = ava::tests::now_plus_seconds(1);
-    while (coordinator.has_active() && std::chrono::steady_clock::now() < service_deadline)
+    auto const queued = coordinator.dispatch_search_input_with_prompt_precedence(
+        [&]() {
+          queued_attempt_dispatched = true;
+          return true;
+        },
+        {},
+        [&]() {
+          std::lock_guard lock(mutex);
+          order.push_back("before-prompt");
+        });
+    // Automatic resolution may require its normal retry timer. Block until that
+    // timer or another notification makes progress; a fallback bounds regressions.
+    LoopWaitDeadline deadline;
+    auto timeout = event_loop.loop().member_timer(deadline, &LoopWaitDeadline::expire);
+    timeout.arm_at(ava::tests::now_plus_seconds(1));
+    while (coordinator.has_active() && !deadline.expired && !loop_wait_failed(event_loop.loop()))
     {
       event_loop.loop().service_due();
       static_cast<void>(coordinator.service());
-      std::this_thread::yield();
+      if (!coordinator.has_active() || deadline.expired || loop_wait_failed(event_loop.loop()))
+        break;
+      event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
     }
+    timeout.cancel();
     if (coordinator.has_active())
     {
       static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
@@ -1036,14 +1105,16 @@ bool test_atomic_search_input_prompt_precedence()
       if (!changed.wait_for(lock, std::chrono::seconds(1), [&]() { return provider_resolved || provider_timed_out; }))
         provider_timed_out = true;
     }
-    passed = initial == ava::tui::SearchInputPromptDispatchResult::InputHandled && queued == ava::tui::SearchInputPromptDispatchResult::PromptServiced &&
-             !queued_attempt_dispatched && !provider_timed_out && provider_resolved && answer &&
-             order == std::vector<std::string>({"search-input", "before-prompt", "resolver"});
-    if (!passed)
     {
-      coordinator.fail_pending_requests();
-      static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
+      std::lock_guard lock(mutex);
+      passed = published && initial == ava::tui::SearchInputPromptDispatchResult::InputHandled &&
+               queued == ava::tui::SearchInputPromptDispatchResult::PromptServiced && !queued_attempt_dispatched && !provider_timed_out && provider_resolved &&
+               answer && order == std::vector<std::string>({"search-input", "before-prompt", "resolver"});
     }
+    if (passed)
+      cancel_pending.disarm();
+    else
+      cancel_pending.once();
   }
 
   if (!passed)
@@ -1051,7 +1122,7 @@ bool test_atomic_search_input_prompt_precedence()
 
   std::atomic_bool stop_requested = false;
   auto permission_resolver = coordinator.permission_resolver();
-  auto permission_worker = ava::core::make_async("escape_permission", [permission_resolver, &stop_requested] {
+  auto permission_worker = ava::core::make_async("escape_permission", [permission_resolver, stop = &stop_requested] {
     auto prompt = ava::permissions::PermissionPrompt{};
     prompt.operation = ava::permissions::Operation::RunCommand;
     prompt.mode = ava::core::Mode::Build;
@@ -1059,12 +1130,15 @@ bool test_atomic_search_input_prompt_precedence()
     prompt.tool_name = "bash";
     prompt.reason = "verify stop publication before permission retirement";
     auto result = permission_resolver(prompt);
-    return std::pair{std::move(result), stop_requested.load()};
+    return std::pair{std::move(result), stop->load()};
   });
-  auto const permission_deadline = ava::tests::now_plus_seconds(2);
-  while (!coordinator.has_pending_requests() && std::chrono::steady_clock::now() < permission_deadline)
-    std::this_thread::yield();
-  bool const permission_published = coordinator.has_pending_requests();
+  // Keep stop-before-retirement ordering on normal exit and unwinding alike.
+  auto cancel_permission = at_scope_end([owner = &coordinator, stop = &stop_requested] {
+    stop->store(true);
+    owner->fail_pending_requests();
+    static_cast<void>(owner->cancel_active(ava::tui::PromptCancelReason::RunStop));
+  });
+  bool const permission_published = wait_for_pending_prompt(coordinator, event_loop.loop());
   auto const started = permission_published ? coordinator.start_pending() : ava::tui::PromptServiceOutcome::None;
   auto const escape =
       ava::tui::runtime_input::RuntimeInput{.event = {.key = ava::tui::terminal::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
@@ -1078,10 +1152,8 @@ bool test_atomic_search_input_prompt_precedence()
 
   // Publish the caller's run-stop effect before retiring the claim. Complete and
   // join unconditionally before checking any regression assertion.
-  stop_requested.store(true);
-  coordinator.fail_pending_requests();
-  static_cast<void>(coordinator.cancel_active(ava::tui::PromptCancelReason::RunStop));
-  auto const [permission_result, worker_observed_stop] = permission_worker.get();
+  cancel_permission.once();
+  auto const [permission_result, worker_observed_stop] = join_released_worker(permission_worker, "permission Escape");
   bool const escape_ordered = permission_published && started == ava::tui::PromptServiceOutcome::Active &&
                               effect == ava::tui::PromptServiceOutcome::RequestRunStop && claim_held && worker_blocked && permission_result &&
                               permission_result->resolution == ava::permissions::PermissionResolution::Deny && worker_observed_stop;

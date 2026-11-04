@@ -348,6 +348,7 @@ add_executable(ava_tests ${AVA_TESTS_SOURCES})
 # Observe the real Session turn in isolated tests without adding production hooks.
 # Each wrapper forwards normally unless that test's TUI thread installs its probe.
 target_link_options(ava_tests PRIVATE
+  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop12repeat_timerEmNSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE"
   "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinator11attach_loopERNS0_12TuiEventLoopE"
   "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox12request_stopEv"
   "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator21fail_pending_requestsEv"
