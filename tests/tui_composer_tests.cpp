@@ -6,6 +6,12 @@
 // Check edit-time cursor validity and immediate interrupt publication.
 void run_tui_composer_invariant_tests();
 
+// Protect shared key policy and its idle versus active reset rules.
+void run_tui_composer_policy_tests();
+
+// Verify active controller precedence with a held worker and real feature owners.
+void run_tui_active_input_route_tests();
+
 // Direct selector/summary contracts use the same initialized test-thread terminal.
 void run_tui_feature_owner_tests();
 // Exercise timer discovery through the explicit application-service boundary.
@@ -34,6 +40,8 @@ void run_tui_composer_tests()
   run_tui_keybinding_tests();
   run_tui_composer_dispatch_tests();
   run_tui_composer_invariant_tests();
+  run_tui_composer_policy_tests();
+  run_tui_active_input_route_tests();
   run_tui_prompt_stash_tests();
   run_tui_modal_tests_part_2();
   run_tui_permission_tests_part_2();

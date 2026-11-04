@@ -50,8 +50,14 @@ class ActiveRunInput final
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // Consume editor feedback before the stage requests its next frame.
-  [[nodiscard]] bool apply_composer_result(ComposerInputResult result);
+  // TUI thread: perform a handled editor request and queue one frame. Unhandled
+  // results pass to the next stage; failed frame requests stop dispatch. Submission
+  // must remain in the active command stage, which owns queue and local-command policy.
+  [[nodiscard]] TuiInputOutcome apply_composer_result(ComposerInputResult result);
+  // TUI thread: invoke the shared key policy with active-run reset rules. Completion
+  // and navigation callers prepare the cache first; other phases do not read it.
+  // Inputs and prepared models are borrowed only until this call returns.
+  [[nodiscard]] TuiInputOutcome handle_composer_input(runtime_input::RuntimeInput const& input, ComposerInputPhase phase);
   // Resolve this session's configurable bindings without duplicating lookup policy.
   [[nodiscard]] bool is_action(InputEvent const& event, TuiAction action) const;
   // Map a synchronous invalidation/paint result to the dispatch stop condition.
@@ -78,10 +84,9 @@ class ActiveRunInput final
   TuiInputOutcome handle_active_command_input(runtime_input::RuntimeInput const& input);
   // Editing preserves the active-run reset rules before navigation is attempted.
   TuiInputOutcome handle_composer_edit(runtime_input::RuntimeInput const& input);
-  // Transcript bindings and previous-history/palette actions keep their original priority.
+  // Transcript bindings precede shared history/palette navigation; Previous wins
+  // over Next when bindings overlap. Prepare completion before any of these decisions.
   TuiInputOutcome handle_navigation_input(runtime_input::RuntimeInput const& input);
-  // Next-history/palette actions follow previous bindings when user bindings overlap.
-  TuiInputOutcome handle_navigation_next_input(runtime_input::RuntimeInput const& input);
   // Pointer completions retain active-run acceptance/reset policy before view hit-testing.
   TuiInputOutcome handle_mouse_input(runtime_input::RuntimeInput const& input);
   // Display-only toggles run after editor and pointer stages; backend changes remain blocked.

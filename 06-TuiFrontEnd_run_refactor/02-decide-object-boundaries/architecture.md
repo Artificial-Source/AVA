@@ -119,3 +119,20 @@ TuiSession now runs the single control → due callbacks → bounded application
 ## Goal11 final audit
 
 The implemented ownership/lifetime guide is `06/11/refactor-handoff.md`. PendingAttachments owns reference/badge pairing and transfer with exception rollback; TuiSession owns the existing grant registry before prompt/transition borrowers. RuntimePresentationState has no public fields; its screen/sidebar DTO publication exception is explicit rather than a claim of complete immutable projection. TuiSession retains event precedence and cross-feature coordination, while editor, selector, branch, viewport, request and receipt state live in their respective owners. The final audit removes raw queue callback factories, unused rendering APIs, remaining active mouse forwarding lambdas and obsolete frontend includes. All temporal integration rows are closed; no deferred stub remains. Runtime validation follows only after the compiled11 checkpoint is pushed.
+
+## Final R13 editor dispatch
+
+`Composer::handle_key` dispatches to private phase methods. One ordered action
+table owns deletion, clearing, horizontal movement and undo/yank precedence.
+`ComposerEditContext` preserves the existing idle and active reset rules.
+`ActiveRunInput` calls those phases at its existing feature boundaries and applies
+returned scroll/selection requests. Active cancellation, local commands and queue
+submission remain with their existing owners. Clipboard failure consumes an
+already-selected copy binding, so it cannot fall through into another edit.
+
+The test-only `ComposerPolicyFixture` keeps its owned editor, catalogs, bindings
+and prepared completion values public so each case can arrange a collision
+without adding getters and setters that repeat the fixture's fields. This is a
+visibility and file-layout exception for an anonymous, synchronous test fixture;
+no production feature receives it. Its comment identifies the test-thread and
+lifetime limits, and its debug marker excludes user-text examples.

@@ -27,17 +27,16 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
-#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
 using runtime_commands::search_command_argument;
 using runtime_commands::shell_helper_submission;
 using runtime_commands::tool_command_argument;
-using runtime_input::printable_jump_target;
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3; // TUI keyboard scroll policy shared by these stages.
 }
@@ -63,8 +62,8 @@ ActiveRunInput::ActiveRunInput(TuiFrontEnd& frontend, RuntimePresentationState& 
       dispatcher_({std::bind_front(&ActiveRunInput::handle_modal_input, this), std::bind_front(&ActiveRunInput::handle_surface_input, this),
                    std::bind_front(&ActiveRunInput::handle_preemptive_input, this), std::bind_front(&ActiveRunInput::handle_completion_acceptance, this),
                    std::bind_front(&ActiveRunInput::handle_active_command_input, this), std::bind_front(&ActiveRunInput::handle_composer_edit, this),
-                   std::bind_front(&ActiveRunInput::handle_navigation_input, this), std::bind_front(&ActiveRunInput::handle_navigation_next_input, this),
-                   std::bind_front(&ActiveRunInput::handle_mouse_input, this), std::bind_front(&ActiveRunInput::handle_restricted_toggle_input, this)})
+                   std::bind_front(&ActiveRunInput::handle_navigation_input, this), std::bind_front(&ActiveRunInput::handle_mouse_input, this),
+                   std::bind_front(&ActiveRunInput::handle_restricted_toggle_input, this)})
 {
 }
 
@@ -114,13 +113,45 @@ TuiInputOutcome ActiveRunInput::handle_surface_input(runtime_input::RuntimeInput
   return TuiInputOutcome::Pass;
 }
 
-bool ActiveRunInput::apply_composer_result(ComposerInputResult result)
+TuiInputOutcome ActiveRunInput::apply_composer_result(ComposerInputResult result)
 {
+  if (!result.handled)
+    return TuiInputOutcome::Pass;
   if (result.status)
-    presentation_state_.publish_status(*result.status);
+    presentation_state_.publish_status(std::move(*result.status));
   if (result.beep)
     terminal_context_.beep();
-  return result.handled;
+  // Apply view requests before scheduling the frame that will show the edit.
+  // Queue submission stays with the command stage and must never arrive here.
+  switch (result.request)
+  {
+    case ComposerInputRequest::None:
+      break;
+    case ComposerInputRequest::CopyTranscript:
+      static_cast<void>(renderer_.copy_transcript_selection());
+      break;
+    case ComposerInputRequest::ClearTranscriptSelection:
+      renderer_.clear_transcript_selection();
+      break;
+    case ComposerInputRequest::ScrollUp:
+      navigation_.scroll_up(kKeyboardScrollRows);
+      break;
+    case ComposerInputRequest::ScrollDown:
+      navigation_.scroll_down(kKeyboardScrollRows);
+      break;
+    case ComposerInputRequest::Submit:
+      // Route active submissions through handle_active_command_input, not a shared
+      // editor phase: only that stage enforces local-command and queue policy.
+      ASSERT(result.request != ComposerInputRequest::Submit);
+      return TuiInputOutcome::Failure;
+  }
+  return render_outcome(renderer_.request_render());
+}
+
+TuiInputOutcome ActiveRunInput::handle_composer_input(runtime_input::RuntimeInput const& input, ComposerInputPhase phase)
+{
+  return apply_composer_result(draft_state_.handle_key(input, frontend_.key_bindings(), presentation_state_.screen(), renderer_.completion_cache(),
+                                                       renderer_.transcript().has_selection(), phase, ComposerEditContext::ActiveRun));
 }
 
 bool ActiveRunInput::is_action(InputEvent const& event, TuiAction action) const
@@ -371,23 +402,8 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
   // keys. An unrelated key disarms jump and continues through the normal precedence.
   if (auto handled = navigation_.handle_sidebar_drawer_input(active_event))
     return render_outcome(*handled);
-  if (draft_state_.jump_mode() != ComposerJumpMode::None)
-  {
-    if (is_action(active_event, TuiAction::JumpForward) || is_action(active_event, TuiAction::JumpBackward))
-    {
-      draft_state_.cancel_jump();
-      presentation_state_.publish_status("jump cancelled");
-      return render_outcome(renderer_.request_render());
-    }
-    if (auto const target = printable_jump_target(active_input))
-    {
-      bool const forward = draft_state_.jump_mode() == ComposerJumpMode::Forward;
-      presentation_state_.publish_status(draft_state_.jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward")
-                                                                                 : "jump character not found");
-      return render_outcome(renderer_.request_render());
-    }
-    draft_state_.cancel_jump();
-  }
+  if (auto result = handle_composer_input(active_input, ComposerInputPhase::Jump); result != TuiInputOutcome::Pass)
+    return result;
   if (is_action(active_event, TuiAction::CopyLatestAssistant))
     return render_outcome(action_controller_.copy_latest_assistant_message());
   if (is_action(active_event, TuiAction::PromptStash))
@@ -411,8 +427,10 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
   if (is_action(active_event, TuiAction::CopySelection) && draft_state_.selection_bounds())
   {
     draft_state_.cancel_escape();
-    static_cast<void>(apply_composer_result(draft_state_.copy_selection()));
-    return render_outcome(renderer_.request_render());
+    auto result = draft_state_.copy_selection();
+    // Copy already owns this key; even clipboard failure must not fall through to editing.
+    result.handled = true;
+    return apply_composer_result(std::move(result));
   }
   if (is_action(active_event, TuiAction::CopySelection) && renderer_.transcript().has_selection())
   {
@@ -439,83 +457,18 @@ TuiInputOutcome ActiveRunInput::handle_preemptive_input(runtime_input::RuntimeIn
     return TuiInputOutcome::Handled;
   }
   if (active_event.key == Key::Character)
-  {
     presentation_state_.clear_local_feedback();
-    static_cast<void>(apply_composer_result(draft_state_.insert_input(active_input, ComposerEditContext::ActiveRun)));
-    return render_outcome(renderer_.request_render());
-  }
-  if (apply_composer_result(draft_state_.extend_selection_for_key(active_event.key)))
-  {
-    renderer_.clear_transcript_selection();
-    return render_outcome(renderer_.request_render());
-  }
-  if (active_event.key == Key::CtrlHome || active_event.key == Key::CtrlEnd)
-  {
-    draft_state_.move_document_boundary(active_event.key == Key::CtrlEnd, ComposerEditContext::ActiveRun);
-    return render_outcome(renderer_.request_render());
-  }
-  return TuiInputOutcome::Pass;
+  return handle_composer_input(active_input, ComposerInputPhase::Primary);
 }
 
 // TUI completion accepts one enabled candidate without submitting it. Palette
 // priority follows the visible surface so a key cannot act on a hidden candidate.
 TuiInputOutcome ActiveRunInput::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
 {
-  auto const& active_event = active_input.event;
-  auto const& snapshot = presentation_state_.screen();
-  auto const& draft = draft_state_.draft();
-
-  // Accept only an enabled candidate in the first visible palette. Completion edits
-  // the draft; the later Submit stage decides whether it can be queued or executed.
-  if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.slash_palette_active())
-  {
-    draft_state_.select_completion(clamp_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()));
-    if (auto const disabled_reason =
-            slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index()))
-    {
-      presentation_state_.publish_status("command disabled: " + *disabled_reason);
-      terminal_context_.beep();
-    }
-    else
-    {
-      auto selection = slash_command_selection_text(draft.text, draft.cursor, snapshot.slash_commands, draft_state_.completion_index());
-      draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-      presentation_state_.publish_status("command selected - press Enter to queue");
-    }
-    return render_outcome(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.file_reference_palette_active())
-  {
-    draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
-    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
-    {
-      presentation_state_.publish_status("reference disabled: " + *disabled_reason);
-      terminal_context_.beep();
-      return render_outcome(renderer_.request_render());
-    }
-    auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
-    draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    presentation_state_.publish_status("file reference selected");
-    return render_outcome(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.path_completion_palette_active())
-  {
-    draft_state_.select_completion(navigation_.clamp_completion(draft_state_.completion_index()));
-    if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(draft_state_.completion_index()))
-    {
-      presentation_state_.publish_status("path disabled: " + *disabled_reason);
-      terminal_context_.beep();
-      return render_outcome(renderer_.request_render());
-    }
-    auto selection = navigation_.selected_completion_text(draft_state_.completion_index());
-    draft_state_.accept_completion(std::move(selection.text), selection.cursor);
-    presentation_state_.publish_status("path selected");
-    return render_outcome(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::AutocompleteAccept) &&
-      apply_composer_result(draft_state_.force_path_completion(completion_snapshot(), ComposerEditContext::ActiveRun)))
-    return render_outcome(renderer_.request_render());
-  return TuiInputOutcome::Pass;
+  if (!is_action(active_input.event, TuiAction::AutocompleteAccept))
+    return TuiInputOutcome::Pass;
+  static_cast<void>(completion_snapshot());
+  return handle_composer_input(active_input, ComposerInputPhase::Completion);
 }
 
 // TUI editor handoffs and local commands precede queue submission. Retain the
@@ -547,12 +500,8 @@ TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::Runti
   {
     return render_outcome(restore_latest_queued_message());
   }
-  if (is_action(active_event, TuiAction::JumpForward) || is_action(active_event, TuiAction::JumpBackward))
-  {
-    draft_state_.begin_jump(is_action(active_event, TuiAction::JumpForward) ? ComposerJumpMode::Forward : ComposerJumpMode::Backward);
-    presentation_state_.publish_status(is_action(active_event, TuiAction::JumpForward) ? "jump forward: type character" : "jump backward: type character");
-    return render_outcome(renderer_.request_render());
-  }
+  if (auto result = handle_composer_input(active_input, ComposerInputPhase::JumpStart); result != TuiInputOutcome::Pass)
+    return result;
   if (is_action(active_event, TuiAction::MessageFollowUp))
   {
     renderer_.clear_transcript_selection();
@@ -564,8 +513,9 @@ TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::Runti
   {
     if (auto handled = reject_disabled_visible_completion())
       return render_outcome(*handled);
-    if (active_event.key == terminal::Key::Enter && apply_composer_result(draft_state_.convert_backslash_enter_to_newline()))
-      return render_outcome(renderer_.request_render());
+    if (active_event.key == terminal::Key::Enter)
+      if (auto result = apply_composer_result(draft_state_.convert_backslash_enter_to_newline()); result != TuiInputOutcome::Pass)
+        return result;
     renderer_.clear_transcript_selection();
     if (auto handled = run_active_command())
       return render_outcome(*handled);
@@ -578,31 +528,17 @@ TuiInputOutcome ActiveRunInput::handle_active_command_input(runtime_input::Runti
 // and the earlier Interrupt/Exit decisions.
 TuiInputOutcome ActiveRunInput::handle_composer_edit(runtime_input::RuntimeInput const& active_input)
 {
-  using Key = terminal::Key;
-  auto const& active_event = active_input.event;
-  bool const active_ctrl_d_delete_forward =
-      active_event.key == Key::CtrlD && is_action(active_event, TuiAction::DeleteForward) && !draft_state_.draft().text.empty();
-  // Use the ordered action list to break configurable binding collisions. Ctrl+D
-  // is an edit only with text; the earlier exit stage handles its empty-draft meaning.
-  for (auto const action :
-       {TuiAction::DeleteBackward, TuiAction::DeleteForward, TuiAction::DeleteWordBackward, TuiAction::DeleteWordForward, TuiAction::DeleteToLineStart,
-        TuiAction::DeleteToLineEnd, TuiAction::ClearInput, TuiAction::CursorLeft, TuiAction::CursorRight, TuiAction::CursorLineStart, TuiAction::CursorLineEnd,
-        TuiAction::CursorWordLeft, TuiAction::CursorWordRight, TuiAction::Undo, TuiAction::Redo, TuiAction::Yank, TuiAction::YankPop})
-  {
-    if (!is_action(active_event, action) || (action == TuiAction::DeleteForward && active_event.key == Key::CtrlD && !active_ctrl_d_delete_forward))
-      continue;
-    static_cast<void>(draft_state_.apply_edit(action, ComposerEditContext::ActiveRun));
-    return render_outcome(renderer_.request_render());
-  }
-  return TuiInputOutcome::Pass;
+  return handle_composer_input(active_input, ComposerInputPhase::Editor);
 }
 
-// TUI Previous navigation gives explicit transcript actions priority, then
-// visible completion and history, before fallback cursor behavior.
+// TUI navigation gives explicit transcript actions priority, then shared
+// completion/history policy, with Previous ahead of Next on overlapping keys.
 TuiInputOutcome ActiveRunInput::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto const& snapshot = completion_snapshot();
+  // Prepare before transcript bindings, as before; shared navigation then borrows
+  // this unchanged cache for both Previous and Next without a second refresh.
+  static_cast<void>(completion_snapshot());
 
   // Explicit transcript navigation wins before palette/history actions; this keeps
   // custom binding collisions from mutating the draft when a view action matched.
@@ -641,65 +577,7 @@ TuiInputOutcome ActiveRunInput::handle_navigation_input(runtime_input::RuntimeIn
     navigation_.jump_to_bottom("live tail");
     return render_outcome(renderer_.request_render());
   }
-  // A visible palette owns Previous before history; unavailable history falls back
-  // to transcript scrolling, then cursor motion gets its final chance.
-  if (is_action(active_event, TuiAction::PalettePrev) &&
-      apply_composer_result(draft_state_.step_completion(CompletionStep::Previous, renderer_.completion_cache(), snapshot)))
-    return render_outcome(renderer_.request_render());
-  if (is_action(active_event, TuiAction::HistoryPrev))
-  {
-    if (draft_state_.browse_history(true))
-    {
-      presentation_state_.publish_status("history previous");
-    }
-    else
-    {
-      navigation_.scroll_up(kKeyboardScrollRows);
-    }
-    return render_outcome(renderer_.request_render());
-  }
-  if (active_event.key == terminal::Key::ArrowUp)
-  {
-    navigation_.scroll_up(kKeyboardScrollRows);
-    return render_outcome(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::CursorUp) && draft_state_.move_vertical(TuiAction::CursorUp))
-    return render_outcome(renderer_.request_render());
-  return TuiInputOutcome::Pass;
-}
-
-// TUI Next navigation follows Previous so overlapping user bindings keep the
-// same winner across palette, history and transcript views.
-TuiInputOutcome ActiveRunInput::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
-{
-  auto const& active_event = active_input.event;
-  auto const& snapshot = completion_snapshot();
-
-  // This stage follows all Previous bindings. Within Next, palette then history
-  // own input before fallback scrolling and vertical cursor motion.
-  if (is_action(active_event, TuiAction::PaletteNext) &&
-      apply_composer_result(draft_state_.step_completion(CompletionStep::Next, renderer_.completion_cache(), snapshot)))
-    return render_outcome(renderer_.request_render());
-  if (is_action(active_event, TuiAction::HistoryNext))
-  {
-    if (draft_state_.browse_history(false))
-    {
-      presentation_state_.publish_status(draft_state_.history_index() ? "history next" : "history draft");
-    }
-    else
-    {
-      navigation_.scroll_down(kKeyboardScrollRows);
-    }
-    return render_outcome(renderer_.request_render());
-  }
-  if (active_event.key == terminal::Key::ArrowDown)
-  {
-    navigation_.scroll_down(kKeyboardScrollRows);
-    return render_outcome(renderer_.request_render());
-  }
-  if (is_action(active_event, TuiAction::CursorDown) && draft_state_.move_vertical(TuiAction::CursorDown))
-    return render_outcome(renderer_.request_render());
-  return TuiInputOutcome::Pass;
+  return handle_composer_input(active_input, ComposerInputPhase::Navigation);
 }
 
 // TUI pointer dispatch chooses one visible hit target; selection drags remain
@@ -871,8 +749,7 @@ TuiInputOutcome ActiveRunInput::handle_restricted_toggle_input(runtime_input::Ru
   if (active_event.key == terminal::Key::Space)
   {
     presentation_state_.clear_local_feedback();
-    static_cast<void>(apply_composer_result(draft_state_.insert_input(active_input, ComposerEditContext::ActiveRun)));
-    return render_outcome(renderer_.request_render());
+    return handle_composer_input(active_input, ComposerInputPhase::Tail);
   }
   return TuiInputOutcome::Pass;
 }

@@ -56,11 +56,13 @@ enum class ComposerCompletionOrigin
 // binding collisions retain their precedence across session/transcript actions.
 enum class ComposerInputPhase
 {
-  Jump, // An armed jump consumes its next character before ordinary typing.
-  Primary, // Character input, follow-up, and newline precede editor/session keys.
-  Editor, // Deletion, draft copying, clearing, and completion precede Interrupt.
-  Navigation, // Cursor, palette and history follow transcript-specific bindings.
-  Tail, // Cancel and Submit precede literal Space insertion.
+  Jump, // An armed jump gets first refusal before ordinary typing.
+  Primary, // Typing; idle adds follow-up/newline, active adds shifted selection/document keys.
+  Editor, // Idle deletion/copy/clear/completion; active ordinary edits after its stop/submit stages.
+  Completion, // Active completion acceptance before newline, handoffs and queue submission.
+  JumpStart, // Active jump arming after handoffs/dequeue but before submission.
+  Navigation, // Palette/history after transcript bindings; idle also handles horizontal edits and undo.
+  Tail, // Idle Cancel/Submit before Space; active Space only, after its command stages.
 };
 
 // Cross-owner requests let the editor choose precedence without owning transcript
@@ -116,9 +118,11 @@ class Composer final
   Composer& operator=(Composer const&) = delete;
   // TUI thread: handle one documented dispatch phase. All inputs are call-scoped;
   // returned requests are performed by the session before its next paint. The
-  // caller publishes this draft and prepares completions before each phase.
+  // caller supplies prepared completions for completion/navigation phases. Context
+  // preserves idle versus active precedence and reset rules; the editor owns no run lifecycle.
   [[nodiscard]] ComposerInputResult handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
-                                               detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase);
+                                               detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase,
+                                               ComposerEditContext context = ComposerEditContext::Idle);
   // TUI thread: share palette wrapping/status between idle and active-run routing.
   [[nodiscard]] ComposerInputResult step_completion(CompletionStep step, detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot);
 
@@ -187,8 +191,9 @@ class Composer final
   ComposerInputResult insert_input(runtime_input::RuntimeInput const& input, ComposerEditContext context = ComposerEditContext::Idle);
 
   // TUI thread: clamp and validate the slash row before installing its draft text.
-  // A disabled row returns feedback without changing the draft.
-  ComposerInputResult select_slash_command(ComposerSnapshot const& snapshot);
+  // A disabled row returns feedback without changing the draft. Context selects
+  // whether accepted-command feedback says Enter will run it or queue it.
+  ComposerInputResult select_slash_command(ComposerSnapshot const& snapshot, ComposerEditContext context = ComposerEditContext::Idle);
   // TUI thread: accept a reference using the caller-prepared const completion model.
   // The model and snapshot must describe the current draft and catalog.
   ComposerInputResult select_file_reference(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot);
@@ -271,6 +276,56 @@ class Composer final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  // TUI-only subsets of one edit table. Idle inserts other owners between groups;
+  // ActiveRun requests All after its earlier copy, stop and submission decisions.
+  enum class EditGroup
+  {
+    Deletion, // Erase actions precede idle copy and clearing.
+    Clear, // Idle clearing follows copy and may yield an empty draft to Interrupt.
+    Horizontal, // Idle cursor edits follow transcript bindings but precede history.
+    Undo, // Idle undo/redo/yank follow all palette/history choices.
+    All // Active edits use table order before transcript navigation.
+  };
+  // TUI thread: consume/cancel an armed jump. Active non-target paste may continue
+  // to typing; idle retains its existing text-consumption policy. No input borrow escapes.
+  [[nodiscard]] ComposerInputResult handle_jump_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerEditContext context);
+  // TUI thread: arm the configured forward/backward jump at the caller's precedence
+  // position. Return unhandled when neither action matches; no borrowed state is retained.
+  [[nodiscard]] ComposerInputResult handle_jump_start(terminal::Key key, TuiKeyBindings const& bindings);
+  // TUI thread: apply shifted selection or document movement, returning any request
+  // to retire transcript selection. Context selects which editor interaction to reset.
+  [[nodiscard]] ComposerInputResult handle_selection_input(terminal::Key key, ComposerEditContext context);
+  // TUI thread: type before later phases. Idle handles follow-up/newline here;
+  // active handles selection/document keys and leaves submission to its run owner.
+  [[nodiscard]] ComposerInputResult handle_primary_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerEditContext context);
+  // TUI thread: apply the first matching action in the selected table group.
+  // Context controls history/reset/feedback; empty Ctrl+D remains available for exit.
+  [[nodiscard]] ComposerInputResult handle_edit_actions(terminal::Key key, TuiKeyBindings const& bindings, ComposerEditContext context, EditGroup group);
+  // TUI thread: preserve idle barriers around copy, clear and completion. Active
+  // runs apply only ordinary edits here because their other phases already ran.
+  [[nodiscard]] ComposerInputResult handle_editor_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                        ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                        bool transcript_selected, ComposerEditContext context);
+  // TUI thread with prepared matches: accept the first visible enabled choice or
+  // force a path query. Borrow all inputs only for this call; active keeps its Escape arm.
+  [[nodiscard]] ComposerInputResult handle_completion_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                            ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                            ComposerEditContext context);
+  // TUI thread with prepared matches: palette, history, literal arrow and vertical
+  // movement compete in that order. Missing history requests scrolling from the caller.
+  [[nodiscard]] ComposerInputResult handle_vertical_input(CompletionStep step, terminal::Key key, TuiKeyBindings const& bindings,
+                                                          ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions);
+  // TUI thread after external transcript bindings: Previous precedes Next. Idle
+  // surrounds them with selection/horizontal edits and then undo; active already edited.
+  [[nodiscard]] ComposerInputResult handle_navigation_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                            ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                            ComposerEditContext context);
+  // TUI thread at the final fallback: idle Cancel and Submit outrank Space.
+  // Active cancellation/submission remain with its run owner, so only Space applies.
+  [[nodiscard]] ComposerInputResult handle_tail_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                      ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                      bool transcript_selected, ComposerEditContext context);
+
   // TUI thread: replace the normalized selected range and retire the range. False means
   // there was no range or the low-level replacement made no change.
   bool replace_selection(std::string_view replacement);

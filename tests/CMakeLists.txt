@@ -302,6 +302,8 @@ set(AVA_TESTS_SOURCES
   "tools_tests.cpp"
   "tui_composer_tests.cpp"
   "tui_composer_invariant_tests.cpp"
+  "tui_composer_policy_tests.cpp"
+  "tui_active_input_route_tests.cpp"
   "tui_composer_dispatch_tests.cpp"
   "tui_command_output_tests.cpp"
   "tui_completion_tests.cpp"

@@ -10,279 +10,303 @@
 #include "ava/core/Application.h"
 
 #include <algorithm>
+#include <array>
 
 namespace ava::tui {
 
 ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
-                                         detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase)
+                                         detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerInputPhase phase,
+                                         ComposerEditContext context)
+{
+  // The outer dispatcher chooses the phase so unrelated feature bindings can
+  // keep their precedence. Each helper owns the same editor policy in both contexts.
+  switch (phase)
+  {
+    case ComposerInputPhase::Jump:
+      return handle_jump_input(input, bindings, context);
+    case ComposerInputPhase::Primary:
+      return handle_primary_input(input, bindings, context);
+    case ComposerInputPhase::Editor:
+      return handle_editor_input(input, bindings, snapshot, completions, transcript_selected, context);
+    case ComposerInputPhase::Completion:
+      return handle_completion_input(input, bindings, snapshot, completions, context);
+    case ComposerInputPhase::JumpStart:
+      return handle_jump_start(input.event.key, bindings);
+    case ComposerInputPhase::Navigation:
+      return handle_navigation_input(input, bindings, snapshot, completions, context);
+    case ComposerInputPhase::Tail:
+      return handle_tail_input(input, bindings, snapshot, completions, transcript_selected, context);
+  }
+  return {};
+}
+
+ComposerInputResult Composer::handle_jump_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerEditContext context)
 {
   using Key = terminal::Key;
-  auto is_action = [&](TuiAction action) { return key_matches_action(bindings, action, input.event.key); };
-  ComposerInputResult result;
-  // An armed jump gets first refusal so its target cannot accidentally enter the draft.
-  // Unrelated nonprintable keys may still continue through the later dispatcher stages.
-  if (phase == ComposerInputPhase::Jump)
+  if (jump_mode() == ComposerJumpMode::None)
+    return {};
+  auto const key = input.event.key;
+  if (key_matches_action(bindings, TuiAction::JumpForward, key) || key_matches_action(bindings, TuiAction::JumpBackward, key))
   {
-    if (jump_mode() == ComposerJumpMode::None)
-      return {};
-    if (is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward))
-    {
-      cancel_jump();
-      result.status = "jump cancelled";
-    }
-    else if (auto const target = runtime_input::printable_jump_target(input))
-    {
-      bool const forward = jump_mode() == ComposerJumpMode::Forward;
-      result.status = jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward") : "jump character not found";
-    }
-    else
-      cancel_jump();
-    result.handled =
-        input.event.key == Key::Character || input.event.key == Key::Space || is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward);
+    cancel_jump();
+    return {.handled = true, .status = "jump cancelled"};
+  }
+  if (auto const target = runtime_input::printable_jump_target(input))
+  {
+    bool const forward = jump_mode() == ComposerJumpMode::Forward;
+    return {.handled = true, .status = jump_to_character(*target) ? (forward ? "jumped forward" : "jumped backward") : "jump character not found"};
+  }
+  cancel_jump();
+  // Preserve the existing paste policy: idle jump consumes non-target text,
+  // while an active run lets that same input proceed to ordinary insertion.
+  return {.handled = context == ComposerEditContext::Idle && (key == Key::Character || key == Key::Space)};
+}
+
+ComposerInputResult Composer::handle_jump_start(terminal::Key key, TuiKeyBindings const& bindings)
+{
+  bool const forward = key_matches_action(bindings, TuiAction::JumpForward, key);
+  if (!forward && !key_matches_action(bindings, TuiAction::JumpBackward, key))
+    return {};
+  begin_jump(forward ? ComposerJumpMode::Forward : ComposerJumpMode::Backward);
+  return {.handled = true, .status = forward ? "jump forward: type character" : "jump backward: type character"};
+}
+
+ComposerInputResult Composer::handle_selection_input(terminal::Key key, ComposerEditContext context)
+{
+  auto result = extend_selection_for_key(key);
+  if (result.handled)
+  {
+    result.request = ComposerInputRequest::ClearTranscriptSelection;
     return result;
   }
-  // Plain text and explicit newline are considered before configurable editor/session keys.
-  if (phase == ComposerInputPhase::Primary)
+  if (key != terminal::Key::CtrlHome && key != terminal::Key::CtrlEnd)
+    return {};
+  move_document_boundary(key == terminal::Key::CtrlEnd, context);
+  return {.handled = true};
+}
+
+ComposerInputResult Composer::handle_primary_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerEditContext context)
+{
+  if (input.event.key == terminal::Key::Character)
+    return insert_input(input, context);
+  // Active routing keeps newline and follow-up in its command stage, after
+  // completion acceptance. Shifted selection and document keys are preemptive there.
+  if (context == ComposerEditContext::ActiveRun)
+    return handle_selection_input(input.event.key, context);
+  if (key_matches_action(bindings, TuiAction::MessageFollowUp, input.event.key))
+    return {.handled = true, .request = ComposerInputRequest::Submit};
+  if (!key_matches_action(bindings, TuiAction::NewLine, input.event.key))
+    return {};
+  insert_newline();
+  return {.handled = true};
+}
+
+ComposerInputResult Composer::handle_edit_actions(terminal::Key key, TuiKeyBindings const& bindings, ComposerEditContext context, EditGroup group)
+{
+  // Table order resolves collisions. Active input tries the whole table before
+  // transcript navigation. Idle routing inserts copy, completion and history
+  // between groups, so those barriers must not become one unconditional sweep.
+  static constexpr std::array actions{std::pair{TuiAction::DeleteBackward, EditGroup::Deletion},
+                                      std::pair{TuiAction::DeleteForward, EditGroup::Deletion},
+                                      std::pair{TuiAction::DeleteWordBackward, EditGroup::Deletion},
+                                      std::pair{TuiAction::DeleteWordForward, EditGroup::Deletion},
+                                      std::pair{TuiAction::DeleteToLineStart, EditGroup::Deletion},
+                                      std::pair{TuiAction::DeleteToLineEnd, EditGroup::Deletion},
+                                      std::pair{TuiAction::ClearInput, EditGroup::Clear},
+                                      std::pair{TuiAction::CursorLeft, EditGroup::Horizontal},
+                                      std::pair{TuiAction::CursorRight, EditGroup::Horizontal},
+                                      std::pair{TuiAction::CursorLineStart, EditGroup::Horizontal},
+                                      std::pair{TuiAction::CursorLineEnd, EditGroup::Horizontal},
+                                      std::pair{TuiAction::CursorWordLeft, EditGroup::Horizontal},
+                                      std::pair{TuiAction::CursorWordRight, EditGroup::Horizontal},
+                                      std::pair{TuiAction::Undo, EditGroup::Undo},
+                                      std::pair{TuiAction::Redo, EditGroup::Undo},
+                                      std::pair{TuiAction::Yank, EditGroup::Undo},
+                                      std::pair{TuiAction::YankPop, EditGroup::Undo}};
+  for (auto const& [action, action_group] : actions)
   {
-    if (input.event.key == Key::Character)
-      return insert_input(input);
-    if (is_action(TuiAction::MessageFollowUp))
-      return {.handled = true, .request = ComposerInputRequest::Submit};
-    if (!is_action(TuiAction::NewLine))
-      return {};
-    insert_newline();
-    return {.handled = true};
-  }
-  // Editor runs before session Interrupt, so ClearInput can consume a shared key.
-  // Navigation runs after transcript keys, preserving their existing precedence.
-  if (phase == ComposerInputPhase::Editor)
-  {
-    auto const& event = input.event;
-    bool const ctrl_d_delete_forward = event.key == Key::CtrlD && is_action(TuiAction::DeleteForward) && !draft().text.empty();
-    bool const delete_forward_action = is_action(TuiAction::DeleteForward) && (event.key != Key::CtrlD || ctrl_d_delete_forward);
-    if (is_action(TuiAction::JumpForward) || is_action(TuiAction::JumpBackward))
+    if ((group != EditGroup::All && action_group != group) || !key_matches_action(bindings, action, key))
+      continue;
+    if (action == TuiAction::DeleteForward && key == terminal::Key::CtrlD && draft_.text.empty())
+      continue;
+    if (action == TuiAction::ClearInput && context == ComposerEditContext::Idle && draft_.text.empty() &&
+        key_matches_action(bindings, TuiAction::Interrupt, key))
+      continue;
+    bool const changed = apply_edit(action, context);
+    ComposerInputResult result{.handled = true};
+    // Active edits preserve existing feedback, including unsuccessful movement.
+    if (context == ComposerEditContext::ActiveRun)
+      return result;
+    switch (action)
     {
-      begin_jump(is_action(TuiAction::JumpForward) ? ComposerJumpMode::Forward : ComposerJumpMode::Backward);
-      result.status = is_action(TuiAction::JumpForward) ? "jump forward: type character" : "jump backward: type character";
+      case TuiAction::ClearInput:
+        result.status = changed ? "input cleared" : "input already empty";
+        break;
+      case TuiAction::Undo:
+        result.status = changed ? "undo" : "nothing to undo";
+        break;
+      case TuiAction::Redo:
+        result.status = changed ? "redo" : "nothing to redo";
+        break;
+      case TuiAction::Yank:
+        result.status = changed ? "yanked text" : "nothing to yank";
+        break;
+      case TuiAction::YankPop:
+        result.status = changed ? "yank-pop" : "nothing to yank-pop";
+        break;
+      default:
+        break;
     }
-    else if (is_action(TuiAction::DeleteBackward))
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteBackward));
-    }
-    else if (delete_forward_action)
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteForward));
-    }
-    else if (is_action(TuiAction::DeleteWordBackward))
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteWordBackward));
-    }
-    else if (is_action(TuiAction::DeleteWordForward))
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteWordForward));
-    }
-    else if (is_action(TuiAction::DeleteToLineStart))
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteToLineStart));
-    }
-    else if (is_action(TuiAction::DeleteToLineEnd))
-    {
-      static_cast<void>(apply_edit(TuiAction::DeleteToLineEnd));
-    }
-    else if (is_action(TuiAction::CopySelection) && selection_bounds())
-    {
-      cancel_escape();
-      cancel_path_completion();
-      result = copy_selection();
-    }
-    else if (is_action(TuiAction::CopySelection) && transcript_selected)
-    {
-      cancel_escape();
-      cancel_path_completion();
-      result.request = ComposerInputRequest::CopyTranscript;
-    }
-    else if (is_action(TuiAction::ClearInput) && (!draft().text.empty() || !is_action(TuiAction::Interrupt)))
-    {
-      result.status = apply_edit(TuiAction::ClearInput) ? "input cleared" : "input already empty";
-    }
-    else if (is_action(TuiAction::AutocompleteAccept) && (!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands)))
-    {
-      cancel_escape();
-      result = select_slash_command(snapshot);
-    }
-    else if (is_action(TuiAction::AutocompleteAccept) &&
-             (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible))
-    {
-      cancel_escape();
-      result = select_file_reference(completions, snapshot);
-    }
-    else if (is_action(TuiAction::AutocompleteAccept) &&
-             (completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible))
-    {
-      cancel_escape();
-      result = select_path_completion(completions, snapshot);
-    }
-    else if (is_action(TuiAction::AutocompleteAccept) && (result = force_path_completion(snapshot)).handled)
-    {
-      cancel_escape();
-    }
-    else
-      return {};
-    result.handled = true;
-    return result;
-  }
-  // This phase is reached after transcript bindings. Within it, completion rows precede
-  // history, and unhandled arrow keys request transcript scrolling from the caller.
-  if (phase == ComposerInputPhase::Navigation)
-  {
-    auto const& event = input.event;
-    if ((result = extend_selection_for_key(event.key)).handled)
-    {
-      result.request = ComposerInputRequest::ClearTranscriptSelection;
-    }
-    else if (event.key == Key::CtrlHome)
-    {
-      move_document_boundary(false);
-    }
-    else if (event.key == Key::CtrlEnd)
-    {
-      move_document_boundary(true);
-    }
-    else if (is_action(TuiAction::CursorLeft))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorLeft));
-    }
-    else if (is_action(TuiAction::CursorRight))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorRight));
-    }
-    else if (is_action(TuiAction::CursorLineStart))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorLineStart));
-    }
-    else if (is_action(TuiAction::CursorLineEnd))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorLineEnd));
-    }
-    else if (is_action(TuiAction::CursorWordLeft))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorWordLeft));
-    }
-    else if (is_action(TuiAction::CursorWordRight))
-    {
-      static_cast<void>(apply_edit(TuiAction::CursorWordRight));
-    }
-    else if (is_action(TuiAction::PalettePrev) && (result = step_completion(CompletionStep::Previous, completions, snapshot)).handled)
-    {
-    // Composer selected the row and produced its status.
-    }
-    else if (is_action(TuiAction::HistoryPrev))
-    {
-      if (browse_history(true))
-      {
-        result.status = "history previous";
-      }
-      else
-      {
-        result.request = ComposerInputRequest::ScrollUp;
-      }
-    }
-    else if (event.key == Key::ArrowUp)
-    {
-      result.request = ComposerInputRequest::ScrollUp;
-    }
-    else if (is_action(TuiAction::CursorUp) && move_vertical(TuiAction::CursorUp))
-    {
-    // Composer applied the movement and its successful-movement reset.
-    }
-    else if (is_action(TuiAction::PaletteNext) && (result = step_completion(CompletionStep::Next, completions, snapshot)).handled)
-    {
-    // Composer selected the row and produced its status.
-    }
-    else if (is_action(TuiAction::HistoryNext))
-    {
-      if (browse_history(false))
-      {
-        result.status = history_index() ? "history next" : "history draft";
-      }
-      else
-      {
-        result.request = ComposerInputRequest::ScrollDown;
-      }
-    }
-    else if (event.key == Key::ArrowDown)
-    {
-      result.request = ComposerInputRequest::ScrollDown;
-    }
-    else if (is_action(TuiAction::CursorDown) && move_vertical(TuiAction::CursorDown))
-    {
-    // Composer applied the movement and its successful-movement reset.
-    }
-    else if (is_action(TuiAction::Undo))
-    {
-      result.status = apply_edit(TuiAction::Undo) ? "undo" : "nothing to undo";
-    }
-    else if (is_action(TuiAction::Redo))
-    {
-      result.status = apply_edit(TuiAction::Redo) ? "redo" : "nothing to redo";
-    }
-    else if (is_action(TuiAction::Yank))
-    {
-      result.status = apply_edit(TuiAction::Yank) ? "yanked text" : "nothing to yank";
-    }
-    else if (is_action(TuiAction::YankPop))
-    {
-      result.status = apply_edit(TuiAction::YankPop) ? "yank-pop" : "nothing to yank-pop";
-    }
-    else
-      return {};
-    result.handled = true;
-    return result;
-  }
-  if (phase == ComposerInputPhase::Tail)
-  {
-    // Cancel gives the draft selection priority over the transcript selection,
-    // then dismisses completion. Only an unhandled Escape reaches double-Escape clearing.
-    if (is_action(TuiAction::Cancel))
-    {
-      if (selection_bounds())
-      {
-        clear_selection();
-        cancel_escape();
-        result.status = std::string{};
-      }
-      else if (transcript_selected)
-      {
-        result.request = ComposerInputRequest::ClearTranscriptSelection;
-        cancel_escape();
-        result.status = std::string{};
-      }
-      else if ((!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands)) ||
-               (completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible) ||
-               (completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible))
-      {
-        dismiss_completion();
-        result.status = std::string{};
-      }
-      else
-        result = handle_escape();
-    }
-    else if (is_action(TuiAction::Submit))
-    {
-      if (input.event.key == Key::Enter)
-        result = convert_backslash_enter_to_newline();
-      if (!result.handled)
-        result.request = ComposerInputRequest::Submit;
-    }
-    // Space comes after Submit deliberately: a custom Space binding must submit.
-    else if (input.event.key == Key::Space)
-      result = insert_input(input);
-    else
-      return {};
-    result.handled = true;
     return result;
   }
   return {};
+}
+
+ComposerInputResult Composer::handle_editor_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
+                                                  detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerEditContext context)
+{
+  auto const key = input.event.key;
+  if (context == ComposerEditContext::ActiveRun)
+    return handle_edit_actions(key, bindings, context, EditGroup::All);
+  // Idle copy sits after deletion but before clearing. Active routing already
+  // performed copy and Interrupt before reaching its edit table.
+  if (auto result = handle_jump_start(key, bindings); result.handled)
+    return result;
+  if (auto result = handle_edit_actions(key, bindings, context, EditGroup::Deletion); result.handled)
+    return result;
+  if (key_matches_action(bindings, TuiAction::CopySelection, key) && (selection_bounds() || transcript_selected))
+  {
+    cancel_escape();
+    cancel_path_completion();
+    if (selection_bounds())
+    {
+      auto result = copy_selection();
+      // Copy owns this binding even if the clipboard request fails. A failed
+      // copy must not fall through to another edit configured on the same key.
+      result.handled = true;
+      return result;
+    }
+    return {.handled = true, .request = ComposerInputRequest::CopyTranscript};
+  }
+  if (auto result = handle_edit_actions(key, bindings, context, EditGroup::Clear); result.handled)
+    return result;
+  return handle_completion_input(input, bindings, snapshot, completions, context);
+}
+
+ComposerInputResult Composer::handle_completion_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                      ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                      ComposerEditContext context)
+{
+  if (!key_matches_action(bindings, TuiAction::AutocompleteAccept, input.event.key))
+    return {};
+  bool const slash = !palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands);
+  bool const reference = completions.model && completions.model->surface == detail::CompletionSurface::FileReference && completions.model->palette_visible;
+  bool const path = completions.model && completions.model->surface == detail::CompletionSurface::PathCompletion && completions.model->palette_visible;
+  // Do not cancel Escape when active keyboard completion accepts or rejects a
+  // candidate. Idle completion has always retired that arm before visible choices.
+  if (context == ComposerEditContext::Idle && (slash || reference || path))
+    cancel_escape();
+  if (slash)
+    return select_slash_command(snapshot, context);
+  if (reference)
+    return select_file_reference(completions, snapshot);
+  if (path)
+    return select_path_completion(completions, snapshot);
+  auto result = force_path_completion(snapshot, context);
+  if (result.handled && context == ComposerEditContext::Idle)
+    cancel_escape();
+  return result;
+}
+
+ComposerInputResult Composer::handle_vertical_input(CompletionStep step, terminal::Key key, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
+                                                    detail::CompletionMatchCache const& completions)
+{
+  bool const previous = step == CompletionStep::Previous;
+  if (key_matches_action(bindings, previous ? TuiAction::PalettePrev : TuiAction::PaletteNext, key))
+    if (auto result = step_completion(step, completions, snapshot); result.handled)
+      return result;
+  if (key_matches_action(bindings, previous ? TuiAction::HistoryPrev : TuiAction::HistoryNext, key))
+  {
+    if (browse_history(previous))
+      return {.handled = true, .status = previous ? "history previous" : history_index() ? "history next" : "history draft"};
+    return {.handled = true, .request = previous ? ComposerInputRequest::ScrollUp : ComposerInputRequest::ScrollDown};
+  }
+  if (key == (previous ? terminal::Key::ArrowUp : terminal::Key::ArrowDown))
+    return {.handled = true, .request = previous ? ComposerInputRequest::ScrollUp : ComposerInputRequest::ScrollDown};
+  auto const action = previous ? TuiAction::CursorUp : TuiAction::CursorDown;
+  if (key_matches_action(bindings, action, key) && move_vertical(action))
+    return {.handled = true};
+  return {};
+}
+
+ComposerInputResult Composer::handle_navigation_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings,
+                                                      ComposerSnapshot const& snapshot, detail::CompletionMatchCache const& completions,
+                                                      ComposerEditContext context)
+{
+  auto const key = input.event.key;
+  if (context == ComposerEditContext::Idle)
+  {
+    if (auto result = handle_selection_input(key, context); result.handled)
+      return result;
+    if (auto result = handle_edit_actions(key, bindings, context, EditGroup::Horizontal); result.handled)
+      return result;
+  }
+  // All Previous choices precede all Next choices, including user-bound collisions.
+  if (auto result = handle_vertical_input(CompletionStep::Previous, key, bindings, snapshot, completions); result.handled)
+    return result;
+  if (auto result = handle_vertical_input(CompletionStep::Next, key, bindings, snapshot, completions); result.handled)
+    return result;
+  return context == ComposerEditContext::Idle ? handle_edit_actions(key, bindings, context, EditGroup::Undo) : ComposerInputResult{};
+}
+
+ComposerInputResult Composer::handle_tail_input(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
+                                                detail::CompletionMatchCache const& completions, bool transcript_selected, ComposerEditContext context)
+{
+  using Key = terminal::Key;
+  if (context == ComposerEditContext::ActiveRun)
+    return input.event.key == Key::Space ? insert_input(input, context) : ComposerInputResult{};
+  ComposerInputResult result;
+  // Cancel gives draft selection priority over transcript selection, then
+  // dismisses completion. Only an unhandled Escape reaches double-Escape clearing.
+  if (key_matches_action(bindings, TuiAction::Cancel, input.event.key))
+  {
+    if (selection_bounds())
+    {
+      clear_selection();
+      cancel_escape();
+      result.status = std::string{};
+    }
+    else if (transcript_selected)
+    {
+      result.request = ComposerInputRequest::ClearTranscriptSelection;
+      cancel_escape();
+      result.status = std::string{};
+    }
+    else if ((!palette_suppressed() && slash_palette_visible(draft_.text, draft_.cursor, snapshot.slash_commands)) ||
+             (completions.model && completions.model->palette_visible &&
+              (completions.model->surface == detail::CompletionSurface::FileReference ||
+               completions.model->surface == detail::CompletionSurface::PathCompletion)))
+    {
+      dismiss_completion();
+      result.status = std::string{};
+    }
+    else
+      result = handle_escape();
+  }
+  else if (key_matches_action(bindings, TuiAction::Submit, input.event.key))
+  {
+    if (input.event.key == Key::Enter)
+      result = convert_backslash_enter_to_newline();
+    if (!result.handled)
+      result.request = ComposerInputRequest::Submit;
+  }
+  // Space comes after Submit so a configured Space binding still submits.
+  else if (input.event.key == Key::Space)
+    result = insert_input(input);
+  else
+    return {};
+  result.handled = true;
+  return result;
 }
 
 ComposerInputResult Composer::step_completion(CompletionStep step, detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)
@@ -316,7 +340,7 @@ ComposerInputResult Composer::step_completion(CompletionStep step, detail::Compl
                     std::to_string(completion_index() + 1) + "/" + std::to_string(count)};
 }
 
-ComposerInputResult Composer::select_slash_command(ComposerSnapshot const& snapshot)
+ComposerInputResult Composer::select_slash_command(ComposerSnapshot const& snapshot, ComposerEditContext context)
 {
   ComposerInputResult result{.handled = true};
   selected_slash_command_index_ = clamp_slash_palette_selection(draft_.text, draft_.cursor, snapshot.slash_commands, selected_slash_command_index_);
@@ -328,7 +352,7 @@ ComposerInputResult Composer::select_slash_command(ComposerSnapshot const& snaps
   }
   auto selection = slash_command_selection_text(draft_.text, draft_.cursor, snapshot.slash_commands, selected_slash_command_index_);
   accept_completion(std::move(selection.text), selection.cursor);
-  result.status = "command selected - press Enter to run";
+  result.status = context == ComposerEditContext::ActiveRun ? "command selected - press Enter to queue" : "command selected - press Enter to run";
   return result;
 }
 ComposerInputResult Composer::select_file_reference(detail::CompletionMatchCache const& completions, ComposerSnapshot const& snapshot)

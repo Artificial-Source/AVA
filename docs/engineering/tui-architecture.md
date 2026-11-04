@@ -272,17 +272,25 @@ plugin dialog does not grant access to mutable session or permission state.
    `action_name`, `action_label` and `action_description` as needed. These keep
    configuration, defaults and help text consistent.
 2. Implement the behavior in the feature that owns the state. Editing belongs in
-   [Composer](../../src/ava/tui/Composer.h). Return a typed request for work owned
-   elsewhere, such as submission or transcript copying.
+   [Composer](../../src/ava/tui/Composer.h). For an ordinary editing action, add it
+   to the ordered table in `Composer::handle_edit_actions` in
+   [Composer.cpp](../../src/ava/tui/Composer.cpp) and implement its reset behavior
+   in `Composer::apply_edit`. For another editor interaction, use the appropriate
+   private phase method called by `Composer::handle_key`. Return a typed request
+   for work owned elsewhere, such as submission or transcript copying.
 3. Place the handler at its intended precedence in `TuiSession::input_dispatcher_`
    in the [session constructor](../../src/ava/tui/TuiSession.cpp). If the binding
    is available during submission, also place it in `ActiveRunInput::dispatcher_`
-   in [ActiveRunInput.cpp](../../src/ava/tui/ActiveRunInput.cpp). Earlier handlers
-   win when configured keys overlap. Host modals capture keys first; Submit must
-   remain ahead of ordinary Space insertion.
+   in [ActiveRunInput.cpp](../../src/ava/tui/ActiveRunInput.cpp). Both dispatchers
+   call Composer's phase policy; do not add a second editor action table in active
+   input. Active cancellation, queue submission and local commands stay in
+   `ActiveRunInput`. Earlier handlers win when configured keys overlap. Host
+   modals capture keys first; Submit must remain ahead of ordinary Space insertion.
 4. Extend [keybinding tests](../../tests/tui_keybinding_tests.cpp) for parsing and
    defaults, and [composer dispatch tests](../../tests/tui_composer_dispatch_tests.cpp)
-   for editing and collisions. Use the [session tests](../../tests/tui_session_tests.cpp)
+   for editing and collisions. Add idle/active differences to the
+   [shared policy tests](../../tests/tui_composer_policy_tests.cpp).
+   Use the [session tests](../../tests/tui_session_tests.cpp)
    when the behavior depends on ordering across features. Check both idle and
    active-run handling where the binding is supported.
 
