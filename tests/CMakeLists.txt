@@ -307,6 +307,7 @@ set(AVA_TESTS_SOURCES
   "tui_composer_rendering_tests.cpp"
   "tui_event_loop_tests.cpp"
   "tui_feature_owner_tests.cpp"
+  "tui_branch_summary_timer_tests.cpp"
   "tui_runtime_owner_tests.cpp"
   "tui_session_tests.cpp"
   "tui_prompt_security_tests.cpp"

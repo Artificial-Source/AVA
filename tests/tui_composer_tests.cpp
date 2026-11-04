@@ -4,6 +4,8 @@
 
 // Direct selector/summary contracts use the same initialized test-thread terminal.
 void run_tui_feature_owner_tests();
+// Exercise timer discovery through the explicit application-service boundary.
+void run_tui_branch_summary_timer_tests();
 // Direct viewport contracts retire all borrowed owners before returning here.
 void run_tui_transcript_view_tests();
 
@@ -35,6 +37,7 @@ void run_tui_composer_tests()
   run_tui_modal_tests_part_3();
   run_tui_selector_tests();
   run_tui_feature_owner_tests();
+  run_tui_branch_summary_timer_tests();
   run_tui_transcript_view_tests();
   run_tui_transcript_tests_part_1();
   run_tui_transcript_selection_tests();

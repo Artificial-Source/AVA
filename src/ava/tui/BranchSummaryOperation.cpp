@@ -27,18 +27,17 @@ void BranchSummaryOperation::attach_loop(TuiEventLoop& loop)
     discovery_timer_.repeat(std::chrono::milliseconds{250});
 }
 
-std::optional<BranchSummaryOutcome> BranchSummaryOperation::take_service_outcome()
+std::optional<BranchSummaryOutcome> BranchSummaryOperation::service_if_due()
 {
-  return std::exchange(service_outcome_, std::nullopt);
+  if (!std::exchange(discovery_due_, false))
+    return std::nullopt;
+  return poll();
 }
 
 void BranchSummaryOperation::discover_progress(TuiTimer::Clock::time_point)
 {
-  auto const outcome = poll();
-  // A terminal/failure result must survive another due batch until composition
-  // consumes it. Settlement cancels discovery before this callback returns.
-  if (!service_outcome_ || (*service_outcome_ != BranchSummaryOutcome::RenderFailed && *service_outcome_ != BranchSummaryOutcome::ExitReady))
-    service_outcome_ = outcome;
+  // Repeated ticks can share one snapshot read in the next application stage.
+  discovery_due_ = true;
 }
 
 bool BranchSummaryOperation::active() const noexcept
@@ -106,6 +105,7 @@ BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot con
   present_status(refresh_failed ? std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Refresh))
                                 : runtime_views::branch_summary_terminal_status(operation));
   active_ = false;
+  discovery_due_ = false;
   discovery_timer_.cancel();
   phase_ = operation.phase;
   if (exit_requested)
@@ -157,7 +157,7 @@ BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, 
 {
   // Do not expose a new modal generation until preparation succeeds. The previous
   // selector remains usable when the callback refuses or throws.
-  service_outcome_.reset();
+  discovery_due_ = false;
   ava::core::Result<TuiBranchSummarySnapshot> prepared =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "parent summary prepare callback failed"));
   try

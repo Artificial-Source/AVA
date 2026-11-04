@@ -62,9 +62,10 @@ class BranchSummaryOperation final
   // The attached loop outlives this stable operation and its registration.
   // Attach the renderer first so discovery requests only batch invalidation.
   void attach_loop(TuiEventLoop& loop);
-  // TUI thread: consume the timer result once, after discovery and before normal dispatch.
-  // Terminal/failure results remain latched until taken.
-  [[nodiscard]] std::optional<BranchSummaryOutcome> take_service_outcome();
+  // TUI application stage: perform one pending discovery, or return no value.
+  // Timer ticks coalesce until this call. The returned outcome is handled before
+  // input; the timer itself never reads the frontend or completes the operation.
+  [[nodiscard]] std::optional<BranchSummaryOutcome> service_if_due();
   // TUI thread: tell Session whether summary input must capture ordinary editor actions.
   [[nodiscard]] bool active() const noexcept;
   // TUI thread: call with no active summary; prepare backend work and save the list
@@ -99,8 +100,8 @@ class BranchSummaryOperation final
   // TUI thread: copy a backend snapshot through frontend transport; an exception settles
   // the local UI as failed. Backend shutdown responsibility remains with the app.
   [[nodiscard]] BranchSummaryOutcome poll();
-  // TUI timer callback: poll once and latch an outcome; rendering requests join the current
-  // loop batch. It never runs on the branch-summary worker.
+  // TUI timer callback: mark discovery due without calling the frontend. The
+  // application stage copies snapshots and applies their result before input.
   void discover_progress(TuiTimer::Clock::time_point now);
 
   // App frontend outlives this owner; callbacks submit coordinator commands or copy snapshots.
@@ -127,8 +128,9 @@ class BranchSummaryOperation final
   std::size_t prior_selected_index_ = 0;
   // TUI-thread source session identity, copied before the prior list is replaced.
   ava::core::NoLogString selected_source_value_;
-  // TUI-thread timer-to-Session handoff; start clears it and take_service_outcome consumes it.
-  std::optional<BranchSummaryOutcome> service_outcome_;
+  // Set by the TUI timer; consumed by application servicing. Starting or
+  // finishing an operation clears it so a later generation cannot inherit work.
+  bool discovery_due_ = false;
   // TUI-thread repeating discovery registration. Declared last so it unregisters before
   // callback-visible state is destroyed; the attached loop must outlive it.
   TuiTimer discovery_timer_;

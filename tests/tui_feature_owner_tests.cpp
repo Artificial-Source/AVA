@@ -174,8 +174,8 @@ void test_branch_summary_prepare_failure_preserves_selector()
              screen.select_list->subtitle == screen.status,
          "failed summary preserves session rows, selected identity, and query while updating the subtitle");
   fixture.loop().service_due(ava::tui::TuiEventLoop::Clock::now() + std::chrono::seconds{1});
-  expect(!fixture.summary().take_service_outcome(), "failed preparation leaves no discovery result after a future timer batch");
-  expect(!fixture.summary().take_service_outcome() && !fixture.summary().active(), "consuming an absent summary result leaves it inactive");
+  expect(!fixture.summary().service_if_due(), "failed preparation leaves no discovery result after a future timer batch");
+  expect(!fixture.summary().service_if_due() && !fixture.summary().active(), "consuming an absent summary result leaves it inactive");
   expect(fixture.summary().handle_input({.key = Key::Escape}) == ava::tui::BranchSummaryOutcome::Inactive,
          "failed preparation releases subsequent cancellation input to the session");
 }
@@ -226,18 +226,18 @@ void test_branch_summary_discovery_and_settlement()
   operation.phase = ava::tui::TuiBranchSummaryPhase::Succeeded;
   operation.refresh_required = true;
   fixture.loop().service_due(now + std::chrono::seconds{1});
-  expect(fixture.summary().take_service_outcome() == ava::tui::BranchSummaryOutcome::Pending && fixture.summary().active() && refreshes == 0,
+  expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::Pending && fixture.summary().active() && refreshes == 0,
          "discovery rejects a terminal snapshot from a different summary generation");
   operation.generation = 7;
   fixture.loop().service_due(now + std::chrono::seconds{2});
   auto const& restored = fixture.selectors().view();
-  expect(fixture.summary().take_service_outcome() == ava::tui::BranchSummaryOutcome::Settled && !fixture.summary().active() && refreshes == 1 &&
+  expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::Settled && !fixture.summary().active() && refreshes == 1 &&
              fixture.selectors().kind() == ActiveSelectList::Session && restored && restored->query == "OWNER" && restored->selected_item_index == 0 &&
              restored->items[restored->selected_item_index].value == "second",
          "settlement refreshes catalog rows and restores the selected identity and query");
   auto const settled_reads = reads;
   fixture.loop().service_due(now + std::chrono::seconds{3});
-  expect(!fixture.summary().take_service_outcome() && reads == settled_reads, "settlement retires discovery and its result is consumed only once");
+  expect(!fixture.summary().service_if_due() && reads == settled_reads, "settlement retires discovery and its result is consumed only once");
 }
 
 // Protect sticky exit intent when cancellation is refused and settlement arrives later.
@@ -263,10 +263,10 @@ void test_branch_summary_exit_waits_for_settlement()
   operation.phase = ava::tui::TuiBranchSummaryPhase::Canceled;
   auto const now = ava::tui::TuiEventLoop::Clock::now();
   fixture.loop().service_due(now + std::chrono::seconds{1});
-  expect(fixture.summary().take_service_outcome() == ava::tui::BranchSummaryOutcome::ExitReady && !fixture.summary().active() && !fixture.selectors().view(),
+  expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::ExitReady && !fixture.summary().active() && !fixture.selectors().view(),
          "later settlement honors sticky exit intent and closes the restored selector");
   fixture.loop().service_due(now + std::chrono::seconds{2});
-  expect(!fixture.summary().take_service_outcome(), "exit settlement retires its discovery timer and result");
+  expect(!fixture.summary().service_if_due(), "exit settlement retires its discovery timer and result");
 }
 
 // Scoped-model keys must classify before generic session shortcuts, preserve

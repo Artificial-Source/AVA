@@ -746,7 +746,7 @@ void TuiSession::service_presentations()
 {
   if (loop_.stopped() || terminal_closing_)
     return;
-  if (auto outcome = branch_summary_.take_service_outcome(); outcome && stop_for_branch_summary(*outcome))
+  if (auto outcome = branch_summary_.service_if_due(); outcome && stop_for_branch_summary(*outcome))
   {
     loop_.request_stop();
     return;
