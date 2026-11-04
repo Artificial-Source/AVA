@@ -1,4 +1,4 @@
-// Maintains incremental search matches and restores viewport authority across modal search updates.
+// Maintains incremental search matches and restores the viewport across modal search updates.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "ava/tui/composer.h"
@@ -672,7 +672,7 @@ void update_transcript_search_select_list_rows(SelectListView& view, std::vector
   {
     auto const& match = matches[index];
     // The controller performs literal filtering. An exact duplicate query in
-    // every value keeps the select-list chrome's generic filter stable and
+    // every value keeps the select-list view's generic filter stable and
     // preserves chronological order without exposing an alternate search path.
     view.items.push_back(SelectListItemView{.value = std::string(query),
                                             .label = match.identity,
@@ -699,7 +699,7 @@ namespace {
 class ScopedTranscriptSearchModalProjection final
 {
  public:
-  // TUI thread before authoritative layout preparation: move the selector out only when requested and present;
+  // TUI thread before preparing underlying transcript layout: move the selector out only when requested and present;
   // retain no second row-vector copy.
   ScopedTranscriptSearchModalProjection(RuntimePresentationState& presentation, bool project) : presentation_(presentation)
   {
@@ -708,9 +708,8 @@ class ScopedTranscriptSearchModalProjection final
     select_list_ = presentation_.withdraw_selector_projection();
   }
 
-  // Only one scope may own restoration of the withdrawn selector value.
+  // Not copyable: exactly one guard must restore the selector to the borrowed presentation state.
   ScopedTranscriptSearchModalProjection(ScopedTranscriptSearchModalProjection const&) = delete;
-  // Prevent transferring restoration responsibility across lifetime-bound presentation references.
   ScopedTranscriptSearchModalProjection& operator=(ScopedTranscriptSearchModalProjection const&) = delete;
 
   // TUI thread on every scope exit: restore the moved selector before the borrowed presentation can be painted
@@ -775,8 +774,8 @@ bool TranscriptSearchController::open(std::string query)
     return false;
   }
 
-  // Capture viewport and underlying render settings before opening the search modal, whose layout must not
-  // become restoration authority.
+  // Capture viewport and underlying render settings before opening the search modal, so the modal's layout
+  // does not replace the geometry used to restore the original viewport.
   refresh_authoritative_layout();
   capture_authoritative_layout_settings();
   auto const max_scroll = renderer_.prepare_transcript_layout();
@@ -872,7 +871,7 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
   presentation_state_.publish_dimensions(terminal_width, terminal_height);
   auto const compact_spacing = detail::composer_layout_policy(snapshot, terminal_height).compact_transcript_spacing;
   // Incremental direct rendering is valid only with captured underlying settings. Resize/style changes require
-  // temporarily removing modal geometry and rebuilding authority.
+  // temporarily removing modal geometry and rebuilding the underlying transcript layout.
   auto const settings_compatible = authoritative_settings_valid_ && terminal_width == authoritative_terminal_width_ &&
                                    terminal_height == authoritative_terminal_height_ && snapshot.tool_presentation == authoritative_tool_presentation_ &&
                                    snapshot.thinking_visible == authoritative_thinking_visible_ && compact_spacing == authoritative_compact_spacing_;

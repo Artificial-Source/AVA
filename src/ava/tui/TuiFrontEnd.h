@@ -19,7 +19,7 @@ struct TuiRuntimeOptions;
 // work through these virtual operations instead of borrowing backend storage.
 // Unless stated otherwise, calls are synchronous on the TUI thread. Arguments
 // are borrowed for the call; implementations must copy any data retained for
-// asynchronous work. Returned DTOs own their presentation data. See
+// asynchronous work. Returned values own their display data. See
 // docs/engineering/tui-architecture.md for the session and worker lifetimes.
 class TuiFrontEnd : public frontend::FrontEnd
 {
@@ -45,11 +45,10 @@ class TuiFrontEnd : public frontend::FrontEnd
  public:
   // TUI feature owners request backend actions through these existing virtual
   // operations without gaining protected-member access. The application
-  // implementations retain validation and backend authority.
+  // implementations retain backend validation and state changes.
 
-  // Return producer endpoints for diagram work while the application renderer is alive.
-  // TUI thread: the application renderer must outlive every copied bridge
-  // callback; UI notifier retirement alone does not destroy its worker.
+  // TUI thread: return diagram callbacks that retain the application renderer's
+  // resources. Removing a UI completion notifier does not stop or join its worker.
   virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;
 
   // Toggle the committed Build/Plan mode or return the command error.
@@ -61,7 +60,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual SelectListView on_session_selector_named_filter_toggle() = 0;
   // TUI thread: rebuild row labels from the new path-display preference, retaining backend row identity.
   virtual SelectListView on_session_selector_path_display_toggle() = 0;
-  // TUI thread: rebuild the catalog projection after changing which archived sessions are visible.
+  // TUI thread: rebuild the displayed catalog after changing which archived sessions are visible.
   virtual SelectListView on_session_selector_archived_filter_toggle() = 0;
   // TUI thread: rebuild row labels after changing timestamp visibility without changing session identity.
   virtual SelectListView on_session_selector_label_timestamp_toggle() = 0;
@@ -121,7 +120,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   // TUI thread: read committed identity after a backend action, so UI reset follows the actual session transition.
   virtual std::string read_committed_session_id() const = 0;
 
-  // TUI thread: pull pending catalog generations before publishing their projection.
+  // TUI thread: pull pending catalog generations before updating their display values.
   virtual TuiCatalogDelivery read_catalog_delivery() = 0;
 
   // TUI thread: hydrate todo presentation from committed state after session changes; the returned copy owns its values.
@@ -149,9 +148,9 @@ class TuiFrontEnd : public frontend::FrontEnd
 
   // Reset session-selector preferences and return the current application-owned session view.
   virtual SelectListView session_selector_view() = 0;
-  // Snapshot project trust for settings presentation without retaining backend authority.
+  // Snapshot project trust for settings presentation without exposing operations that change trust.
   virtual ProjectTrustSnapshot read_project_trust() const = 0;
-  // Create queue callables bound to event_sink and exact per-run application authority.
+  // Create queue callables bound to event_sink and the specific backend run.
   // TUI thread before launch: bind queue capabilities to this submission.
   // Returned callbacks can be used by its worker until finish/retirement.
   virtual TuiActiveRunQueues create_active_run_queues(ava::event::EventEnvelopeSink event_sink) const = 0;
@@ -173,11 +172,11 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<std::string> on_cycle_model(bool forward) = 0;
   // Load and validate application keybindings without mutating TUI state.
   virtual core::Result<TuiKeyBindings> on_reload_key_bindings() const = 0;
-  // Build the current model selector from application model authority.
+  // Build the current model selector from the current application model settings.
   virtual SelectListView model_selector_view() const = 0;
   // Build reasoning choices; chained selects the staged-model footer and nullopt means unsupported.
   virtual std::optional<SelectListView> reasoning_selector_view(bool chained) const = 0;
-  // Build the current scoped-model selector from application model authority.
+  // Build the current scoped-model selector from the current application model settings.
   virtual SelectListView scoped_model_selector_view() const = 0;
   // List path-free subagent rows or return the backend snapshot error.
   virtual core::Result<SelectListView> list_subagents() const = 0;
@@ -192,7 +191,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   virtual core::Result<SelectListView> on_open_fork_user_turn_selector(std::string_view initial_query) const = 0;
   // Open the copy source picker seeded with initial_query or return listing errors.
   virtual core::Result<SelectListView> on_open_copy_user_turn_selector(std::string_view initial_query) const = 0;
-  // TUI thread: persist a selected rule before acknowledging it; return only a receipt, leaving validation in the backend.
+  // TUI thread: persist a selected rule before acknowledging it; return the persistence result, leaving validation in the backend.
   virtual core::Result<TuiRememberedPermissionRule> remember_permission_rule(permissions::PermissionPrompt const& prompt,
                                                                              permissions::PermissionAction action) const = 0;
   // Launch the terminal UI from the startup options owned by this frontend.
@@ -207,8 +206,8 @@ class TuiFrontEnd : public frontend::FrontEnd
   // receive request-local copies instead of sharing this reference.
   TuiRuntimeOptions const& options() const { return options_; }
 
-  // TUI thread: update effective bindings only at a serialized publication
-  // boundary so key hints and dispatch agree; the reference expires with this owner.
+  // TUI thread: update effective bindings only between dispatch steps so key hints
+  // and dispatch agree; the reference expires with this owner.
   TuiKeyBindings& key_bindings() { return key_bindings_; }
   // TUI thread: inspect current dispatch bindings; copy them into a worker request.
   TuiKeyBindings const& key_bindings() const { return key_bindings_; }

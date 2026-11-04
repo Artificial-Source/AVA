@@ -1,4 +1,4 @@
-// Publishes spinner phases at timer cadence; the session later paints any invalidated frame.
+// Updates the spinner phase on timer ticks; TuiSession paints the requested frame later.
 #include "sys.h"
 #include "Spinner.h"
 #include "composer_internal.h"

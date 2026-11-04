@@ -30,8 +30,8 @@ namespace terminal {
 class Context;
 }
 
-// Idle and active-run routing historically reset different interaction state.
-// Keep that policy explicit while sharing the editor operations.
+// Input routing chooses which interaction state an edit resets. Idle and active-run
+// editing deliberately use different policies.
 enum class ComposerEditContext
 {
   // Use idle editing resets; ordinary cursor movement can retain history browsing.
@@ -39,7 +39,7 @@ enum class ComposerEditContext
   // Use the active-run resets, which leave history even for ordinary edit actions.
   ActiveRun
 };
-// TUI-thread acceptance policy chosen by the input route; never retained as authority.
+// TUI-thread completion acceptance policy, chosen separately for each input action.
 enum class ComposerCompletionOrigin
 {
   // Keyboard acceptance leaves history and resets the completion row and scroll.
@@ -84,10 +84,9 @@ enum class CompletionStep
   Next
 };
 
-// Composer returns this owned result to TUI-thread input routing. The caller
-// publishes feedback and beeps after editing, then performs any cross-owner request
-// before painting. No editor reference escapes, so the result needs no owner alive
-// during destruction; an unhandled result lets the caller try its next fallback.
+// Composer returns this owned result to TUI-thread input routing. The caller updates
+// feedback and beeps after editing, then performs the requested action before painting.
+// No editor reference escapes; an unhandled result lets routing try its next fallback.
 struct ComposerInputResult
 {
   // True when this action applies; false lets the caller try its documented fallback.
@@ -102,19 +101,17 @@ struct ComposerInputResult
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Session owns the draft editor; all members are used only on the TUI thread.
-// Renderer, input and navigation borrow this stable owner until they are destroyed.
-// Draft text, undo state and selection have one owner. Completion accepts a const
-// prepared model, avoiding a call back into navigation while editing. No lock or
-// worker owns draft state; destroying borrowers first makes destruction local.
+// Session owns the draft text, undo state and selection in this editor. Renderer,
+// input and navigation borrow it and must be destroyed first. All access stays on
+// the TUI thread; workers never read its state. Completion uses the caller's prepared
+// const model, so editing does not call back into navigation.
 class Composer final
 {
  public:
   // Construct an empty editor before any renderer or navigation owner borrows it.
   Composer() = default;
-  // A draft's undo, selection and history belong to one session editor.
+  // Not copyable: one editor owns the draft history and keeps a stable identity for borrowers.
   Composer(Composer const&) = delete;
-  // Keep the identity borrowed by renderer/navigation stable for its lifetime.
   Composer& operator=(Composer const&) = delete;
   // TUI thread: handle one documented dispatch phase. All inputs are call-scoped;
   // returned requests are performed by the session before its next paint. The
@@ -134,7 +131,7 @@ class Composer final
   [[nodiscard]] std::string const& saved_draft() const noexcept;
   // TUI thread: tell input routing whether the next printable character is a jump target.
   [[nodiscard]] ComposerJumpMode jump_mode() const noexcept;
-  // TUI thread: supply the shared slash/reference/path row to projection and acceptance.
+  // TUI thread: supply the selected slash/reference/path row for display and acceptance.
   [[nodiscard]] std::size_t completion_index() const noexcept;
   // TUI thread: let completion preparation honor explicit palette dismissal.
   [[nodiscard]] bool palette_suppressed() const noexcept;
@@ -161,9 +158,8 @@ class Composer final
   void reset_for_session_transition();
   // TUI thread: discard editor text, paste records and undo state; interaction flags remain.
   void reset_draft();
-  // Replace editor content without silently changing history/interaction state.
   // TUI thread: install owned text at a valid cursor boundary and report a content change.
-  // The caller chooses any history, selection or completion cleanup.
+  // Preserve interaction state; the caller chooses history, selection and completion cleanup.
   bool replace_draft(std::string text, std::size_t cursor = std::string::npos);
   // TUI thread: recover rejected/submitted text with completion visible and history exited.
   // Jump and Escape state are retained.
@@ -173,9 +169,8 @@ class Composer final
   void draft_command(std::string text);
   // TUI thread: append a submitted prompt under history deduplication/size policy.
   void record_submission(std::string text);
-  // Apply the editor action alone after a caller-selected lifecycle reset.
-  // TUI thread: execute only the low-level editor action; callers own interaction resets.
-  // Return whether that action changed editor state.
+  // TUI thread: execute the low-level editor action and return whether it changed editor
+  // state. The caller performs any interaction resets before this call.
   bool apply_action(TuiAction action);
   // TUI thread: reset interaction according to idle/active policy before applying an action.
   // Deletion consumes a draft selection first; idle cursor movement can retain history.
@@ -245,10 +240,8 @@ class Composer final
   // TUI thread: clamp a requested top row to current layout; the caller disarms Escape
   // when scrolling should interrupt a pending clear.
   void scroll_to(std::size_t offset, ComposerSnapshot const& snapshot, std::size_t height);
-  // Rendering clamps the cursor and publishes selection; completion preparation
-  // only publishes the fields needed by completion calculations.
-  // TUI thread: fill the presentation projection and clamp the editor cursor before paint.
-  // The supplied writable snapshot is call-scoped; Composer retains no reference.
+  // TUI thread: clamp the editor's stored cursor, then copy draft, completion, scroll
+  // and selection fields into the display snapshot. Retain no reference to the snapshot.
   void project(ComposerSnapshot& snapshot);
   // TUI thread: publish only draft/completion inputs before the caller prepares matches.
   void project_completion(ComposerSnapshot& snapshot) const;
@@ -277,7 +270,6 @@ class Composer final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Internal TUI-thread selection steps; public feature operations preserve ordering.
   // TUI thread: replace the normalized selected range and retire the range. False means
   // there was no range or the low-level replacement made no change.
   bool replace_selection(std::string_view replacement);

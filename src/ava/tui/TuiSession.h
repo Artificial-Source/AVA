@@ -45,16 +45,13 @@ class TuiSession final
   // timers while being built, but run() alone dispatches them after construction.
   // All borrowed arguments must outlive the session.
   TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line);
-  // TUI thread: retire producer admission and join active work while all feature
+  // TUI thread: stop new worker requests and join active work while all feature
   // owners are still alive. This also covers exceptions and early run returns.
   ~TuiSession();
-  // A session has one terminal, operation and callback identity; copying is forbidden.
+  // Not copyable or movable: timers and input callbacks hold member addresses.
   TuiSession(TuiSession const&) = delete;
-  // Borrowed dependencies cannot be rebound to another session during their lifetime.
   TuiSession& operator=(TuiSession const&) = delete;
-  // Registered callbacks retain member addresses, so the session cannot move.
   TuiSession(TuiSession&&) = delete;
-  // Keep callback target addresses stable until registrations have retired.
   TuiSession& operator=(TuiSession&&) = delete;
   // TUI thread, once per constructed session: run control/timers/updates/input/
   // paint/wait until exit, then retire work before invoking before_shutdown.
@@ -83,7 +80,7 @@ class TuiSession final
   // so its snapshot reflects restored display settings.
   bool toggle_startup_overview();
   // TUI thread: cross from editor/selector intent into submission policy. Retain
-  // the returned terminal outcome before interpreting whether dispatch continues.
+  // the returned run outcome before interpreting whether dispatch continues.
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
   // TUI thread after a successful backend open: read committed identity, reset
   // dependent UI owners and publish optional feedback for the new session.
@@ -91,7 +88,7 @@ class TuiSession final
   // TUI thread after a backend action: reset UI state only if committed identity
   // changed. The coordinator owns the ordered cross-feature reset.
   bool synchronize_committed_session();
-  // TUI thread, before due timers. Claim signals and observe terminal failures;
+  // TUI thread, before due timers. Handle signals and observe terminal failures;
   // cancellation may release workers, so it must run outside timer callbacks.
   void service_control();
   // Plain timer wake: keeps the 100 ms observation cadence without handling
@@ -151,23 +148,23 @@ class TuiSession final
 
   // Declaration order is dependency order for owned collaborators. Reverse
   // destruction keeps each borrowed owner alive until its borrowers have retired.
-  // External application boundary, borrowed until destruction; TUI actions never own backend authority.
+  // Application frontend borrowed until destruction; backend validation stays in its implementation.
   TuiFrontEnd& frontend_;
   // External initialized terminal, borrowed for TUI-thread input/output until destruction.
   terminal::Context& terminal_context_;
-  // TUI timer handles below retire before this loop; copied weak wakeups may outlive it.
-  // TUI-thread waiter and timer registry; constructed before every registered feature.
+  // TUI-thread waiter and timer registry, constructed before every registered feature.
+  // Timer handles below die first; copied weak wakeups may outlive the loop.
   TuiEventLoop loop_;
-  // TUI-owned projection storage; every reader borrows a const view and publishes through named operations.
+  // TUI-owned display data; readers borrow const views and features update them through named operations.
   RuntimePresentationState presentation_state_;
-  // Modal input policy; presentation storage above outlives this owner.
-  // TUI-thread modal policy shared by idle and active dispatch; projection owns its current view.
+  // TUI-thread output-modal policy shared by idle and active dispatch. Its current
+  // view lives in presentation_state_, which outlives this owner.
   CommandOutput command_output_;
   // TUI-thread staging owner; submission takes attachments and session transitions clear them.
   PendingAttachments attachments_;
   // Session-local command-prompt grants, read by the prompt coordinator and cleared on session transition.
   TuiSessionGrantRegistry command_session_grants_;
-  // Synchronized producer transport with TUI-only projection; shut down admission before destroying the screen.
+  // Synchronized plugin request queue with TUI-only views; stop new requests before destroying the screen.
   RuntimePluginUiCoordinator plugin_ui_;
   // TUI-thread failure latch set by rendering, descriptor, notification or shutdown failure; retained until run returns.
   bool terminal_write_failed_ = false;
@@ -196,11 +193,13 @@ class TuiSession final
   // TUI-thread stash editing and selector policy, sharing the one editor and attachment owner.
   RuntimePromptStashController prompt_stash_;
 
-  // TUI-thread search projection and viewport restoration; prompt preemption closes it before claiming the modal.
+  // TUI-thread search view and saved scroll position; close search before opening a worker prompt.
   TranscriptSearchController transcript_search_;
-  // Worker-safe request admission plus TUI-only active prompt; release callbacks/claims before worker join.
+  // Synchronized worker request queues and TUI-only active prompt; remove borrowed
+  // callbacks and release its pending request before joining the worker.
   RuntimePromptCoordinator prompt_coordinator_;
-  // TUI-thread diagram projection and retry timers; copied producer notifiers retain only independent readiness/wakeup state.
+  // TUI-thread diagram views and retry timers; copied worker callbacks retain only
+  // shared readiness state and a weak wake handle, so they can outlive this owner.
   RuntimeMermaidPresentationController mermaid_presentation_;
   // TUI-thread frontend action policy and display-discovery timer; backend decisions remain in frontend callbacks.
   RuntimeActionController action_controller_;
@@ -210,16 +209,16 @@ class TuiSession final
   SessionTransitionCoordinator session_transitions_;
   // TUI-thread submission lifetime; shutdown joins its worker before any borrowed feature is destroyed.
   ActiveRun active_run_controller_;
-  // Ordinary active keys borrow the lifecycle owner, whose worker is joined before teardown.
-  // TUI-thread ordinary active keys; borrows the lifecycle owner without exposing its Operation or queues.
+  // TUI-thread ordinary active keys; borrows ActiveRun without exposing its private
+  // operation or queues. ActiveRun remains alive and joins its worker before teardown.
   ActiveRunInput active_run_input_;
   // TUI-thread entry from draft intent to local commands or ActiveRun; records history before launch.
   RuntimeSubmitController submit_controller_;
-  // Registered targets above outlive the dispatcher; the session cannot move.
-  // TUI-thread idle stages in precedence order; its captured target addresses remain stable for this session.
+  // TUI-thread idle handlers in precedence order. Their targets above outlive this
+  // dispatcher and stay at stable addresses for the session.
   TuiInputDispatcher input_dispatcher_;
-  // This callback target is the session itself; cancel before collaborators retire.
-  // TUI-thread plain wake every 100 ms; cancel on exit before dependent owners retire.
+  // TUI-thread plain wake every 100 ms, targeting this session. Cancel on exit
+  // before any feature owner is destroyed.
   TuiTimer control_timer_;
 };
 

@@ -180,7 +180,7 @@ void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& sna
   // records before candidates are destroyed.
   struct Candidate
   {
-    // Current TUI-thread transcript item index used to choose earliest affected search item.
+    // Current TUI-thread index of the transcript item containing this candidate fence.
     std::size_t item_index = 0;
     // Owned completed fence/source from scan; reconciliation transfers it into a new record when no matching
     // record survives.
@@ -188,8 +188,8 @@ void RuntimeMermaidPresentationController::reconcile(ComposerSnapshot const& sna
 
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
-  // Discover only completed fences and bound retained candidates before allocating reconciliation state;
-  // incomplete streaming source remains ordinary text.
+  // Scan completed fences across the full transcript, then trim the candidate set before reconciling records.
+  // This limits retained records, not peak scan allocation; incomplete streaming fences remain ordinary text.
   std::vector<Candidate> candidates;
   for (std::size_t item_index = 0; item_index < snapshot.transcript.size(); ++item_index)
   {
@@ -262,7 +262,7 @@ void RuntimeMermaidPresentationController::enqueue_waiting() noexcept
       continue;
     try
     {
-      // Allocate bookkeeping before admission: an accepted backend request must
+      // Allocate bookkeeping before submission: an accepted backend request must
       // remain discoverable even if its presentation record is later removed.
       outstanding_requests_.reserve(outstanding_requests_.size() + 1);
       auto const result =
@@ -405,7 +405,7 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
   if (session_changed || configuration_changed)
   {
     cancel_all();
-    // Authoritative reconfiguration drops the backend's prior epoch jobs and
+    // Application reconfiguration drops the backend's prior epoch jobs and
     // results. Same-epoch session changes still need to drain canceled work.
     if (config_epoch_ != snapshot.mermaid_config_epoch)
       outstanding_requests_.clear();
@@ -425,7 +425,7 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
   }
 
   // Keep Busy backoff even when unrelated input changes the transcript. On an
-  // eligible attempt, drain canceled/old-session results before admitting more
+  // eligible attempt, drain canceled/old-session results before submitting more
   // work. Disabled presentation must also release those coordinator slots.
   if (!retry_at_ || TuiTimer::Clock::now() >= *retry_at_)
   {
@@ -442,7 +442,7 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     }
   }
 
-  // Compare accepted identity sets only after admission/drain and byte-budget enforcement, then publish
+  // Compare accepted identity sets only after submission/drain and byte-budget enforcement, then publish
   // geometry before notifying search of affected items.
   auto const after = accepted_identities(records_);
   auto const visual_changed = !same_accepted(before, after) || (snapshot.mermaid_projection && after.empty());

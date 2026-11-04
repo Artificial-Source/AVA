@@ -1,4 +1,4 @@
-// Permission specialization of the shared worker-to-TUI prompt rendezvous.
+// Shares a permission request and decision between a waiting worker and the TUI.
 #pragma once
 
 #include "PendingRequest.h"
@@ -6,15 +6,15 @@
 
 namespace ava::tui {
 
-// Worker construction prepares denial before admission; shutdown only moves it.
+// Worker construction prepares denial before enqueueing; shutdown only moves it.
 inline ava::core::Result<ava::permissions::PermissionResolutionDecision> interrupted_permission_result()
 {
   return ava::permissions::PermissionResolution::Deny;
 }
 
 // Resolver worker and TUI coordinator share this request specialization. Denial
-// is prepared before admission; a claimed permission keeps its worker blocked
-// until callbacks retire, even after cancellation. See PendingRequest.
+// is prepared before enqueueing; the TUI holds the worker until its borrowed
+// callbacks retire, even after cancellation. See PendingRequest.
 using PendingPermissionRequest =
     PendingRequest<ava::permissions::PermissionPrompt, ava::permissions::PermissionResolutionDecision, interrupted_permission_result>;
 

@@ -64,9 +64,8 @@ class SettingsDialog final
   // TUI thread: restore the captured display baseline and remove the theme overlay
   // while presentation and terminal-facing theme state are still alive.
   ~SettingsDialog();
-  // Copying would create two owners of one temporary theme/display overlay.
+  // Not copyable: one dialog owns rollback of the temporary theme and display preview.
   SettingsDialog(SettingsDialog const&) = delete;
-  // Keep preview rollback responsibility attached to one stable dialog.
   SettingsDialog& operator=(SettingsDialog const&) = delete;
 
   // TUI thread: retire any old preview, refresh popup trust facts and build root Settings.
@@ -83,11 +82,11 @@ class SettingsDialog final
   // TUI thread: Escape in a section restores baseline and root query/selection.
   // Escape at root closes; the caller publishes the resulting frame afterward.
   void cancel();
-  // TUI thread: confirm a current Settings row through frontend authority or return a
+  // TUI thread: confirm a current Settings row through the frontend or return a
   // typed request/draft with its status. Preview is cleared before persistent changes.
   [[nodiscard]] SettingsDialogResult resolve(SelectListInputResult const& input);
   // TUI thread: call after an Applied display reload, before final paint. Capture the
-  // new authoritative baseline, then reapply preview and reselect by action identity.
+  // newly loaded baseline, then reapply preview and reselect by action identity.
   void rebase_after_display_reload();
   // TUI thread: report local preview/navigation lifetime; synchronize after host replacement.
   [[nodiscard]] bool is_open() const noexcept;
@@ -98,14 +97,14 @@ class SettingsDialog final
  private:
   // TUI thread: restore preview and discard navigation once; safe after repeated close calls.
   void retire();
-  // TUI thread: cancel the overlay and republish its authoritative baseline before callbacks.
+  // TUI thread: cancel the overlay and restore the saved display baseline before callbacks.
   void clear_preview();
-  // TUI thread: capture authoritative image/cursor values after old preview has been cleared
-  // or new settings hydrated; later cancellation restores this baseline.
+  // TUI thread: save image/cursor values after clearing the old preview or applying loaded
+  // settings; later cancellation restores this baseline.
   void begin_baseline();
   // TUI thread: start navigation/baseline only once, so row rebuilds do not adopt preview as truth.
   void ensure_open();
-  // TUI thread: build candidate labels from authoritative values, restore theme preview
+  // TUI thread: build candidate labels from baseline values, restore theme preview
   // and publish the new Settings view; selection is clamped to the rebuilt rows.
   void rebuild(SettingsSection section, std::string query = {}, std::optional<std::size_t> selected = std::nullopt);
   // TUI thread: derive a reversible overlay only for a valid Display row; invalid or
@@ -114,7 +113,7 @@ class SettingsDialog final
 
   // Borrowed from Session; boundary that persists confirmed settings and supplies current catalogs.
   TuiFrontEnd& frontend_;
-  // Borrowed from Session; projection; baseline capture reads it and preview publications update it.
+  // Borrowed from Session; display state read when saving the baseline and updated by previews.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole selector view; highlight reads rows only until the next host mutation.
   SelectorHost& selectors_;

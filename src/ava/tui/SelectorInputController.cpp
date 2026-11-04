@@ -1,4 +1,4 @@
-// Classifies selector input and delegates catalog changes to frontend authority.
+// Classifies selector input and requests catalog changes through the frontend.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
@@ -30,7 +30,7 @@ SelectListInputResult SelectorInputController::classify(runtime_input::RuntimeIn
   using Key = terminal::Key;
   auto const& view = *selectors_.view();
   // Hit-testing uses the current layout before key classification. Settings clicks must
-  // remain preview-only, and disabled rows can be highlighted without invoking authority.
+  // remain preview-only, and disabled rows can be highlighted without calling the frontend.
   if (input.event.key == Key::MouseLeftPress || input.event.key == Key::MouseLeftClick)
   {
     if (auto const clicked = select_list_selection_for_screen_position(presentation_state_.screen(), input.event.mouse_row, input.event.mouse_column))
@@ -149,7 +149,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
   if (input.action != SelectListInputAction::Resolve && input.action != SelectListInputAction::Cancel)
     return SelectorInputRequest::Pass;
 
-  // Capture identity and kind before close invalidates row borrows. Authority callbacks
+  // Capture identity and kind before close invalidates row borrows. Frontend callbacks
   // then operate on owned values, and cancellation cannot accidentally invoke them.
   auto const* item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = input.action == SelectListInputAction::Resolve && item ? item->value : std::string{};
@@ -211,7 +211,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
         terminal_context_.beep();
         return SelectorInputRequest::Handled;
       }
-      // Paint truthful pending authority status before the blocking fork callback.
+      // Paint the pending fork status before calling the blocking frontend callback.
       presentation_state_.publish_status("forking session…");
       if (!renderer_.paint_for_handoff())
         return SelectorInputRequest::RenderFailed;

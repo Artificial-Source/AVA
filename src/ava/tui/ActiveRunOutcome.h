@@ -1,17 +1,17 @@
-// Carries submission settlement decisions back to the TUI session.
+// Tells the TUI session whether to continue or exit after submission cleanup.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
 
 namespace ava::tui {
-// A TUI-thread value returned after settlement or shutdown. Named operations
+// A TUI-thread value returned after completion or shutdown. Named operations
 // preserve simultaneous signal and I/O failures without positional bool arguments.
 // ActiveRun creates the value and TuiSession consumes it after worker retirement.
 // It owns no resources; copies require no lifetime coordination beyond TUI dispatch.
 class ActiveRunOutcome final
 {
  public:
-  // Successful settlement leaves the session available for another submission.
+  // Successful completion leaves the session available for another submission.
   [[nodiscard]] static ActiveRunOutcome continue_session() { return {}; }
   // Normal quit or queue failure asks the session to end without inventing a signal.
   [[nodiscard]] static ActiveRunOutcome close_session()

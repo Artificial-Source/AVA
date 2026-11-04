@@ -29,43 +29,43 @@ struct RuntimeInput
   // Owned UTF-8 insertion payload set by the decoder and read by the composer on
   // the TUI thread; NoLogString keeps user input out of generated debug output.
   ava::core::NoLogString text;
-  // Decoder sets this for one assembled paste; TUI handlers preserve its atomic
-  // insertion semantics and avoid treating its first character as a jump command.
+  // Decoder sets this for one assembled paste; text handlers insert it as one edit,
+  // and shortcut handlers avoid treating its first character as a jump command.
   bool bracketed_paste = false;
-  // Decoder marks terminal resize even with an Unknown key; TUI composition must
+  // Decoder marks terminal resize even with an Unknown key; TuiSession must
   // retain it as actionable work rather than discard it as an unsupported key.
   bool resize = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// TUI input stage: borrow an event and copy its first printable character for a
-// jump command. Reject paste, control keys and incomplete/ill-shaped byte sequences;
-// the returned bytes own their storage and perform no terminal read.
+// TUI input stage: borrow an event and copy its first character as a jump candidate.
+// Reject paste, control keys, ASCII controls and invalid UTF-8 byte shapes; this does
+// not check full Unicode scalar validity. Returned bytes own their storage; no terminal read occurs.
 [[nodiscard]] std::optional<std::string> printable_jump_target(RuntimeInput const& input);
 // TUI thread with an initialized Application terminal: consume startup replay first,
 // then decode using the current terminal timeout. Unknown conflates no input with
-// discarded input here; event-loop drainage uses poll_curses_input instead.
+// discarded input here; the session uses poll_curses_input to tell them apart.
 [[nodiscard]] RuntimeInput read_curses_input();
 // TUI poll classification keeps consumed protocol replies distinct from native
 // emptiness, so TuiSession charges discarded replies to its budget and keeps draining.
 enum class InputPollKind
 {
   // No startup item and native read returned ERR (empty/timeout/read failure);
-  // another source may still require a runnable turn before composition can wait.
+  // another source may still require a runnable turn before TuiSession can wait.
   Empty,
   // Consumed a protocol reply or unsupported key; charge the input budget and poll again.
   Discarded,
-  // Owns an actionable decoded event; composition may dispatch it before polling again.
+  // Owns an actionable decoded event; TuiSession may dispatch it before polling again.
   Input
 };
 
 // Value returned to TuiSession on the TUI thread; it owns its payload independently
 // of ncurses. Only Input makes input meaningful, while Empty and Discarded guide
-// drainage without dispatch. Destruction requires no terminal or decoder lifetime.
+// further polling without dispatch. Destruction requires no terminal or decoder lifetime.
 struct InputPollResult
 {
-  // Poller sets this on the TUI thread; composition tests it before touching input
+  // Poller sets this on the TUI thread; TuiSession tests it before touching input
   // so a discarded key cannot masquerade as evidence that buffered input is exhausted.
   InputPollKind kind = InputPollKind::Empty;
   // Poller moves an owned event here only for Input; TUI dispatch borrows it until
@@ -86,11 +86,11 @@ struct InputPollResult
 [[nodiscard]] std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout);
 
 // TUI thread: discard owned startup replay without changing native input, timeout
-// or incomplete-paste tracking. Prompt quarantine uses this without allowing a
-// delayed paste tail to become ordinary keys.
+// or incomplete-paste tracking. Prompt input cleanup uses this while preserving
+// the rule that delayed paste tails are discarded rather than handled as ordinary keys.
 void clear_startup_input_queue();
-// TUI thread at actual terminal-session entry/exit: retire both startup replay
-// and incomplete-paste tracking. Never use this when switching prompt ownership.
+// TUI thread at actual terminal-session entry/exit: clear both startup replay
+// and incomplete-paste tracking. Never use this when opening or closing a prompt.
 void reset_input_decoder();
 // TUI thread: inspect preserved startup events without consuming them; capacity is
 // 64 and no producer thread may read or mutate this unsynchronized queue.

@@ -516,7 +516,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    // Display toggles finish locally. Only text unclaimed by every local command path
+    // Display toggles finish locally. Only text unhandled by every local command path
     // falls through to worker launch, where ActiveRun owns cancellation and completion.
     if (submitted == "/details" || submitted == "/details compact" || submitted == "/details rich" || submitted == "/details expanded")
     {

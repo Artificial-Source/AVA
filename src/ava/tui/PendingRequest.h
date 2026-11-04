@@ -1,4 +1,4 @@
-// Shared prompt rendezvous used by the TUI architecture's worker-to-UI handoff.
+// Shares one prompt and its result between a waiting worker and the TUI.
 #pragma once
 
 #include "ava/core/result.h"
@@ -11,19 +11,19 @@
 
 namespace ava::tui {
 
-// A resolver worker and the prompt coordinator share one request. The immutable
-// prompt may borrow worker-local callbacks, so a result alone cannot release the
-// worker: the UI must also retire its claim. Prompt and Answer select the payload;
-// Interrupted prepares the feature's cancellation result before queue admission.
-// The request owns its mutex/result; the resolver, queue and TUI claim own shares.
-// Only the TUI holds a claim, and final destruction can occur on either participant
-// after all shares are released. No UI callback may run after that claim retires.
+// The resolver worker, coordinator queue and active TUI prompt share this request.
+// TUI callbacks in the immutable prompt may borrow the waiting worker's stack.
+// begin_resolution() takes a TUI hold (the "claim"): await() needs both a result
+// and release of that hold, after those callbacks can no longer run.
+// Prompt and Answer select the payload; Interrupted prepares cancellation before
+// enqueueing. The request owns its mutex/result and may be destroyed on either
+// thread after the last share is released. Workers never read screen views.
 template <typename Prompt, typename Answer, ava::core::Result<Answer> (*Interrupted)()>
 class PendingRequest final
 {
  public:
   // Worker thread, before enqueue. Allocation here may fail without leaving an
-  // admitted waiter behind; later cancellation only moves the prepared result.
+  // queued waiter behind; later cancellation only moves the prepared result.
   explicit PendingRequest(Prompt prompt) : prompt_(std::move(prompt)), interrupted_(Interrupted()) { }
   // Not copyable: each worker waits on this one synchronization identity.
   PendingRequest(PendingRequest const&) = delete;
@@ -39,8 +39,8 @@ class PendingRequest final
     ready_.wait(lock, [this] { return result_.has_value() && !resolving_; });
     return std::move(*result_);
   }
-  // TUI thread, before constructing callbacks. Claim only an unresolved request;
-  // failure means cancellation already won and the prompt must not be displayed.
+  // TUI thread, before using borrowed callbacks: hold an unresolved request.
+  // False means a result or another hold already exists; do not start this prompt.
   [[nodiscard]] bool begin_resolution()
   {
     std::lock_guard lock(mutex_);
@@ -50,7 +50,7 @@ class PendingRequest final
     return true;
   }
   // TUI thread, after callbacks retire. Record the first result, or preserve a
-  // result already stored for a retired request. Clear the claim before waking
+  // result already stored for this request. Clear the hold before waking
   // the worker, and do not keep the request mutex locked during notification.
   void complete(ava::core::Result<Answer> result)
   {
@@ -62,9 +62,9 @@ class PendingRequest final
     }
     ready_.notify_one();
   }
-  // TUI thread: cancel a queued request only while no TUI claim holds it.
+  // TUI thread: cancel a queued request only while no active TUI prompt holds it.
   // The coordinator holds its queue lock so claiming cannot race this call.
-  // Preserve a result already stored for a retired request; never replace an answer.
+  // Preserve a result already stored for this request; never replace an answer.
   void interrupt_queued()
   {
     {
@@ -76,7 +76,7 @@ class PendingRequest final
     }
     ready_.notify_one();
   }
-  // TUI thread, only after borrowed callbacks retire. Release a claimed waiter
+  // TUI thread, only after borrowed callbacks retire. Release a held waiter
   // with the prepared cancellation value; no allocation occurs on this path.
   void abandon()
   {
@@ -100,15 +100,15 @@ class PendingRequest final
   }
   // Initialized by the worker; immutable until resolver, queue and TUI shares all retire.
   Prompt const prompt_;
-  // Serializes claim and result transitions between worker and TUI threads.
+  // Serializes the TUI hold and result updates between worker and TUI threads.
   std::mutex mutex_;
-  // Wakes the sole worker after a result/claim transition; predicate prevents early release.
+  // Wakes the sole worker after a result/hold change; the predicate prevents early release.
   std::condition_variable ready_;
   // First completion or interruption wins under mutex_; await moves it exactly once.
   std::optional<ava::core::Result<Answer>> result_;
   // Prepared during construction, then moved once under mutex_ on cancellation.
   ava::core::Result<Answer> interrupted_;
-  // Set by UI claim, cleared only after callbacks retire; protected by mutex_.
+  // TUI hold: set before using borrowed callbacks, cleared after retirement; protected by mutex_.
   bool resolving_ = false;
 };
 

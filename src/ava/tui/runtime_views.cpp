@@ -1,3 +1,4 @@
+// Builds owned settings, prompt, summary, and overview views on the TUI thread.
 #include "sys.h"
 #include "ava/agent/question.h"
 #include "ava/tui/TuiFrontEnd.h"
@@ -798,7 +799,7 @@ void DisplayPreviewTransaction::clear_theme_overlay() const
 
 void reapply_settings_preview_after_display_reload(DisplayPreviewTransaction& preview, ComposerSnapshot& snapshot)
 {
-  // Always rebase from the hydrated authoritative presentation. Do not compare overlay values.
+  // Restore the baseline from newly applied screen settings; equality with a preview does not prove it was saved.
   auto const staged_token = preview.overlay ? std::optional<std::string>{preview.overlay->action_token} : std::nullopt;
   preview.rebase(DisplayPresentationBaseline{.show_images = snapshot.show_images, .image_width_cells = snapshot.image_width_cells, .cursor = snapshot.cursor});
   if (staged_token)
@@ -922,7 +923,7 @@ std::optional<DisplayPreviewOverlay> settings_preview_overlay_for_action(std::st
   if (!settings_action_is_previewable(value))
     return std::nullopt;
 
-  // Default-initialize optional overlay fields; only stage the confirmed action token here.
+  // Start with no field overrides and retain the highlighted action for later confirmation.
   DisplayPreviewOverlay overlay{};
   overlay.action_token = std::string(value);
   if (auto theme = settings_preview_theme_for_action(value, snapshot))
@@ -1114,7 +1115,7 @@ SelectListView overview_select_list_view(StartupOverviewSnapshot const& overview
                       format_bounded_count(*overview.plugin_resource_failure_count, overview.plugin_resource_failure_count_is_lower_bound));
   }
 
-  // MCP/LSP statuses are not retained path-free at startup; omit rather than claim counts.
+  // Startup data has no path-free MCP/LSP status counts to display.
 
   for (auto const& hint : overview.key_hints)
   {

@@ -137,22 +137,22 @@ bool ActiveRun::render()
 
 void ActiveRun::submit_worker(TuiFrontEnd* frontend, std::shared_ptr<ActiveRunInbox> inbox, std::string submitted, TuiSubmitContext context)
 {
-  ActiveRunTerminal terminal{TuiSubmitResult{}};
+  ActiveRunResult final_result{TuiSubmitResult{}};
   {
     auto owned_submission = std::move(submitted);
     auto owned_context = std::move(context);
     try
     {
-      terminal = frontend->on_submit(owned_submission, std::move(owned_context));
+      final_result = frontend->on_submit(owned_submission, std::move(owned_context));
     }
     catch (...)
     {
-      terminal = std::current_exception();
+      final_result = std::current_exception();
     }
   }
-  // All submission/backend callback scopes have retired. Publishing the payload
-  // is the last operation-state action; only resource-safe notify/epilogue follow.
-  inbox->publish_terminal(std::move(terminal));
+  // Backend callback scopes have ended. Store the final result last, then notify
+  // the loop and return; the TUI may take it and join this worker immediately.
+  inbox->publish_result(std::move(final_result));
 }
 
 bool ActiveRun::start(std::string submitted)
@@ -198,11 +198,11 @@ bool ActiveRun::start(std::string submitted)
       shutdown();
       return false;
     }
-    // Show the initial processing frame before admitting prompts and launching work.
+    // Request the initial processing frame before accepting prompts and launching work.
     // The catch path retires any partially constructed operation through shutdown.
     prompt_coordinator_.open_admission();
     // The plugin owner and its synchronized deadline state outlive this joined
-    // worker. This predicate has no projection or terminal access.
+    // worker. This predicate never reads screen data or accesses the terminal.
     auto cancel_requested = [inbox = operation_->inbox, plugin = &plugin_ui_]() { return inbox->stop_requested() || plugin->deadline_reached(); };
     TuiSubmitContext context{
         .request_id = std::move(request_id),
@@ -322,15 +322,15 @@ bool ActiveRun::cancel(ActiveRunCancel reason)
 
 void ActiveRun::before_prompt()
 {
-  // A host prompt freezes the underlying turn, including spinner phase. Restart
-  // from the displayed frame after the claim retires, preserving baseline cadence.
+  // Stop the spinner while a host prompt is active. Restart from its displayed
+  // frame after the prompt completes, preserving the existing animation cadence.
   spinner_.stop();
   transcript_search_.close_before_prompt();
 }
 
 void ActiveRun::service_prompt()
 {
-  // Only direct permission input can request stop. Timer/claim service either
+  // Only direct permission input can request stop. Automatic prompt service either
   // retains or completes a prompt and cannot return that input-only outcome.
   static_cast<void>(prompt_coordinator_.service());
   if (!prompt_coordinator_.has_active())
@@ -341,7 +341,7 @@ bool ActiveRun::apply_prompt_outcome(PromptServiceOutcome outcome)
 {
   if (outcome != PromptServiceOutcome::RequestRunStop)
     return true;
-  // Escape retains its permission claim until stop is visible to the worker.
+  // Escape keeps the permission request held until stop is visible to the worker.
   // Complete it only after the input callback has returned, avoiding reentrancy.
   auto const rendered = request_stop();
   static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::RunStop));
@@ -428,7 +428,7 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
 {
   if (!active() || operation_->close_after_submit)
     return true;
-  // A claimed host prompt owns the retained key before plugin or search routing.
+  // An active host prompt receives the retained key before plugin or search routing.
   // Returning a value prevents ordinary active-input stages from seeing it.
   if (prompt_coordinator_.has_active())
   {
@@ -460,17 +460,17 @@ std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput co
                                                                                           std::bind_front(&ActiveRun::before_prompt, this));
     return outcome != SearchInputPromptDispatchResult::InputFailed;
   }
-  // One last claim attempt covers a worker publication after earlier service.
-  // Consume the old key when acquisition wins; it was decoded for a different view.
+  // Check again for a prompt queued after earlier service. If one starts, discard
+  // the old key because it was decoded for a different view.
   auto const prompt = prompt_coordinator_.start_pending(std::bind_front(&ActiveRun::stop_requested, this), std::bind_front(&ActiveRun::before_prompt, this));
   if (prompt != PromptServiceOutcome::None)
-    return true; // A raced claim consumes the retained key; it never enters the new modal.
+    return true; // Discard the retained key; it never answers the newly opened prompt.
   return std::nullopt;
 }
 
 bool ActiveRun::accepts_input() const
 {
-  return active() && operation_->inbox && !operation_->inbox->terminal_ready();
+  return active() && operation_->inbox && !operation_->inbox->result_ready();
 }
 
 bool ActiveRun::has_pending_updates()
@@ -502,24 +502,25 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
     return std::nullopt;
   try
   {
-    auto terminal = operation_->inbox->take_terminal();
-    if (!terminal)
+    auto final_result = operation_->inbox->take_result();
+    if (!final_result)
       return std::nullopt;
-    if (auto error = std::get_if<std::exception_ptr>(&*terminal))
+    if (auto error = std::get_if<std::exception_ptr>(&*final_result))
     {
       auto exception = *error;
       shutdown();
       std::rethrow_exception(exception);
     }
-    auto result = std::move(std::get<TuiSubmitResult>(*terminal));
-    // Retire callbacks which borrow worker data before joining. The terminal
-    // publication says backend callback scopes have ended; get joins its epilogue.
+    auto result = std::move(std::get<TuiSubmitResult>(*final_result));
+    // Remove TUI callbacks borrowing worker data and release prompt/plugin waits
+    // before joining. The final result says backend callback scopes have ended;
+    // get() still waits for the worker epilogue.
     prompt_coordinator_.fail_pending_requests();
     static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
     plugin_ui_.finish_submission();
     operation_->worker.get();
-    // Backend completion receipts decide command conversation authority before any
-    // final projection. A committed session change discards prior-session evidence.
+    // The backend's ordinary_turn_request_ids select command conversation events
+    // before the final transcript update. A session change discards old-session data.
     operation_->events->authorize_receipts(result.ordinary_turn_request_ids);
     auto committed_session_id = frontend_.read_committed_session_id();
     auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
@@ -527,8 +528,8 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
     if (!result.quit)
       presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
     finish_queues();
-    // Queue finishing can publish receipts. Freeze admission only afterward, so
-    // retained sinks cannot repopulate an old-session backlog after discard.
+    // Finishing backend queues can enqueue final events. Close the inbox afterward
+    // so retained sinks cannot add old-session events after discard.
     operation_->inbox->retire();
     if (session_changed)
     {
@@ -537,9 +538,9 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
     }
     prompt_coordinator_.set_audit_sink(nullptr);
     spinner_.stop();
-    // Admission is closed and the worker has joined: the backlog is now finite.
-    // Bound each allocation, but settle it in this call instead of adding a UI
-    // phase. The first drain also publishes newly authorized command receipts.
+    // The inbox is closed and the worker has joined: the backlog is now finite.
+    // Drain it in bounded batches in this call. The first drain also updates the
+    // transcript with command events matching the backend's ordinary-turn IDs.
     do
     {
       if (drain_events(256) == RuntimeEventDrainResult::RenderFailed)
@@ -647,8 +648,8 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
     if (operation_->inbox)
       operation_->inbox->retire();
   });
-  // The worker has returned, so later cleanup failures cannot strand it. Retain
-  // the failure in the value returned to Session before destroying per-run state.
+  // The worker has returned, so later cleanup failures cannot strand it. Keep
+  // every failure recorded in the outcome before destroying per-run state.
   presentation_state_.publish_processing(false);
   operation_.reset();
   return outcome;
@@ -656,8 +657,8 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
 
 RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 {
-  // Reduce before choosing projection: command events can update sidebar authority
-  // even while conversation text is still awaiting completion receipts.
+  // Reduce before updating the transcript: command events can update the sidebar
+  // even while conversation text awaits the backend's ordinary-turn request IDs.
   auto batch = operation_->inbox->drain(max_events);
   auto const& snapshot = presentation_state_.screen();
   operation_->events->apply_batch(batch, presentation_state_);
@@ -698,8 +699,8 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 }
 ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, bool session_changed)
 {
-  // Select receipt-filtered evidence before fallback. Local command output and
-  // conversation output have different authority even when they share tool events.
+  // Filter command events by ordinary-turn request ID before choosing fallback
+  // text. The remaining events can still supply local command output.
   auto const& snapshot = presentation_state_.screen();
   auto const& event_state = operation_->events->aggregate();
   auto const events_received = operation_->is_command_submission ? operation_->events->authorized_events_received() : operation_->inbox->received_any();
@@ -717,8 +718,8 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
                                           result.local_command_result.has_value());
   if (settlement.policy.preserve_transcript && !session_changed)
   {
-    // Local command event projection is withheld for the entire run. Restore the
-    // exact pre-submit sequence defensively so no independent receipt path can leak.
+    // A command with only local output must leave the conversation unchanged.
+    // Restore the exact pre-submit sequence before presenting its local result.
     presentation_state_.publish_transcript(std::move(settlement.transcript));
 
     if (!event_state.activity.empty())
@@ -769,8 +770,8 @@ ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, boo
     transcript_search_.refresh_after_transcript_mutation(item_index_shift, std::min(changed_from_item_index, snapshot.transcript.size()));
     renderer_.note_transcript_eviction(item_index_shift);
   }
-  // Publish the chosen output surface after transcript settlement; only then finish
-  // processing metadata and render the final state used by the next idle turn.
+  // Update the chosen output surface after the transcript; only then finish
+  // processing metadata and request the final frame used by the next idle turn.
   if (settlement.policy.present_command_output)
   {
     presentation_state_.publish_local_completion(operation_->submitted, std::move(settlement.command_output), std::move(settlement.command_tools), false);

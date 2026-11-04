@@ -17,10 +17,10 @@ namespace ava::tui {
 
 class TuiWaitState;
 
-// Chosen by composition on the TUI thread after servicing the turn's work.
+// Chosen by TuiSession on the TUI thread after servicing the turn's work.
 enum class TuiWaitMode
 {
-  // Sleep until an armed deadline, input readiness or a published notification.
+  // Sleep until an armed deadline, input readiness or a producer notification.
   Block,
   // Collect and consume readiness without sleeping when another turn is runnable.
   ReadyOnly
@@ -29,7 +29,7 @@ enum class TuiWaitMode
 // TuiSession's sole waiter and registry for feature-owned TuiTimer handles. All
 // members are TUI-thread-only; producers use a previously obtained TuiWakeup.
 // Handles, including disarmed ones, must die before the loop; callback targets
-// stay at stable addresses until their handles are removed and active calls end.
+// stay at stable addresses until their registrations are removed and active calls end.
 // Owners join producers before destroying objects those producers borrow. A wakeup
 // alone requires no join: its temporary shared ownership protects only OS resources.
 class TuiEventLoop final
@@ -44,19 +44,16 @@ class TuiEventLoop final
   // TUI thread, outside dispatch and after every timer handle is destroyed. Releases
   // the loop's wait-state share; an in-flight notifier may release the last share later.
   ~TuiEventLoop();
-  // One registry owns each ID; copying on any thread would duplicate handle authority.
+  // Not copyable or movable: timer handles borrow this registry at a stable address.
   TuiEventLoop(TuiEventLoop const&) = delete;
-  // Registry ownership cannot be replaced by copying while handles refer to it.
   TuiEventLoop& operator=(TuiEventLoop const&) = delete;
-  // Handles borrow this address, so the loop cannot move on any thread.
   TuiEventLoop(TuiEventLoop&&) = delete;
-  // Preserve the address borrowed by existing handles instead of transferring a loop.
   TuiEventLoop& operator=(TuiEventLoop&&) = delete;
 
   // TUI thread: register an initially disarmed member callback. target must stay
-  // at this address through handle retirement and any executing callback. Callbacks
-  // may publish state or invalidate a frame, but must not paint, poll input, service
-  // control, recursively dispatch timers or wait; composition performs those stages.
+  // at this address until the registration is removed and any executing callback returns.
+  // Callbacks may update feature state or request a frame, but must not paint, poll
+  // input, run session control checks, recursively dispatch timers or wait; TuiSession orders those stages.
   template <typename Target>
   [[nodiscard]] TuiTimer member_timer(Target& target, void (Target::*callback)(Clock::time_point))
   {
@@ -76,8 +73,9 @@ class TuiEventLoop final
   // utils retries EINTR: signals alone do not return control. The session's 100 ms
   // control timer supplies a nominal check cadence, not a maximum response latency.
   void wait(TuiWaitMode mode);
-  // TUI thread while this loop lives: create a copyable producer token. Publishing
-  // the token does not retain this loop or any callback target; publish payload first.
+  // TUI thread while this loop lives: create a copyable token for producer notifications.
+  // The token does not retain this loop or any callback target. Producers must store
+  // their payload in a synchronized mailbox before calling notify().
   [[nodiscard]] TuiWakeup wakeup() const noexcept;
   // TUI thread: permanently end dispatch and waiting for this loop; does not notify
   // a different thread, cancel registrations, or stop/join producer work.
@@ -88,7 +86,7 @@ class TuiEventLoop final
   [[nodiscard]] bool terminal_hangup() const noexcept;
   // TUI thread: report descriptor error observed by a completed wait; never clears it.
   [[nodiscard]] bool terminal_error() const noexcept;
-  // TUI thread: observe a producer's latched notify failure so composition can exit.
+  // TUI thread: observe a producer's recorded notify failure so TuiSession can exit.
   // A failed notification itself does not guarantee that an already blocked wait wakes.
   [[nodiscard]] bool notification_failed() const noexcept;
   // TUI thread after timer/application stages: check current deadlines without
@@ -101,9 +99,9 @@ class TuiEventLoop final
   // Handles alone may mutate registrations by ID; feature clients use their handles.
   friend class TuiTimer;
   // TUI thread: store a nonempty callback under a never-reused ID and return its
-  // sole retirement handle. The caller keeps callback targets alive until retirement.
+  // only handle responsible for removing it. Targets stay alive until removal and any active call returns.
   [[nodiscard]] TuiTimer register_timer(TuiTimerRegistration::Callback callback);
-  // TUI thread: retire the ID when its handle dies; copied callbacks already executing
+  // TUI thread: remove the ID when its handle dies; copied callbacks already executing
   // are unaffected, so their targets must survive until the invocation returns.
   void remove_timer(std::uint64_t id) noexcept;
   // TUI thread: disarm an existing ID and invalidate its pending dispatch snapshot;
@@ -122,14 +120,14 @@ class TuiEventLoop final
   void repeat_timer(std::uint64_t id, Clock::duration interval, Clock::time_point now);
 
   // Set at TUI-thread construction and released at destruction. Shared ownership
-  // lets producer notify calls pin only OS resources; the last pin may destroy this
-  // state on a producer thread. Tokens expire only after all such shares are gone.
+  // keeps OS resources alive during producer notify calls; the last such call may
+  // destroy this state on its producer thread. Tokens expire after all shares are gone.
   std::shared_ptr<TuiWaitState> wait_state_;
-  // TUI-thread registry, populated by handle creation and erased by handle retirement.
+  // TUI-thread registry, with entries created and removed through TuiTimer handles.
   // Callbacks are copied out before invocation so callbacks may mutate this map.
   std::map<std::uint64_t, TuiTimerRegistration> timers_;
   // TUI thread assigns increasing IDs and rejects exhaustion to avoid confusing a
-  // retired handle or dispatch snapshot with a later registration.
+  // removed registration or dispatch snapshot with a later registration.
   std::uint64_t next_timer_id_ = 1;
   // TUI thread sets this irreversible latch; it suppresses further callbacks and waits.
   bool stopped_ = false;

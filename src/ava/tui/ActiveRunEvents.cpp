@@ -1,4 +1,4 @@
-// Reduces worker event batches into receipt-authorized conversation and local output.
+// Collects worker events and selects conversation text using backend ordinary-turn IDs.
 #include "sys.h"
 #include "ActiveRunEvents.h"
 #include "ava/tui/command_output.h"
@@ -10,8 +10,8 @@
 namespace ava::tui {
 namespace detail {
 
-// Pure identity check used by TUI projection: only a nonempty exact receipt match
-// authorizes conversation text, regardless of other event metadata.
+// Pure TUI check: an event needs a nonempty request ID exactly matching a backend
+// ordinary_turn_request_ids entry to supply command conversation text.
 bool command_event_request_has_conversation_authority(std::optional<std::string> const& event_request_id,
                                                       std::span<std::string const> ordinary_turn_request_ids) noexcept
 {
@@ -36,8 +36,8 @@ bool has_transcript_events(TuiEventState const& state)
   return !state.transcript.empty() || !state.pending_assistant_text.empty() || !state.pending_reasoning_text.empty() || !state.pending_tools.empty();
 }
 
-// TUI projection: snapshot a partition without parsing unfinished text, then
-// transfer owned items to the authorized conversation sequence.
+// TUI thread: snapshot one request's events without parsing unfinished text, then
+// transfer owned items to the conversation sequence selected by request ID.
 void append_transcript(std::vector<TranscriptItem>& destination, TuiEventState const& state)
 {
   auto items = event_state_transcript_snapshot(state, PendingTextProjection::Unparsed);
@@ -57,15 +57,15 @@ std::string tool_identity(ToolTimelineItem const& tool)
   return {};
 }
 
-// TUI local output retains only finished tools; a terminal lifecycle paired with
-// Running status is still insufficient evidence of settlement.
+// TUI local output retains only finished tools. A finished lifecycle still needs
+// a non-Running status before this card counts as complete.
 bool settled_tool(ToolTimelineItem const& tool)
 {
   return tool.status != ToolTimelineStatus::Running &&
          (tool.lifecycle == ToolLifecycleState::Complete || tool.lifecycle == ToolLifecycleState::Canceled || tool.lifecycle == ToolLifecycleState::Error);
 }
 
-// TUI local output: replace an existing identified card with the latest settled
+// TUI local output: replace an existing identified card with the latest finished
 // value; anonymous cards append because no safe equality key exists.
 void merge_tool(std::vector<ToolTimelineItem>& tools, ToolTimelineItem const& tool)
 {
@@ -84,7 +84,7 @@ void merge_tool(std::vector<ToolTimelineItem>& tools, ToolTimelineItem const& to
 
 } // namespace
 
-// TUI settlement: merge settled cards from both storage locations, preserving
+// TUI completion: merge finished cards from both storage locations, preserving
 // transcript-before-pending order and replacing matching identities.
 void detail::merge_settled_tools(std::vector<ToolTimelineItem>& tools, TuiEventState const& state)
 {
@@ -238,8 +238,8 @@ bool ActiveRunEvents::conversation_committed() const noexcept
 
 bool ActiveRunEvents::authorized_events_received() const
 {
-  // Only command submissions need receipt-filtered evidence; ordinary runs use
-  // the inbox history, which includes events already drained into this reducer.
+  // Call this only for command submissions, whose events need request-ID filtering.
+  // Ordinary runs use inbox history, including events already drained here.
   ASSERT(command_);
   if (detail::command_event_request_has_conversation_authority(std::optional<std::string>{initial_request_id_}, ordinary_turn_request_ids_) &&
       has_transcript_events(initial_command_))

@@ -162,7 +162,7 @@ RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
         break;
       if (*character == L'\x1b')
       {
-        // Protocol ownership: assemble a complete bounded escape/control sequence
+        // Assemble a complete bounded escape/control sequence
         // after ESC. Paste-end ends the paste; an armed OSC 11 reply is handled and
         // discarded without joining the paste payload; all other escape content is
         // preserved under ordinary paste normalization and the byte cap.
@@ -194,7 +194,7 @@ RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
 // TUI thread after ESC, with Context alive: read continuation under the configured
 // per-read escape timeout and restore the caller's setting. No continuation means
 // a standalone Escape; a consumed unrecognized/protocol sequence yields Unknown,
-// while paste-start delegates to atomic paste assembly. Returned text owns its bytes.
+// while paste-start assembles one paste event. Returned text owns its bytes.
 std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& terminal_context)
 {
   std::string consumed;
@@ -275,12 +275,14 @@ std::optional<std::string> printable_jump_target(RuntimeInput const& input)
   return text.substr(0, length);
 }
 
-// TUI session boundary: drop owned replay values so they cannot leak into a later session.
+// TUI thread: discard saved startup events, including during prompt input cleanup.
+// Keep incomplete-paste tracking so a delayed tail cannot become ordinary keys.
 void clear_startup_input_queue()
 {
   input_replay().startup.clear();
 }
 
+// TUI session entry/exit: clear replay and paste tracking before another session decodes input.
 void reset_input_decoder()
 {
   auto& replay = input_replay();
@@ -316,7 +318,7 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
   auto key = terminal_context.read_curses_key(value);
   if (!key)
     return std::nullopt;
-  // Signal handling remains composition's job. When a read did consume a key,
+  // Signal handling remains TuiSession's job. When a read did consume a key,
   // preserve the existing CtrlC routing for a terminal signal already observed here.
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
@@ -367,7 +369,7 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
 }
 
 // TUI startup path with Application initialized: use its live Context while leaving
-// this module's startup FIFO untouched, so probe drainage cannot recycle saved events.
+// this module's startup FIFO untouched, so the probe cannot read and requeue saved events.
 RuntimeInput read_curses_input_from_terminal()
 {
   return read_curses_input_from_terminal(core::Application::instance().terminal_context());

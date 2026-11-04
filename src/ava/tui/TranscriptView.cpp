@@ -1,4 +1,4 @@
-// Implements TUI-thread viewport transitions while preserving the layout authority used for selection.
+// Implements TUI-thread viewport transitions while preserving the layout used for selection.
 #include "sys.h"
 #include "TranscriptView.h"
 #include "runtime_state_internal.h"
@@ -100,8 +100,8 @@ void TranscriptView::complete_transcript_update(TranscriptUpdate const& update, 
   {
     defer_update(update.anchor(), item_index_shift);
     new_output_count_ += event_count;
-    // Keep new-output projection lag until the existing paint/synchronization
-    // boundary; UpdatedNoRender relies on the last painted chrome authority.
+    // Keep the displayed new-output badge unchanged until paint/synchronization.
+    // UpdatedNoRender updates scroll data without changing the last painted count.
     presentation_.publish_transcript_scroll(scroll_offset_);
   }
   else
@@ -204,8 +204,8 @@ void TranscriptView::publish_selection(detail::TranscriptLayoutCache const& layo
     selection_.clear();
     pending_live_selection_item_index_shift_ = 0;
   }
-  // Only live authority consumes live eviction debt; a frozen paint keeps endpoints bound to the rows the user
-  // actually saw.
+  // Apply pending item-index adjustments only to live layout; a frozen paint keeps endpoints on the rows
+  // the user actually saw.
   if (!selection_.empty())
   {
     if (projection == TranscriptSelectionProjection::Live && pending_live_selection_item_index_shift_ != 0)

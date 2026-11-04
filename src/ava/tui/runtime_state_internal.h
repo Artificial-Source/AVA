@@ -1,4 +1,4 @@
-// Defines serialized event storage and the TUI-owned projection published through feature-specific operations.
+// Defines serialized event storage and the TUI-owned display data updated through feature operations.
 #pragma once
 
 #include "ava/event/EventEnvelope.h"
@@ -62,7 +62,7 @@ using QueuedTuiEvent = std::variant<QueuedRuntimeEvent, ava::event::EventEnvelop
 // has no independent synchronization and must never be shared without that lock.
 struct RuntimeEventQueue
 {
-  // Externally serialized caller: append event with its captured context and mark receipt; production
+  // Externally serialized caller: append an event with its captured context and remember that events arrived; production
   // ActiveRunInbox holds its sole producer mutex.
   [[nodiscard]] ava::core::VoidResult enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context = {});
   // Externally serialized caller: retain the already formed envelope without changing provenance or FIFO order.
@@ -71,24 +71,24 @@ struct RuntimeEventQueue
   // events.
   void enqueue_subagent_launch(ava::agent::SubagentLaunchNotification const& notification);
   // Externally serialized TUI consumer: move at most maximum oldest entries out; remaining entries retain FIFO
-  // order and receipt history survives.
+  // order and the record of earlier arrivals survives.
   [[nodiscard]] std::vector<QueuedTuiEvent> drain(std::size_t maximum = std::numeric_limits<std::size_t>::max());
   // Externally serialized reader: test backlog for loop readiness; this value performs no locking itself.
   [[nodiscard]] bool has_pending() const;
-  // Externally serialized owner: drop all entries and receipt history when retiring the run/session queue.
+  // Externally serialized owner: drop all entries and clear the record of earlier arrivals when retiring the run/session queue.
   void discard();
   // Externally serialized reader: distinguish a run that emitted events from an empty one even after earlier
   // drains.
   [[nodiscard]] bool received_any() const;
 
-  // Queued runtime events contain arbitrary messages and authority aggregates.
+  // Queued runtime events contain arbitrary message bodies and backend data.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   // FIFO payload ownership, accessed only under the owning inbox's mutex in production; drained values become
   // TUI-owned.
   std::deque<QueuedTuiEvent> events;
-  // Receipt history set by every enqueue and cleared only by discard; not equivalent to current backlog.
+  // Records that at least one event arrived; enqueue sets it and discard clears it. Draining does not clear it.
   bool received = false;
 };
 
@@ -98,7 +98,7 @@ enum class RuntimeEventDrainResult
 {
   // No queued events were consumed by this drain.
   NoEvents,
-  // Projection changed while detached/frozen painting policy keeps the current frame.
+  // Events were consumed without painting here; a frame may be requested for the paint stage.
   UpdatedNoRender,
   // Reduction requested or performed its applicable render successfully.
   Rendered,
@@ -164,15 +164,15 @@ struct PendingSessionArchiveAction
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Session-owned TUI-thread projection boundary. Features publish named facts and renderers receive only const
-// DTO references; feature policy and backend authority stay in their owners. The fully constructed frontend
-// outlives this object. No internal mutex permits worker access: session ordering serializes reads,
-// publication, and destruction.
+// Session-owned display storage used only by the TUI thread. Features update it through named
+// operations; renderers borrow const views. Features still own their behavior, and the backend
+// still validates actions. The fully constructed frontend outlives this object. There is no
+// internal lock: workers must never read or write these views.
 class RuntimePresentationState final
 {
  public:
   // TUI thread after concrete frontend construction: hydrate initial display/catalog/session facts through safe
-  // application boundaries; frontend must be nonnull and outlive this projection.
+  // application boundaries; frontend must be nonnull and outlive this object.
   RuntimePresentationState(TuiFrontEnd* frontend, std::string const& initial_keybind_status);
 
   // TUI thread at serialized application boundaries: refresh mode in both screen and live sidebar from frontend
@@ -181,9 +181,8 @@ class RuntimePresentationState final
   // TUI thread: apply only changed or unversioned catalog deliveries, then rebuild local completion hints and
   // invalidate completion cache generation.
   void apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery);
-  // The retained catalog/todo transports read at one serialized boundary.
-  // Owned temporary transport batch read on the TUI thread and moved into apply_boundary_data; it carries
-  // retained catalog/todo facts without popup-local authority.
+  // Temporary owned catalog/todo values read together on the TUI thread, then
+  // moved into apply_boundary_data. This does not include popup-only state.
   struct BoundaryReads
   {
     // Owned optional catalog delivery; absence preserves existing command/file-reference projections.
@@ -191,6 +190,7 @@ class RuntimePresentationState final
     // Owned optional committed todo read; presence replaces live sidebar todos at the same application
     // boundary.
     std::optional<std::vector<agent::TodoItem>> todos;
+    // Catalog rows and todo text may contain private paths or user content.
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
   // Reads the retained transports through the frontend's application boundary. Like
@@ -200,7 +200,7 @@ class RuntimePresentationState final
   void apply_boundary_data(TuiFrontEnd const& frontend, BoundaryReads reads);
   // TUI thread: reads and applies at one serialized application boundary.
   void refresh_after_backend_action(TuiFrontEnd& frontend);
-  // Applies TUI-owned bindings and refreshes every local hint projection.
+  // Applies TUI-owned bindings and refreshes every local hint.
   // This never changes backend catalog generations or applies a backend snapshot.
   void apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings);
   // Applies TUI-owned display values without changing backend runtime state.
@@ -212,7 +212,7 @@ class RuntimePresentationState final
   // TUI thread: publish feedback without giving feature owners writable screen storage.
   void publish_status(std::string status);
   // TUI thread: Composer alone selects and projects editor/completion fields.
-  // The composer and this projection must outlive the synchronous call only.
+  // The composer and this display storage must outlive the synchronous call only.
   void publish_composer(Composer& composer);
   // TUI thread: let Composer project only its selected completion/suppression facts after editor actions.
   void publish_completion(Composer const& composer);
@@ -225,7 +225,7 @@ class RuntimePresentationState final
   // remains outside this DTO.
   void clear_attachment_badges() noexcept;
   // TUI thread: SelectorHost owns opening/closing policy. These operations keep
-  // one row vector in the projection; readers borrow it until the next mutation.
+  // one row vector in display storage; readers borrow it until the next mutation.
   void publish_selector(std::optional<SelectListView> view);
   // TUI thread with a published selector: replace selected index/query from SelectorHost's validated input
   // result.
@@ -248,34 +248,31 @@ class RuntimePresentationState final
   // TUI thread with a live question prompt: publish selection/options/custom text without replacing its request
   // identity.
   void publish_question_input(std::size_t selected, std::vector<QuestionPromptOptionView> options, std::string text);
-  // TUI thread: plugin admission stays in its synchronized coordinator. These
+  // TUI thread: the synchronized plugin coordinator accepts or rejects requests. These
   // methods only publish acknowledged surfaces or remove retired surfaces.
   void publish_plugin_dock(std::optional<TuiPluginUiDockView> dock);
-  // TUI thread: publish acknowledged plugin modal data or retire it; synchronized coordinator retains request
-  // authority.
+  // TUI thread: publish acknowledged plugin modal data or retire it; the synchronized coordinator still owns the request lifetime.
   void publish_plugin_modal(std::optional<TuiPluginUiModalView> modal);
   // TUI thread with a published modal: apply its validated option index while keeping the request identity
   // intact.
   void publish_plugin_selection(std::size_t selected);
-  // TUI thread: publish the workspace's bounded view without backend job authority.
+  // TUI thread: publish the workspace's bounded view; the backend alone controls its jobs.
   void publish_workspace(std::optional<SubagentWorkspaceView> workspace);
   // TUI thread: accepted Mermaid output changes transcript geometry, so publish
-  // its immutable shared projection and generation together.
+  // its immutable shared display data and layout generation together.
   void publish_mermaid(std::shared_ptr<detail::MermaidTranscriptProjection const> projection);
 
-  // TUI thread: viewport owners publish chrome without exposing transcript storage.
+  // TUI thread: viewport owners update scroll position without exposing transcript storage.
   void publish_transcript_scroll(std::size_t offset);
   // TUI thread at paint/synchronization: publish scroll and detached-output count together so reserved-row
-  // geometry matches visible chrome.
+  // geometry matches the visible position and new-output indicator.
   void publish_transcript_chrome(std::size_t offset, std::size_t new_output_count);
-  // TUI thread at frame preparation: copy either live sidebar or detached snapshot into the visible frame
-  // projection.
+  // TUI thread at frame preparation: copy either live sidebar or detached snapshot into the visible frame.
   void publish_visible_sidebar(SidebarSnapshot sidebar);
   // TUI thread: publish the viewport owner's timed visibility decision; renderer registration owns actual
   // expiry scheduling.
   void publish_position_indicator(bool visible);
-  // TUI thread: ask the selection owner to project validated endpoints; never expose writable selection
-  // authority.
+  // TUI thread: ask the selection owner to project validated endpoints; never expose writable selection state.
   void publish_selection(RuntimeTranscriptSelectionState const& selection);
   // TUI thread: drawer and output scrolling are clamped by their layout owner.
   void publish_sidebar_drawer(bool visible, std::size_t offset);
@@ -285,7 +282,7 @@ class RuntimePresentationState final
   void publish_command_output_scroll(std::size_t offset);
   // TUI thread: preserve feedback precedence when an action replaces local output.
   void publish_local_status(std::string status);
-  // TUI thread: settle local command feedback/output/tool recording in its existing precedence order; submitted
+  // TUI thread: apply local command feedback/output/tool recording in its existing precedence order; submitted
   // text is borrowed only during this call.
   void publish_local_completion(std::string_view submitted, std::vector<std::string> output, std::vector<ToolTimelineItem> tools = {},
                                 bool record_tools = true);
@@ -312,14 +309,14 @@ class RuntimePresentationState final
   // TUI thread after display reload: refresh transaction baseline and reapply active local preview without
   // persisting backend settings.
   void reapply_display_preview(runtime_views::DisplayPreviewTransaction& preview);
-  // TUI thread: replace displayed trust facts from the authority owner; this publication grants no permissions.
+  // TUI thread: replace displayed trust facts from the backend; displaying them grants no permissions.
   void publish_project_trust(std::optional<ProjectTrustSnapshot> trust);
   // TUI thread: choose the display style; caller coordinates any explicit transcript invalidation or viewport
   // restoration.
   void publish_tool_presentation(ToolPresentation presentation);
   // TUI thread: choose whether thinking is drawn; caller coordinates corresponding layout/viewport transitions.
   void publish_thinking_visibility(bool visible);
-  // TUI thread: scope search layout preparation by moving, then restoring, the single selector projection.
+  // TUI thread: scope search layout preparation by moving, then restoring, the single selector view.
   [[nodiscard]] std::optional<SelectListView> withdraw_selector_projection();
   // TUI thread after popup retirement: release overview-local facts so later openings hydrate a fresh view.
   void clear_startup_overview();
@@ -352,8 +349,8 @@ class RuntimePresentationState final
   // TUI thread: find newest width-boundable thinking block, toggle it, and return its item index if geometry
   // changed.
   [[nodiscard]] std::optional<std::size_t> toggle_latest_thinking_details(std::size_t width);
-  // TUI thread: run reduction replaces current activity/todos; file history is bounded
-  // and merged by path so a later update does not duplicate an earlier edit.
+  // TUI thread: show whether a run is processing. ActiveRun changes this at start
+  // and completion; this operation does not start, stop or join its worker.
   void publish_processing(bool processing);
   // TUI thread: publish Spinner's current frame; scheduling and active-run lifetime remain with its owner.
   void publish_spinner(std::size_t frame);
@@ -362,8 +359,8 @@ class RuntimePresentationState final
   void publish_run_activity(std::vector<SidebarActivityItem> activity);
   // TUI thread after reduction: replace live todo facts; no backend todo mutation occurs here.
   void publish_run_todos(std::vector<agent::TodoItem> todos);
-  // TUI thread: replace the display projection of queued follow-ups; queue admission/storage stays with the
-  // active run.
+  // TUI thread: replace the displayed queued follow-ups; the backend run still accepts and stores
+  // those messages.
   void publish_queued_messages(std::vector<QueuedMessageItem> messages);
   // TUI thread: merge unseen paths into live sidebar history and retain at most the most recent 50 entries.
   void publish_modified_files(std::vector<SidebarModifiedFile> const& files);
@@ -374,10 +371,10 @@ class RuntimePresentationState final
   void settle_responding_activity(ToolTimelineStatus status, std::string detail);
 
   // These existing render DTOs are shared only on the TUI thread. Feature owners
-  // publish their own screen fields here; renderer reads/prepares the projection.
-  // Selector, composer, viewport and attachment authority stays in its owner.
+  // publish their own screen fields here; the renderer reads/prepares display values.
+  // Selector, composer, viewport and attachment behavior stays with those feature owners.
   // References remain valid for this object's lifetime; nested views expire on
-  // the corresponding feature's next mutation. No backend authority is exposed.
+  // the corresponding feature's next mutation. These references cannot perform backend actions.
   [[nodiscard]] ComposerSnapshot const& screen() const noexcept { return snapshot_; }
   // Live sidebar facts are published by backend hydration and ActiveRun; the
   // renderer/TranscriptView consume them through const references or copies.
@@ -397,7 +394,7 @@ class RuntimePresentationState final
   // Owned TUI-thread render DTO; named feature publications are its only external mutation path and nested
   // borrows expire on those mutations.
   ComposerSnapshot snapshot_;
-  // Non-owning nonnull application frontend outlives this projection; only TUI-thread hydration reads it.
+  // Non-owning nonnull application frontend outlives this display storage; only TUI-thread hydration reads it.
   TuiFrontEnd* frontend_;
   // TUI-thread generation last accepted for slash commands; absent generation forces reapplication of
   // unversioned delivery.
@@ -406,17 +403,17 @@ class RuntimePresentationState final
   // completion matches.
   std::optional<std::size_t> applied_workspace_catalog_generation_;
 
-  // Owned live sidebar facts from hydration/run publication; TranscriptView may hold a separate frozen copy
+  // Owned live sidebar facts from startup refreshes and run updates; TranscriptView may hold a separate frozen copy
   // while detached.
   SidebarSnapshot sidebar_;
 };
 
-// TUI-thread projection transform used when committed session identity changes.
+// TUI-thread display reset used when committed session identity changes.
 // Clear only session-local facts; mode/version remain process or backend display values.
 void reset_session_sidebar(SidebarSnapshot& sidebar);
 
 // Shared overview presentation helpers for popup-local display/keybinding changes
-// and competing presentation authority.
+// when a competing view opens.
 void close_startup_overview_presentation(RuntimePresentationState& presentation, SelectorHost& selectors);
 // TUI thread after local hint/display changes: rebuild active overview rows while preserving safe
 // filter/selection; close when its popup facts have retired.

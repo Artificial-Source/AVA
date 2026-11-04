@@ -1,5 +1,5 @@
-// Encapsulates one loop-owned deadline and its dispatch generation; TuiTimer owns
-// retirement and TuiEventLoop decides when the callback may run.
+// Encapsulates one loop-owned deadline and its dispatch generation; TuiTimer removes
+// the registration on destruction and TuiEventLoop decides when the callback may run.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
@@ -22,8 +22,9 @@ class TuiTimerRegistration final
  public:
   // Use the same monotonic clock as the loop and public timer handles.
   using Clock = std::chrono::steady_clock;
-  // TUI-thread publication/invalidation only: callbacks must not paint, poll input,
-  // service control, wait or recursively dispatch. Targets remain valid through return.
+  // TUI-thread callback that updates feature state or requests a frame. It must not
+  // paint, poll input, run session control checks, wait or recursively dispatch timers. Its target
+  // stays alive until the callback returns.
   using Callback = std::function<void(Clock::time_point)>;
 
   // TUI thread: own a nonempty binding in a disarmed record. The binding's borrowed
@@ -35,11 +36,11 @@ class TuiTimerRegistration final
   // TUI thread: copy the current wake deadline; absence means disarmed. Later
   // scheduling changes may invalidate this value, so callers retain no reference.
   [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept { return deadline_; }
-  // TUI thread: test deadline eligibility at now without changing repetition or
-  // claiming dispatch; the loop rechecks after earlier callbacks have run.
+  // TUI thread: check whether the deadline is due at now without changing the schedule
+  // or running the callback; the loop rechecks after earlier callbacks have run.
   [[nodiscard]] bool due(Clock::time_point now) const noexcept;
   // TUI thread: remove deadline/repetition and advance the generation so a saved
-  // due entry cannot fire; preserve the callback for future arms.
+  // due entry cannot fire; preserve the callback so this registration can be armed again.
   void cancel() noexcept;
   // TUI thread: replace any repeating/one-shot schedule and advance generation.
   // A deadline at or before now becomes eligible on the next dispatch pass.

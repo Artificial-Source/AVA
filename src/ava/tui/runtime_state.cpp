@@ -1,4 +1,4 @@
-// Hydrates and publishes TUI display facts while keeping backend authority and feature state in their owners.
+// Hydrates and publishes TUI display facts while leaving backend validation and feature state with their owners.
 #include "sys.h"
 #include "ActiveRunEvents.h"
 #include "Composer.h"
@@ -194,7 +194,7 @@ void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& fronten
     applied_workspace_catalog_generation_ = delivery.workspace_catalog_generation;
     completion_sources_changed = true;
   }
-  // Invalidate completion authority once after all applicable catalogs are applied, keeping both catalogs and
+  // Invalidate the completion cache once after all applicable catalogs are applied, keeping both catalogs and
   // local hints coherent.
   if (completion_sources_changed)
   {
@@ -302,8 +302,8 @@ void RuntimePresentationState::reset_session_projection(bool close_overview)
   snapshot_.sidebar.reset();
   snapshot_.sidebar_drawer_visible = false;
   snapshot_.sidebar_drawer_scroll_offset = 0;
-  // Clear editor projection before feature owners publish replacement state; session coordinator separately
-  // retires each feature's private authority.
+  // Clear the displayed editor before feature owners publish replacement state; session coordinator separately
+  // clears each feature's private state.
   snapshot_.input.clear();
   snapshot_.input_cursor = 0;
   snapshot_.input_selection_start = std::string::npos;
@@ -333,7 +333,7 @@ void RuntimePresentationState::finish_session_transition(std::string committed_s
   snapshot_.session_id = std::move(committed_session_id);
 }
 
-// Publication runs synchronously on the TUI thread. Readers never receive a
+// Display updates run synchronously on the TUI thread. Readers never receive a
 // writable alias, and feature owners keep policy and backend work outside here.
 void RuntimePresentationState::publish_status(std::string status)
 {
@@ -437,8 +437,8 @@ void RuntimePresentationState::publish_mermaid(std::shared_ptr<detail::MermaidTr
   ++snapshot_.transcript_generation;
 }
 
-// Viewport updates deliberately separate the scroll offset from painted chrome:
-// output received while detached must not move the last painted new-output badge.
+// Changing scroll offset alone preserves the last painted new-output count.
+// Updates received while detached must not change that count until frame preparation.
 void RuntimePresentationState::publish_transcript_scroll(std::size_t offset)
 {
   snapshot_.transcript_scroll_offset = offset;

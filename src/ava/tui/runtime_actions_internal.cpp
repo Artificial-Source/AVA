@@ -1,4 +1,4 @@
-// Coordinates local TUI actions and explicit frontend authority handoffs.
+// Coordinates local TUI actions and calls to frontend services.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "PendingAttachments.h"
@@ -51,8 +51,8 @@ std::optional<std::size_t> kitty_image_id_from_sha(std::string_view sha)
 {
   std::size_t value = 0;
   std::size_t digits = 0;
-  // Bound the identifier to a protocol-sized prefix and stop on invalid text; the
-  // reference remains backend-owned and this helper claims no hash validation authority.
+  // Use only the protocol-sized prefix and stop on invalid text. This derives a display
+  // identifier; the backend remains responsible for validating the attachment hash.
   for (char const ch : sha)
   {
     auto const byte = static_cast<unsigned char>(ch);
@@ -83,8 +83,8 @@ std::optional<std::size_t> kitty_image_id_from_sha(std::string_view sha)
   return value == 0 ? std::size_t{1} : value;
 }
 
-// TUI thread: load image bytes only through frontend authority when previews are enabled.
-// Return an owned immutable payload shared by badge/projection copies; no worker uses it here.
+// TUI thread: ask the frontend to load image bytes only when previews are enabled.
+// Return an immutable payload shared by badge copies; no worker uses it here.
 std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd const& frontend, ava::session::ImageAttachmentRef const& attachment,
                                                                  TerminalImageCapabilities const& capabilities, bool show_images)
 {
@@ -95,7 +95,7 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
   if (!loaded)
     return std::nullopt;
   // Sharing the immutable encoded bytes avoids duplicating image payloads when badge
-  // projections are copied; the last preview owner releases them without frontend access.
+  // display data is copied; the last preview owner releases them without frontend access.
   auto dimensions = image_dimensions_from_bytes(loaded->bytes, attachment.mime_type).value_or(ImageDimensions{.width_px = 800, .height_px = 600});
   return PendingAttachmentItem::Preview{.protocol = capabilities.images,
                                         .base64_data = std::make_shared<std::string const>(runtime_transcript::base64_encode(loaded->bytes)),
@@ -155,7 +155,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     return renderer_.render() ? DisplaySettingsReloadPollOutcome::Unchanged : DisplaySettingsReloadPollOutcome::TerminalFailure;
   }
   // A successful check ends error deduplication. Only an explicit applied result changes
-  // authoritative presentation; Session rebases any Settings overlay before final paint.
+  // the loaded display values; Session rebases any Settings preview before final paint.
   last_display_reload_error_.reset();
   if (!*reloaded)
     return DisplaySettingsReloadPollOutcome::Unchanged;
@@ -270,7 +270,7 @@ bool RuntimeActionController::paste_clipboard_image()
   if (!renderer_.paint_for_handoff())
     return false;
 
-  // The pending frame precedes potentially blocking clipboard authority. Stage nothing
+  // Paint the pending frame before the potentially blocking clipboard import. Stage nothing
   // until import succeeds with a reference; errors and an empty clipboard retain the draft.
   auto imported = frontend_.on_paste_clipboard_image();
   if (!imported)

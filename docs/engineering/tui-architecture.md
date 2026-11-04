@@ -1,24 +1,41 @@
 # TUI architecture
 
-This is the implementation guide for the terminal UI refactor in issue #93.
-It describes the current ownership and control flow under `src/ava/tui/`.
-It is a guide for changing the code, not a new compatibility contract. The
+This guide describes the current ownership and control flow of the terminal UI
+under `src/ava/tui/`. Use it when changing TUI internals. The
 [application architecture](../development/architecture.md) explains the backend
 that the TUI calls. The [C++ safety rules](../development/cpp-safety-rules.md)
 still apply to every change.
 
 ## Start here
 
-Read `TuiSession.h` for ownership, then `TuiSession::run` in `TuiSession.cpp`
-for the loop. Read `TuiEventLoop.h` next for waiting and timer lifetimes.
-These files coordinate work. Feature algorithms belong to the owners listed
-below, rather than to another large session handler.
+Read [TuiSession.h](../../src/ava/tui/TuiSession.h) for ownership, then
+`TuiSession::run` in [TuiSession.cpp](../../src/ava/tui/TuiSession.cpp) for the loop.
+Read [TuiEventLoop.h](../../src/ava/tui/TuiEventLoop.h) next for waiting and timer
+lifetimes.
+These files coordinate work. Keep feature algorithms in the owners listed below.
 
 For a submitted message, follow `RuntimeSubmitController::submit`,
 `ActiveRun::start`, `ActiveRunInbox`, and `ActiveRun::complete`. For a key,
 follow `runtime_input::poll_curses_input`, the dispatch order in the session
-constructor, and the handler that claims the key. Active submissions use
+constructor, and the first handler that consumes the key. Active submissions use
 `ActiveRunInput` for ordinary keys.
+
+## Glossary
+
+Prefer the concrete object or operation in comments. These terms still appear in
+some APIs and explain the boundaries between features:
+
+| Term | Meaning here |
+| --- | --- |
+| Authority | The component or data that decides a particular operation. For example, backend validation decides whether a session can open; the last painted layout decides where a mouse click landed. A display view alone does not grant backend access. |
+| Receipt | A request ID returned in `TuiSubmitResult::ordinary_turn_request_ids` to confirm a real model turn. For a slash command, an event enters the conversation only when its nonempty request ID exactly matches one of those IDs. |
+| Admission | Whether a named queue or input route currently accepts new work. Closing a queue, stopping key handling, and requesting worker cancellation are separate actions. |
+| Claim | The TUI coordinator's hold on a pending prompt request. The worker stays blocked until an answer exists and the hold is released, after callbacks borrowing worker data are removed. |
+| Projection | Data prepared for display. A const display view is borrowed on the TUI thread; it is not a synchronized snapshot for workers. |
+| Publication | Storing data so its consumer can read it. A producer stores a queued event before notifying the loop. Updating display data does not mean a frame has been painted. |
+| Settle | Apply a finished operation's result and run its completion cleanup. Comments should name those steps when their order matters. |
+| Chrome | Decorations around the content, such as the scroll position and new-output count. Comments should name the particular decoration. |
+| Final result | The submission worker's returned `TuiSubmitResult` or captured exception, carried by `ActiveRunResult`. The separate `ActiveRunOutcome` tells the session whether to continue or exit. “Terminal” elsewhere means the user's TTY. |
 
 ## Ownership and destruction
 
@@ -66,12 +83,15 @@ flowchart TD
   Inbox -->|drain on TUI thread| State
 ```
 
-Normal exit cancels the control timer, shuts down the active run, retires
-Mermaid/plugin/prompt admission and invokes the frontend shutdown hook while
+Normal exit cancels the control timer, shuts down the active run, stops
+Mermaid/plugin/prompt requests and invokes the frontend shutdown hook while
 the terminal is still available. The session destructor also covers early
 returns and exceptions. Active-run cleanup releases waiting prompts and plugin
 requests before joining its worker. Joining before releasing those waits can
-deadlock. The frontend's outer shutdown guard covers exits that never reach
+deadlock. If any release step throws, shutdown logs only the failed stage, records
+the failure and terminates instead of joining a worker that may never return.
+Failures after the join produce a nonzero session outcome. The frontend's outer
+shutdown guard covers exits that never reach
 the session's normal exit path.
 
 ## One turn of the loop
@@ -136,7 +156,7 @@ Notifications carry no payload and may coalesce. A failed notification records
 a failure for control to observe; recording that flag does not itself wake an
 already blocked waiter. The control timer gives it another observation opportunity. The TUI must re-examine the
 mailboxes each turn rather than treat a notification count as an event count.
-`ActiveRunInbox` protects its queue, captured request context and terminal result
+`ActiveRunInbox` protects its queue, captured request context and final result
 with one mutex. Its `RuntimeEventQueue` member is only FIFO storage and has no
 independent lock. FIFO means first in, first out: draining preserves publication
 order within the queue.
@@ -187,11 +207,11 @@ policy; silently dropping tool results or permission requests is not acceptable.
 recognized local commands, records submitted history and starts `ActiveRun`.
 The operation creates its inbox and backend queue capabilities, opens prompt and
 plugin admission, and launches the worker. `ActiveRunEvents` reduces received
-values on the TUI thread. For commands, receipts determine which events have
-conversation authority; unrelated command output must not silently enter the
-conversation transcript.
+values on the TUI thread. For slash commands, an event may enter the conversation only when its request
+ID matches a backend-returned `ordinary_turn_request_ids` entry. Other command
+output stays outside that transcript.
 
-The worker publishes exactly one terminal result after its backend callback
+The worker publishes exactly one final result after its backend callback
 scopes have ended. Taking that result does not permit a second publication:
 the inbox retains a consumed state. Completion retires worker-borrowing prompt
 callbacks, joins the worker, authorizes receipts, applies any committed session
@@ -234,34 +254,77 @@ plugin dialog does not grant access to mutable session or permission state.
 
 ## Adding a key, selector or timer
 
-For a key binding, start in `keybindings.h/.cpp` and the action's existing feature
-owner. Keep parsing, help text and defaults consistent. Put editor behavior in
-`Composer`; let its result request cross-owner work such as submission or
-transcript copying. Choose the correct dispatcher stage in `TuiSession` and,
-where applicable, `ActiveRunInput`. Earlier stages win when configured bindings
-overlap. Add a regression for both ordinary and overlapping bindings, including
-active-run behavior when that path is available.
+### Add a configurable key binding
 
-For a selector or modal, use `SelectorHost` and the appropriate policy owner.
-Publish a view through `RuntimePresentationState` rather than add writable screen
-access. Define which existing modal wins, whether typing passes through, how
-Cancel restores previews or selection, and whether the underlying transcript
-layout stays frozen. Return a typed action to composition when another owner
-must run. Keep backend validation in the frontend/application callback. A new
-blocking worker request also needs an explicit claim-release and shutdown order.
+1. Add the action and its binding storage in
+   [keybindings.h](../../src/ava/tui/keybindings.h). In
+   [keybindings.cpp](../../src/ava/tui/keybindings.cpp), update `kActions`,
+   `keys_for_action`, `config_action_id`, `default_key_bindings`, `action_for_key`,
+   `action_name`, `action_label` and `action_description` as needed. These keep
+   configuration, defaults and help text consistent.
+2. Implement the behavior in the feature that owns the state. Editing belongs in
+   [Composer](../../src/ava/tui/Composer.h). Return a typed request for work owned
+   elsewhere, such as submission or transcript copying.
+3. Place the handler at its intended precedence in `TuiSession::input_dispatcher_`
+   in the [session constructor](../../src/ava/tui/TuiSession.cpp). If the binding
+   is available during submission, also place it in `ActiveRunInput::dispatcher_`
+   in [ActiveRunInput.cpp](../../src/ava/tui/ActiveRunInput.cpp). Earlier handlers
+   win when configured keys overlap. Host modals capture keys first; Submit must
+   remain ahead of ordinary Space insertion.
+4. Extend [keybinding tests](../../tests/tui_keybinding_tests.cpp) for parsing and
+   defaults, and [composer dispatch tests](../../tests/tui_composer_dispatch_tests.cpp)
+   for editing and collisions. Use the [session tests](../../tests/tui_session_tests.cpp)
+   when the behavior depends on ordering across features. Check both idle and
+   active-run handling where the binding is supported.
 
-For a timer, let the feature own a `TuiTimer` and register a member callback on a
-stable target. Declare the loop before that feature and the handle after the
-state its callback uses. Use `arm_at` for an absolute one-shot deadline or
-`repeat` for a positive interval. Cancel disarms a handle; destruction removes
-its registration. Neither action joins a worker.
+### Add a selector or modal
 
-Timer dispatch snapshots registration IDs and generations. A callback can rearm,
-cancel or remove registrations without invalidating the loop's traversal; stale
-entries from that pass are skipped. Repeating timers skip missed ticks rather
-than replay a burst. Keep callbacks short, publish state or invalidate a frame,
-and return to composition. Do not decode input, paint, claim signals, recursively
-service timers or wait inside a callback.
+1. Give a selector its kind in `ActiveSelectList` in
+   [runtime_state_internal.h](../../src/ava/tui/runtime_state_internal.h).
+   Put its state and behavior in a feature owner, rather than adding state to
+   the session. For a non-selector modal, follow the corresponding prompt or
+   plugin owner instead of adding an unused selector kind.
+2. Use `SelectorHost::open`, `replace` and `close` to manage the visible
+   `SelectListView`. The host publishes it through `RuntimePresentationState`.
+   Specify which existing modal wins and whether typing passes through. Restore
+   previews before another feature opens a competing view.
+3. Add the selector branch in
+   [SelectorHost::dispatch](../../src/ava/tui/SelectorHost.cpp). Return a typed
+   result when another feature must act, and handle it in
+   `TuiSession::handle_selector_input`. For an earlier capturing modal, add its
+   handler to the session and active-run dispatcher lists where it is supported.
+   A selector is not automatically available during submission.
+4. Test opening, cancellation, preview restoration and overlapping input in
+   [feature-owner tests](../../tests/tui_feature_owner_tests.cpp) or the relevant
+   [composer rendering case](../../tests/tui_composer_rendering_tests.cpp).
+   A blocking worker request also needs cancellation and shutdown tests proving
+   that borrowed callbacks are removed before its worker is released. Keep all
+   backend validation in the existing frontend/application operation.
+
+### Add a timer
+
+1. Let the feature own a `TuiTimer`. Construct the loop before that feature;
+   declare the handle after the state its callback uses. Register with
+   `loop.member_timer(*this, &Owner::callback)` at a stable object address.
+   Registration does not invoke the callback.
+2. Use `arm_at` for an absolute one-shot deadline or `repeat` for a positive
+   interval. In the callback, mark work due or request a frame, then return.
+   For work that calls the frontend or other features, add a service method and
+   call it from `TuiSession::service_presentations` or the appropriate existing
+   application-update owner. See
+   [BranchSummaryOperation](../../src/ava/tui/BranchSummaryOperation.cpp).
+3. Cancel before callback dependencies are destroyed. `cancel()` disarms the
+   timer; destroying the handle removes its registration. Neither joins a worker.
+   The target must stay alive until any callback already running has returned.
+4. Extend [event-loop tests](../../tests/tui_event_loop_tests.cpp) for scheduling
+   rules, or feature tests for the work it triggers. Use supplied clock values
+   to check deadlines rather than relying on how quickly the test machine runs.
+
+Timer dispatch copies registration IDs and generations before invoking callbacks.
+A callback can rearm, cancel or remove registrations; stale entries from that
+pass are skipped. Repeating timers skip missed ticks rather than replay a burst.
+Do not decode input, paint, handle signals, recursively service timers or wait
+inside a callback.
 
 ## Validation and limits
 
@@ -276,8 +339,8 @@ scenarios check whole terminal interactions. A scheduler unit test alone
 does not prove the ordering in `TuiSession::run`, and compiling does not prove
 cancellation or lifetime behavior.
 
-The review handoff records the exact final build and test comparison. When
-changing an invariant, update its local comments and the test that exercises the
-observable behavior. Keep this guide synchronized when ownership or loop order
+Record the build and behavioral checks run for each change. When changing an
+invariant, update its local comments and the test that exercises the observable
+behavior. Keep this guide synchronized when ownership or loop order
 changes; developers should not need the historical refactor plan to understand
 the implementation.

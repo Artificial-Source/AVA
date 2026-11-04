@@ -77,7 +77,7 @@ void SettingsDialog::rebuild(SettingsSection section, std::string query, std::op
   ensure_open();
   auto settings_snapshot = presentation_state_.screen();
   settings_snapshot.sidebar = presentation_state_.sidebar();
-  // Build rows from authoritative presentation so preview overlays do not rewrite candidate labels.
+  // Build rows from the saved baseline so the current preview does not change candidate labels.
   settings_snapshot.show_images = navigation_.preview.authoritative.show_images;
   settings_snapshot.image_width_cells = navigation_.preview.authoritative.image_width_cells;
   settings_snapshot.cursor = navigation_.preview.authoritative.cursor;
@@ -180,7 +180,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
 
   if (auto section = runtime_views::settings_section_for_action(selected_value))
   {
-    // Section Enter rebuilds in place rather than generic teardown-first Resolve.
+    // Enter on a section row rebuilds Settings in place, keeping its navigation state.
     navigation_.root_frame =
         runtime_views::SettingsFrameState{.section = SettingsSection::Root, .query = current_query, .selected_item_index = current_selected};
     clear_preview();
@@ -283,8 +283,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
   }
   else
   {
-    // Confirm persists exactly once through the app callback; preview is cleared first so
-    // authoritative reload becomes the new baseline.
+    // Call the app once to save this choice. Clear preview first so refreshed backend
+    // values become the new baseline.
     auto const confirm_token = selected_value;
     clear_preview();
     auto selected = frontend_.on_settings_selected(confirm_token);
@@ -296,8 +296,8 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
       begin_baseline();
       if (navigation_.in_display())
       {
-        // Remain in the presentation section with refreshed authoritative rows after a
-        // successful confirm. Feedback stays on the transient status surface; local
+        // Remain in the presentation section with refreshed rows after a
+        // successful confirm. Feedback stays in the status line; local
         // settings actions never append chat/transcript items.
         auto const receipt = status.empty() ? std::string("display setting saved") : status;
         rebuild(navigation_.section, current_query, current_selected);
@@ -310,7 +310,7 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
     }
     else
     {
-      // Error restores latest authoritative presentation and keeps the section open.
+      // On error, retain the restored display baseline and keep the section open.
       begin_baseline();
       presentation_state_.publish_display_preview(navigation_.preview);
       presentation_state_.publish_status(selected.error().format());
@@ -322,11 +322,11 @@ SettingsDialogResult SettingsDialog::resolve(SelectListInputResult const& input)
 
 void SettingsDialog::rebase_after_display_reload()
 {
-  // Applied is an explicit app signal. Always rebase/reapply while settings are open — never
-  // infer from post-hydration value equality (overlay can mask true→false authority changes).
+  // Applied explicitly reports a reload. Rebase and reapply while Settings is open;
+  // comparing displayed values could miss a loaded change hidden by the preview.
   if (open_ && selectors_.kind() == ActiveSelectList::Settings)
   {
-    // Capture the actionable selection identity before hydration rebuild can shift indexes.
+    // Save the selected action before rebuilding rows can shift indexes.
     std::string selected_action_value;
     std::optional<std::size_t> prior_selected_index;
     std::string query;
@@ -345,7 +345,7 @@ void SettingsDialog::rebase_after_display_reload()
     if (navigation_.preview.overlay && !navigation_.preview.overlay->action_token.empty())
       staged_overlay_action = navigation_.preview.overlay->action_token;
 
-    // The reload already hydrated authoritative values. Rebase first, then rebuild rows
+    // The reload already updated the display values. Save the new baseline, then rebuild rows
     // and align the overlay with the restored action identity before Session paints.
     presentation_state_.reapply_display_preview(navigation_.preview);
     if (navigation_.in_display() && selectors_.view())

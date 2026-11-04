@@ -1,4 +1,4 @@
-// Coordinates local TUI actions and explicit frontend authority handoffs.
+// Coordinates local TUI actions and calls to frontend services.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
@@ -27,70 +27,78 @@ class SessionSelector;
 class TuiEventLoop;
 
 // Session owns local action coordination used by idle and active input routing.
-// Every member, including timer discovery, is TUI-thread-only. Frontend callbacks
-// retain backend authority; this controller publishes through named operations.
-// All borrowed owners outlive it. No UI mutex protects this state; the final timer
-// unregisters before callback-visible members die, and its loop must outlive it.
+// Every member, including timer callbacks, is TUI-thread-only. Frontend callbacks
+// perform backend operations; this controller updates display state through its owner.
+// All borrowed owners outlive it, and workers never access it. The final timer member
+// unregisters before the state it uses is destroyed; its loop must outlive it.
 class RuntimeActionController final
 {
  public:
-  // TUI thread: bind stable session owners; construction schedules an initial display check
+  // TUI thread: bind stable session owners; construction marks an initial display check due
   // without invoking frontend callbacks or painting.
   RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
                           SelectorHost& selectors, SessionSelector& session_selector, PendingAttachments& attachments);
-  // Copying would duplicate display discovery and action ownership for one session.
+  // Not copyable: one controller handles local actions, and the timer targets its stable address.
   RuntimeActionController(RuntimeActionController const&) = delete;
-  // Keep the address captured by the timer and all borrowed collaborators stable.
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
-  // Attach automatic 500ms discovery once; the loop outlives this stable owner.
+  // TUI thread: attach the 500 ms timer once; it only marks display reload work due.
+  // The loop outlives this stable owner; maybe_reload_display_settings performs the check.
   void attach_loop(TuiEventLoop& loop);
   // TUI thread: consume initial or timer-marked work once; repeated calls without
-  // a due flag do not check. TerminalFailure means a required error-status paint failed.
-  // Applied hydrates the authoritative snapshot without a final render so callers can
-  // rebase/reapply settings preview (if any) and paint exactly once afterward.
+  // a due flag do not check. TerminalFailure means rendering has already failed.
+  // Applied updates display values without requesting a final frame, so callers can
+  // rebase/reapply any settings preview before requesting that frame.
   [[nodiscard]] DisplaySettingsReloadPollOutcome maybe_reload_display_settings();
   // TUI thread: reset draft interaction and transient status, then clear text. Return
   // whether the editor changed so routing can decide whether Interrupt still applies.
   bool clear_draft_for_interrupt();
-  // TUI thread: paint pending status, release terminal protocols, call the blocking editor
-  // authority and restore terminal/geometry before reporting its result. Return paint success.
+  // TUI thread: paint pending status, release terminal protocols and call the blocking
+  // frontend editor callback. Restore terminal/geometry before feedback; return paint success.
   [[nodiscard]] bool open_external_editor();
   // TUI thread: release terminal protocols before suspending the process group, restore
-  // them after resume/failure, then paint feedback. Session must permit this handoff.
+  // them after resume/failure, then paint feedback. Return paint success, not suspension
+  // success. Session must permit this handoff.
   [[nodiscard]] bool suspend_to_background();
   // TUI thread: stage an already imported reference with an optional permitted preview
-  // then render feedback. Backend import authority remains with the frontend.
+  // then request feedback rendering. Importing and validating the image stays with the frontend.
+  // True permits later rendering; it does not prove a queued frame was painted.
   [[nodiscard]] bool queue_pending_image_attachment(ava::session::ImageAttachmentRef const& imported, std::string label, std::string status);
-  // TUI thread: paint pending status before importing through frontend authority; only
-  // a successful image result is staged for the next prompt. Return render success.
+  // TUI thread: paint pending status before asking the frontend to import an image; only
+  // a successful image result is staged for the next prompt. False reports a known paint
+  // failure; true may leave the final feedback frame queued.
   [[nodiscard]] bool paste_clipboard_image();
   // TUI thread: request clipboard copying from the current transcript and publish delivery
-  // feedback. No transcript content or selection is mutated.
+  // feedback. Preserve transcript content and selection; return whether the frame request succeeded.
   [[nodiscard]] bool copy_latest_assistant_message();
-  // TUI thread: ask backend authority to choose the next level and publish returned feedback.
+  // TUI thread: ask the frontend to choose the next reasoning level and show its feedback.
   // The caller performs the final render.
   void cycle_reasoning();
   // TUI thread: toggle only presentation visibility and move the transcript to live tail.
-  // The caller paints the resulting projection.
+  // The caller paints the updated display state.
   void toggle_thinking_visibility();
   // TUI thread: disarm draft Escape/archive confirmation, open fresh model rows and
-  // request a frame at live tail. Caller retires any prior feature-specific preview.
+  // request a frame at live tail. Return whether the request succeeded. The caller retires
+  // any prior feature-specific preview.
   [[nodiscard]] bool open_model_selector();
   // TUI thread: open choices for the current model when available. A chained request
-  // silently keeps successful model feedback if no reasoning selector is needed.
+  // silently keeps successful model feedback if no reasoning selector is needed. Return
+  // true when unavailable, otherwise return whether the frame request succeeded.
   [[nodiscard]] bool open_reasoning_selector(bool chained_from_model_selection = false);
   // TUI thread: open current scoped-model rows after retiring Escape/archive intent;
-  // request the live-tail frame without changing backend model scope yet.
+  // request the live-tail frame without changing backend model scope yet. Return whether
+  // the frame request succeeded.
   [[nodiscard]] bool open_scoped_model_selector();
   // TUI thread: close an open overview or read fresh backend facts for a new popup.
-  // The popup owns its projection until closed; Enter/Escape do not mutate backend state.
+  // The popup retains its display data until closed; Enter/Escape do not mutate backend state.
+  // Return whether the frame request succeeded.
   [[nodiscard]] bool toggle_startup_overview();
-  // TUI thread: ask frontend authority for forkable rows, borrowing initial_query only
-  // for the call. Publish a selector on success or error feedback on failure.
+  // TUI thread: ask the frontend for forkable rows, borrowing initial_query only
+  // for the call. Show a selector on success or error feedback on failure; return whether
+  // the frame request succeeded.
   [[nodiscard]] bool open_fork_user_turn_selector(std::string_view initial_query = {});
-  // TUI thread: obtain copyable user-turn rows through frontend authority; only the
-  // selector result owns text after the call. Return render success.
+  // TUI thread: obtain owned, copyable user-turn rows from the frontend, then request
+  // a frame. Return whether that frame request succeeded.
   [[nodiscard]] bool open_copy_user_turn_selector(std::string_view initial_query = {});
   // TUI thread: cycle backend model and refresh committed facts on success; publish
   // errors without replacing those facts. Caller performs final rendering.
@@ -100,18 +108,18 @@ class RuntimeActionController final
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // TUI timer callback: mark work due without calling frontend authority or painting;
+  // TUI timer callback: mark work due without calling the frontend or painting;
   // Session services the flag at its ordered display-reload phase.
   void mark_display_reload_due(TuiTimer::Clock::time_point now);
-  // Borrowed from the app; boundary for local settings, catalogs, clipboard and editor authority callbacks.
+  // Borrowed from the app; supplies callbacks for local settings, catalogs, clipboard and editor work.
   TuiFrontEnd& frontend_;
-  // Borrowed from Session; sole projection; const reads and named publications keep updates explicit.
+  // Borrowed from Session; display state, read as const and updated through its methods.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; editor; actions reset interaction before terminal handoff or new draft work.
   Composer& draft_state_;
   // Borrowed from Session; renderer; pending status is painted before blocking handoffs.
   RuntimeRenderer& renderer_;
-  // Borrowed from Session; sole list owner; new action views replace its projection.
+  // Borrowed from Session; sole list owner; actions replace the displayed selector here.
   SelectorHost& selectors_;
   // Borrowed from Session; archive confirmation owner; new selector actions disarm stale intent.
   SessionSelector& session_selector_;
@@ -120,7 +128,7 @@ class RuntimeActionController final
   // TUI-thread last reported reload failure; suppress repeated bells until a successful check.
   std::optional<ava::core::NoLogString> last_display_reload_error_;
   // TUI-thread discovery flag, initially true for the first check. Timer sets it; service
-  // consumes it before invoking reload authority so unchanged turns do no extra work.
+  // consumes it before calling the frontend, so turns without a due flag do no extra work.
   bool display_reload_due_ = true;
   // TUI-thread repeating registration, destroyed first to retire callbacks before other state.
   // The loop outlives this controller and its registration.

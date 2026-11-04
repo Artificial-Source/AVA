@@ -1,4 +1,4 @@
-// Transfers and retires timer registration ownership on the TUI thread, leaving
+// Transfers and removes timer registrations on the TUI thread, leaving
 // deadline policy and callback dispatch to the loop-owned registration.
 #include "sys.h"
 #include "TuiEventLoop.h"

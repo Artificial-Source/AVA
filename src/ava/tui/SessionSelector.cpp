@@ -124,7 +124,7 @@ void SessionSelector::archive(SelectListInputResult const& input)
     terminal_context_.beep();
   }
   // Treat archive and restore as separate intents for a stable session identity.
-  // The current session is rejected before either confirmation or authority callbacks.
+  // Archiving the current session is rejected before confirmation or frontend callbacks.
   else
   {
     bool const archive = selected_item->badge != "archived";
@@ -134,7 +134,7 @@ void SessionSelector::archive(SelectListInputResult const& input)
       presentation_state_.publish_status("switch sessions before archiving the active session");
       terminal_context_.beep();
     }
-    // Only an unchanged second intent reaches backend authority. Retire confirmation
+    // Only an unchanged second intent calls the frontend. Retire confirmation
     // regardless of success so an error cannot make a later key execute unexpectedly.
     else if (archive_confirmation_ && archive_confirmation_->session_id == selected_item->value && archive_confirmation_->archive == archive)
     {

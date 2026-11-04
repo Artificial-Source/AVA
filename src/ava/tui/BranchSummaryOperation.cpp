@@ -98,8 +98,8 @@ BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot con
       refresh_failed = true;
     }
   }
-  // Restore view/status before retiring modal admission and its timer. Exit is acted on
-  // only after this local settlement; app worker join remains a separate lifetime boundary.
+  // Restore the view and status before clearing the active flag and canceling the timer.
+  // Allow exit only after this cleanup; the app remains responsible for joining its worker.
   auto const exit_requested = exit_requested_;
   restore_selector(std::move(restored));
   present_status(refresh_failed ? std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Refresh))
@@ -141,7 +141,7 @@ BranchSummaryOutcome BranchSummaryOperation::poll()
   }
   catch (...)
   {
-    // Snapshot failure settles only the UI fallback. It cannot prove worker termination,
+    // Snapshot failure finishes only the modal. It cannot prove worker termination,
     // so app-owned callback dependencies must still survive coordinator shutdown.
     TuiBranchSummarySnapshot failed;
     failed.generation = generation_;
@@ -172,8 +172,8 @@ BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, 
     present_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Prepare)));
     return renderer_.request_render() ? BranchSummaryOutcome::Settled : BranchSummaryOutcome::RenderFailed;
   }
-  // Own the restoration checkpoint before consuming a possibly already terminal
-  // snapshot; consume may immediately settle and cancel the need for discovery.
+  // Save the prior selector before reading a snapshot that may already report completion;
+  // consume may immediately restore that selector without needing later timer checks.
   active_ = true;
   exit_requested_ = false;
   generation_ = prepared->generation;
@@ -192,7 +192,7 @@ BranchSummaryOutcome BranchSummaryOperation::cancel(BranchSummaryCancelMode mode
   if (!active_)
     return BranchSummaryOutcome::Inactive;
   // Exit intent is sticky even if cancellation is rejected or throws. Cancellation only
-  // requests worker cooperation; input remains captured until a terminal snapshot arrives.
+  // requests worker cooperation; input remains captured until the modal finishes.
   exit_requested_ = exit_requested_ || mode == BranchSummaryCancelMode::ExitAfterSettlement;
   ava::core::Result<bool> canceled = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "cancel callback unavailable"));
   try
@@ -217,8 +217,8 @@ BranchSummaryOutcome BranchSummaryOperation::confirm()
     return BranchSummaryOutcome::Inactive;
   if (phase_ != TuiBranchSummaryPhase::AwaitingConfirmation)
     return BranchSummaryOutcome::Pending;
-  // Consent is sent once per accepted UI request for the same generation. A refused
-  // callback leaves the modal active so later snapshots can still report terminal work.
+  // Send consent for this generation only while awaiting confirmation. A refused
+  // callback leaves the modal active so later snapshots can still report completion.
   ava::core::Result<bool> confirmed = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "confirm callback unavailable"));
   try
   {

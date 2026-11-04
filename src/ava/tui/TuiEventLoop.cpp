@@ -125,7 +125,7 @@ bool TuiEventLoop::has_due_work(Clock::time_point now) const noexcept
 
 void TuiEventLoop::wait(TuiWaitMode mode)
 {
-  // Timer callbacks must return to composition before waiting; they may only publish state or invalidate a frame.
+  // Do not wait in a timer callback; update feature state or request a frame, then return to TuiSession.
   ASSERT(!servicing_due_);
   if (servicing_due_ || stopped_ || terminal_hangup() || terminal_error() || notification_failed())
     return;
@@ -138,7 +138,7 @@ void TuiEventLoop::wait(TuiWaitMode mode)
   else
   {
     // Only armed registrations constrain sleep. Their callbacks run next turn,
-    // after composition's control stage, rather than inside this OS wait.
+    // after TuiSession's control stage, rather than inside this OS wait.
     for (auto const& [id, timer] : timers_)
     {
       auto const next = timer.deadline();

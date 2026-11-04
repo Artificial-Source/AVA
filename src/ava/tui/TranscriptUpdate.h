@@ -7,16 +7,16 @@
 namespace ava::tui {
 
 // Value returned by RuntimeRenderer before mutation and consumed by its completion operation on the TUI thread.
-// It owns the anchor, has no callbacks or borrowed state, and remains unchanged while transcript/search
-// projections are updated.
+// It owns the anchor, has no callbacks or borrowed state, and remains unchanged while transcript and search
+// results are updated.
 class TranscriptUpdate final
 {
  public:
   // TUI thread: record the pre-mutation detached decision; anchor is meaningful when the first detached update
   // captures a layout.
   TranscriptUpdate(bool detached, detail::TranscriptViewportAnchor anchor) : detached_(detached), anchor_(anchor) { }
-  // TUI thread: preserve whether this mutation began away from live output even if later projection work
-  // changes chrome.
+  // TUI thread: preserve whether this mutation began away from live output even if later updates
+  // change the displayed scroll position or output count.
   [[nodiscard]] bool detached() const noexcept { return detached_; }
   // TUI thread: borrow the pre-mutation anchor until this token dies; completion never borrows a layout through
   // it.

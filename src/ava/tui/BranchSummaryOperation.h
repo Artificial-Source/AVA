@@ -15,27 +15,27 @@ namespace terminal {
 class Context;
 }
 
-// TUI-thread result consumed by Session; terminal UI outcomes do not transfer worker ownership.
+// TUI-thread result consumed by Session; finishing the modal does not transfer worker ownership.
 enum class BranchSummaryOutcome
 {
   // No summary UI operation is active, so normal input may proceed.
   Inactive,
   // Keep the modal and discovery alive while backend work or confirmation remains.
   Pending,
-  // The modal has settled or prepare failed. An admitted operation restores its prior list.
+  // The modal finished or prepare failed. A successfully prepared operation restores its prior list.
   Settled,
-  // Local settlement releases requested exit and closes the selector; app teardown still joins work.
+  // Modal cleanup permits the requested exit and closes the selector; app teardown still joins work.
   ExitReady,
-  // A required render failed; Session must begin its shutdown path.
+  // The renderer reports a known failure when a frame is requested; Session must shut down.
   RenderFailed
 };
 
 // TUI-thread cancellation intent; neither choice synchronously joins the backend worker.
 enum class BranchSummaryCancelMode
 {
-  // After cooperative cancellation settles, return to the prior session selector.
+  // After handling cancellation's result, return to the prior session selector.
   ContinueSession,
-  // Latch exit intent until a terminal snapshot permits Session to stop.
+  // Remember exit intent until modal cleanup permits Session to stop.
   ExitAfterSettlement
 };
 
@@ -54,33 +54,33 @@ class BranchSummaryOperation final
   // normal operation, and backend execution remains frontend-owned.
   BranchSummaryOperation(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                          terminal::Context& terminal_context);
-  // A copy could issue commands for the same generation with a different restore checkpoint.
+  // Not copyable: the timer targets this address, and one owner restores the prior selector.
   BranchSummaryOperation(BranchSummaryOperation const&) = delete;
-  // Keep the timer callback address and generation owner stable until timer teardown.
   BranchSummaryOperation& operator=(BranchSummaryOperation const&) = delete;
 
-  // The attached loop outlives this stable operation and its registration.
-  // Attach the renderer first so discovery requests only batch invalidation.
+  // TUI thread: register a timer that only marks discovery due. The loop outlives this
+  // stable operation; attach the renderer before service_if_due can request a frame.
   void attach_loop(TuiEventLoop& loop);
-  // TUI application stage: perform one pending discovery, or return no value.
-  // Timer ticks coalesce until this call. The returned outcome is handled before
+  // TUI application stage: read one pending backend snapshot, or return no value.
+  // Several timer ticks require only one read. The returned outcome is handled before
   // input; the timer itself never reads the frontend or completes the operation.
   [[nodiscard]] std::optional<BranchSummaryOutcome> service_if_due();
   // TUI thread: tell Session whether summary input must capture ordinary editor actions.
   [[nodiscard]] bool active() const noexcept;
   // TUI thread: call with no active summary; prepare backend work and save the list
-  // checkpoint before consuming its generation. After attach_loop, active discovery polls every 250 ms.
+  // checkpoint before consuming its generation. The attached timer uses a 250 ms interval
+  // while active and only marks a read due; application servicing performs the read later.
   [[nodiscard]] BranchSummaryOutcome start(SelectListView session_view, std::size_t selected_index, std::string selected_value);
   // TUI thread: request cooperative cancellation for this generation and latch exit intent.
-  // Pending means the worker may still use app callbacks; continue polling until local settlement.
-  // Even a settled UI result does not establish that all worker callbacks have returned.
+  // Pending means the worker may still use app callbacks; continue polling until modal cleanup.
+  // Finishing the modal does not establish that all worker callbacks have returned.
   [[nodiscard]] BranchSummaryOutcome cancel(BranchSummaryCancelMode mode);
   // TUI thread: route cancel/exit/confirmation for the current phase; other modal input
   // is rejected with a bell and cannot edit the underlying draft.
   [[nodiscard]] BranchSummaryOutcome handle_input(InputEvent const& input);
 
-  // Retains a session catalog checkpoint plus arbitrary presentation/renderer
-  // aggregates; generated printing must not expose those message/path contents.
+  // The owned session catalog checkpoint contains user paths and labels; keep them
+  // out of generated debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
@@ -88,16 +88,16 @@ class BranchSummaryOperation final
   void restore_selector(SelectListView view);
   // TUI thread: keep transient status and open selector subtitle consistent for callback failures.
   void present_status(std::string status);
-  // TUI thread: consume a terminal snapshot, optionally refresh catalog, restore the
+  // TUI thread: consume a finished-operation snapshot, optionally refresh catalog, restore the
   // checkpoint and cancel discovery before returning. This does not join the app worker.
   [[nodiscard]] BranchSummaryOutcome settle(TuiBranchSummarySnapshot const& operation);
-  // TUI thread: ignore stale generations; matching snapshots update phase/view or settle.
+  // TUI thread: ignore stale generations; matching snapshots update or finish the modal.
   // The supplied snapshot is owned by the caller and retained only by value as needed.
   [[nodiscard]] BranchSummaryOutcome consume(TuiBranchSummarySnapshot const& operation);
   // TUI thread: only AwaitingConfirmation submits consent for the current generation;
   // callback rejection preserves the modal and reports failure for continued polling.
   [[nodiscard]] BranchSummaryOutcome confirm();
-  // TUI thread: copy a backend snapshot through frontend transport; an exception settles
+  // TUI thread: copy a backend snapshot through the frontend; an exception finishes
   // the local UI as failed. Backend shutdown responsibility remains with the app.
   [[nodiscard]] BranchSummaryOutcome poll();
   // TUI timer callback: mark discovery due without calling the frontend. The
@@ -106,15 +106,15 @@ class BranchSummaryOperation final
 
   // App frontend outlives this owner; callbacks submit coordinator commands or copy snapshots.
   TuiFrontEnd& frontend_;
-  // Borrowed from Session; TUI projection; all feedback is published through named operations.
+  // Borrowed from Session; display state; receives status updates for this operation.
   RuntimePresentationState& presentation_state_;
-  // Borrowed from Session; sole modal storage, replaced by progress and restored after settlement.
+  // Borrowed from Session; sole modal storage, replaced by progress and restored when finished.
   SelectorHost& selectors_;
-  // Borrowed from Session; renderer; attach its loop before discovery can request batched rendering.
+  // Borrowed from Session; renderer; attach its loop before snapshot servicing requests a frame.
   RuntimeRenderer& renderer_;
   // Terminal outlives this owner and supplies TUI-thread modal rejection bells.
   terminal::Context& terminal_context_;
-  // TUI-thread admission flag set after successful prepare and cleared by local settlement.
+  // TUI-thread active-modal flag, set after successful prepare and cleared when the modal finishes.
   bool active_ = false;
   // TUI-thread sticky exit intent for this operation; cancellation failure does not erase it.
   bool exit_requested_ = false;

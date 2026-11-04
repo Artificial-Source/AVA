@@ -1,4 +1,4 @@
-// Routes ordinary active-turn input; worker prompt claims remain with ActiveRun.
+// Routes ordinary active-turn input; ActiveRun handles waiting worker prompts.
 #include "sys.h"
 #include "ActiveRunInput.h"
 #include "CommandOutput.h"
@@ -348,7 +348,7 @@ bool ActiveRunInput::queue_active_draft(bool follow_up_only)
 }
 
 // Pure TUI selection policy: dismiss the nearest active selection before allowing
-// Cancel to reach worker-stop authority.
+// Cancel to request worker stop.
 detail::ActiveRunCancelDisposition detail::active_run_cancel_disposition(bool has_draft_selection, bool has_transcript_selection) noexcept
 {
   if (has_draft_selection)

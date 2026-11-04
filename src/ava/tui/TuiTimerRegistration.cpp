@@ -1,4 +1,4 @@
-// Maintains timer deadlines and dispatch generations, coalescing missed repeating
+// Maintains timer deadlines and dispatch generations, skipping missed repeating
 // ticks without calling feature code or retaining registry iterators.
 #include "sys.h"
 #include "TuiTimerRegistration.h"

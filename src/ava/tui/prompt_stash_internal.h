@@ -51,7 +51,7 @@ enum class PromptStashRestoreResult
 
 // Owned TUI-thread snapshot inside PromptStash. The controller renders copies for
 // selection; only restore consumes this entry. Cursor and paste identifiers belong
-// to the saved text, while expanded_bytes is fixed at admission for budget accounting.
+// to the saved text, while expanded_bytes is fixed when stored for budget accounting.
 // It owns its payload and needs no collaborator alive during destruction.
 struct PromptStashEntry
 {
@@ -65,7 +65,7 @@ struct PromptStashEntry
   std::vector<ComposerPasteEntry> paste_entries;
   // Saved allocator position prevents restored paste markers from colliding with later pastes.
   std::size_t next_paste_id = 1;
-  // Admission-time expanded size used to release the exact aggregate budget on restore.
+  // Expanded size saved on insertion; restoration subtracts it from the total stored size.
   std::size_t expanded_bytes = 0;
 
   // Prompt payloads must never be emitted by generated debug printers.
@@ -73,8 +73,8 @@ struct PromptStashEntry
 };
 
 // RuntimePromptStashController owns this TUI-thread process-memory store for one
-// interactive composer. Entries own all text/paste payloads; no borrowed state or
-// worker can outlive it. Expanded-size/count bounds hold after every operation.
+// interactive composer. Entries own all text/paste payloads and retain no borrowed
+// state. Workers never use it. Expanded-size/count bounds hold after every operation.
 // Destruction releases drafts locally; nothing is serialized into a session.
 class PromptStash final
 {
@@ -101,7 +101,7 @@ class PromptStash final
   [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
   // TUI thread: report retained count for clear feedback and bounded selectors.
   [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
-  // TUI thread: expose admitted expanded size, not marker-text length or container capacity.
+  // TUI thread: report total stored text size with folded paste payloads expanded.
   [[nodiscard]] std::size_t aggregate_expanded_bytes() const noexcept { return aggregate_expanded_bytes_; }
   // TUI thread: return owned identities so restoration may erase entries without invalidating callers.
   [[nodiscard]] std::vector<std::uint64_t> ids_newest_first() const;
@@ -109,12 +109,13 @@ class PromptStash final
   // borrow survives later push, restore or clear.
   [[nodiscard]] SelectListView select_list_view() const;
 
+  // Stored drafts and paste payloads contain user text and must stay out of debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   // TUI-thread insertion order, oldest first; restore erases one and clear erases all.
   std::vector<PromptStashEntry> entries_;
-  // TUI-thread sum of admitted entry sizes; push adds, successful restore subtracts, clear resets.
+  // TUI-thread sum of stored entry sizes; push adds, successful restore subtracts, clear resets.
   std::size_t aggregate_expanded_bytes_ = 0;
   // TUI-thread monotonic allocator; push refuses exhaustion and clear deliberately preserves it.
   std::uint64_t next_id_ = 1;
@@ -124,42 +125,47 @@ class PromptStash final
 // the stash and borrows editor, presentation, rendering, selector, bindings and
 // attachments until destruction. Input handlers use no backend callbacks or locks.
 // Successful push precedes draft clearing; successful restore precedes view closure.
-// Borrowers outlive it, and teardown releases only local stash payloads.
+// All borrowed owners outlive it, and teardown releases only local stash payloads.
 class RuntimePromptStashController final
 {
  public:
   // TUI thread: bind session owners and live bindings; all references outlive the controller.
   RuntimePromptStashController(RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer, SelectorHost& selectors,
                                TuiKeyBindings const& key_bindings, PendingAttachments const& attachments);
-  // A copied controller would duplicate private prompt storage and split selector identity.
+  // Not copyable: one controller keeps the stash associated with its editor and selector.
   RuntimePromptStashController(RuntimePromptStashController const&) = delete;
-  // Keep the stash and the draft/view owners associated throughout the session.
   RuntimePromptStashController& operator=(RuntimePromptStashController const&) = delete;
 
   // TUI thread: stash a nonempty draft only when no images are pending; open the selector
-  // for an empty draft. Return render success after status, not insertion success.
+  // for an empty draft. Return whether the frame request succeeded, not whether the draft
+  // was stored or painted.
   [[nodiscard]] bool trigger();
-  // TUI thread: publish newest-first stash rows and request a frame, even when empty.
+  // TUI thread: show newest-first stash rows and request a frame, even when empty.
+  // Return whether the frame request succeeded.
   [[nodiscard]] bool open_selector();
-  // TUI thread: restore newest into an empty draft or publish refusal; return render success.
+  // TUI thread: restore newest into an empty draft or show refusal; return frame-request success.
   [[nodiscard]] bool pop_latest();
-  // TUI thread: discard all stash entries and close its view if hosted; report through status.
+  // TUI thread: discard all stash entries and close its view if hosted; show status and
+  // return whether the frame request succeeded.
   [[nodiscard]] bool clear();
-  // TUI thread: no value declines non-stash input; a value means claimed input and
-  // contains render success. Copy the selected identity before restore retires the view.
+  // TUI thread: no value declines non-stash input; false reports a known rendering failure.
+  // True means handled, with any requested paint deferred. Copy the selected identity
+  // before restore closes the view.
   [[nodiscard]] std::optional<bool> handle_selector_input(InputEvent const& event);
 
   // TUI thread: borrow read-only process-memory storage until controller destruction.
   [[nodiscard]] PromptStash const& stash() const noexcept { return stash_; }
 
+  // The owned stash contains user draft and paste text.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   // TUI thread: consume the selected identity only into an empty draft, then reset
-  // interaction and close the selector. Failure preserves the view and beeps.
+  // interaction and close the selector. Refusal preserves the view and beeps.
+  // Return whether the frame request succeeded, independently of restoration success.
   [[nodiscard]] bool restore(std::uint64_t id);
 
-  // Borrowed from Session; TUI projection; receives status without adding transcript messages.
+  // Borrowed from Session; display state; receives status without adding transcript messages.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole editor; push copies its draft and restoration transfers back into it.
   Composer& draft_state_;

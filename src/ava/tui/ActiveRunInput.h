@@ -41,9 +41,8 @@ class ActiveRunInput final
                  RuntimePromptStashController& stash, RuntimeNavigationController& navigation, RuntimeActionController& actions,
                  TranscriptSearchController& search, RuntimeSubagentWorkspaceController& workspace, ActiveRun& run, CommandOutput& output,
                  terminal::Context& terminal_context);
-  // Callback targets retain this address for the session lifetime.
+  // Not copyable: dispatch callbacks retain this address and its session bindings.
   ActiveRunInput(ActiveRunInput const&) = delete;
-  // Ownership/dispatch registrations cannot be reassigned to a different session.
   ActiveRunInput& operator=(ActiveRunInput const&) = delete;
   // TUI thread after control and updates; the active run arbitrates worker prompts first.
   [[nodiscard]] TuiInputOutcome dispatch(runtime_input::RuntimeInput const& input);
@@ -67,7 +66,7 @@ class ActiveRunInput final
   [[nodiscard]] std::optional<bool> reject_disabled_visible_completion();
   // Validate the current draft, submit through ActiveRun, and clear only on acceptance.
   [[nodiscard]] bool queue_active_draft(bool follow_up_only);
-  // Worker claims and prompt/search races capture input before ordinary feature stages.
+  // Active worker prompts and queued prompt checks precede ordinary feature input.
   TuiInputOutcome handle_modal_input(runtime_input::RuntimeInput const& input);
   // Resize/wheel filtering precedes output, workspace and prompt-stash capture.
   TuiInputOutcome handle_surface_input(runtime_input::RuntimeInput const& input);
@@ -89,7 +88,7 @@ class ActiveRunInput final
   TuiInputOutcome handle_restricted_toggle_input(runtime_input::RuntimeInput const& input);
 
   TuiFrontEnd& frontend_; // TUI-thread bindings and permitted local frontend actions.
-  RuntimePresentationState& presentation_state_; // TUI-thread feedback through named publications.
+  RuntimePresentationState& presentation_state_; // TUI-thread display updates through named operations.
   Composer& draft_state_; // Session's sole editor; never copied or retained by workers.
   RuntimeRenderer& renderer_; // Layout and frame requests remain with the session renderer.
   RuntimePromptStashController& prompt_stash_; // Captures stash selection before ordinary keys.

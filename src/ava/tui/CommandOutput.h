@@ -18,13 +18,13 @@ enum class CommandOutputDisposition
 };
 
 // Session owns this TUI-thread policy owner and calls it before editor dispatch.
-// Presentation outlives it and retains the single output view. Modal publications
+// Presentation outlives it and retains the single output view. Modal updates
 // finish before typing is forwarded; no mutable view escapes. There is no worker
 // or lock, and destruction releases only the borrowed association.
 class CommandOutput final
 {
  public:
-  // Borrow the projection until destruction; construction does not open a modal.
+  // Borrow presentation state until destruction; construction does not open a modal.
   explicit CommandOutput(RuntimePresentationState& presentation);
   // Called on the TUI thread after resize/wheel filtering and before editor keys.
   // Host prompts retain precedence. Pass may mean output was closed by typing.
@@ -34,7 +34,7 @@ class CommandOutput final
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // Session-owned storage. Only named output/status publications change it here.
+  // Session-owned storage. Only output/status update methods change it here.
   RuntimePresentationState& presentation_;
 };
 } // namespace ava::tui

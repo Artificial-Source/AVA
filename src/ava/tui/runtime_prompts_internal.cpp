@@ -1,4 +1,4 @@
-// Keeps prompt callbacks claimed until the TUI can safely release their worker.
+// Holds prompt requests until TUI callbacks stop borrowing the waiting worker's data.
 #include "sys.h"
 #include "PendingPermissionRequest.h"
 #include "PendingQuestionRequest.h"
@@ -58,8 +58,8 @@ void RuntimePromptCoordinator::close_competing_selector()
 {
   if (!selectors_)
     return;
-  // Process-local overview and prompt-stash selectors may be open during an
-  // active run. Prompt authority closes either without mutating its owned state.
+  // Overview and prompt-stash selectors may be open during a run. Close their
+  // visible list before showing the prompt; their feature owners retain their state.
   if (selectors_->kind() != ActiveSelectList::Overview && selectors_->kind() != ActiveSelectList::PromptStash)
     return;
   selectors_->close();
@@ -132,7 +132,7 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
   if (prompt.target_path.has_filename())
     permission_label += " " + prompt.target_path.generic_string();
   emit_prompt_audit("tui:permission_request", std::move(permission_label), prompt.permission_request_id, prompt.tool_name, prompt.reason);
-  // A durable Deny never grants execution authority, so preserve it even
+  // A saved Deny never permits execution, so preserve it even
   // when one-shot Critical/unverified commands cannot be remembered as Allows.
   auto const remember_availability = permission_prompt_remember_availability(prompt, true);
   allow_remember_available_ = remember_availability.allow_remember_available;
@@ -154,7 +154,7 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
     return PermissionResult{std::move(decision)};
   }
   {
-    // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
+    // Close overview/stash lists so they cannot hide under the prompt and reappear.
     close_competing_selector();
     auto view = permission_prompt_view(prompt);
     view.selected_choice = PermissionPromptChoice::Deny;
@@ -273,7 +273,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
   }
 
   // Only validated choices reach normal resolution. Audit and remove the prompt
-  // before returning the result; the caller still owns claim retirement and wakeup.
+  // before returning the result; the caller must still remove callbacks and release the worker.
   if (allow)
   {
     emit_prompt_audit("tui:permission_allow", "permission allowed: " + prompt.tool_name, prompt.permission_request_id, prompt.tool_name, prompt.reason,
@@ -334,7 +334,7 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
 {
   emit_prompt_audit("tui:question_request", prompt.question.empty() ? std::string("question requested") : "question requested: " + prompt.question);
   {
-    // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
+    // Close overview/stash lists so they cannot hide under the prompt and reappear.
     close_competing_selector();
     presentation_.publish_question_prompt(question_prompt_view(prompt));
     presentation_.publish_status(prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels"
@@ -346,8 +346,8 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
   if (!renderer_.paint_for_handoff())
     return QuestionResult{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"))};
 
-  // Arm discovery only after presentation succeeds. The claim keeps the worker
-  // stack alive until service invokes this optional borrowed callback and retires it.
+  // Arm automatic-answer polling only after paint succeeds. The TUI hold keeps the
+  // worker's stack alive while service can invoke its borrowed prompt callback.
   if (prompt.auto_resolve)
   {
     auto_resolution_due_ = true;
@@ -374,7 +374,7 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
   auto const* request = std::get_if<std::shared_ptr<PendingQuestionRequest>>(&active_request_);
   if (!request)
     return std::nullopt;
-  // The active request still owns the claim while the callback executes. A ready
+  // The TUI still holds the request while its borrowed callback executes. A ready
   // automatic answer takes precedence over a subsequently observed stop or input key.
   auto const& prompt = (*request)->prompt();
   if (!prompt.auto_resolve || !prompt.auto_resolve())
@@ -442,7 +442,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
   }
 
   // Capture an owned answer before removing the view. Clipboard/audit work happens
-  // while the claim still prevents callbacks from outliving the waiting worker.
+  // while the TUI still holds the worker whose stack the callbacks may borrow.
   if (input_result.action == QuestionPromptInputAction::Resolve)
   {
     auto answer =
@@ -503,7 +503,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeIn
     return PromptServiceOutcome::Active;
   if (input.event.key == Key::Escape)
   {
-    // Keep the claim held until the caller publishes run stop, then calls
+    // Keep the request held until the caller requests worker stop, then calls
     // cancel_active(RunStop) after this handler returns. This preserves stop
     // before worker release without reentering the modal's current input frame.
     return PromptServiceOutcome::RequestRunStop;
@@ -639,7 +639,7 @@ void RuntimePromptCoordinator::abandon_active_request()
 PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedPromptRequest request, std::function<bool()> stop_requested,
                                                                      std::function<void()> before_prompt)
 {
-  // Install the claim before any UI hook can fail or invoke a borrowed callback.
+  // Store the held request before any UI hook can fail or invoke a borrowed callback.
   // Unwinding below abandons it only after clearing this owner's callbacks and timers.
   active_request_ = std::move(request);
   input_quarantined_ = true;
@@ -647,7 +647,7 @@ PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedProm
   try
   {
     // A permission queued just before cancellation must not reuse a session
-    // grant. Check control while holding its claim, before invoking UI hooks.
+    // grant. Check control while holding the request, before invoking UI hooks.
     if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_) && service() != PromptServiceOutcome::Active)
       return PromptServiceOutcome::Completed;
     if (before_prompt)
@@ -802,13 +802,13 @@ bool RuntimePromptCoordinator::input_drained()
 PromptServiceOutcome RuntimePromptCoordinator::cancel_active_after_auto(PromptCancelReason reason)
 {
   // Teardown must not allocate audit text or run automatic resolution. Its prepared
-  // cancellation value releases the waiter before best-effort projection cleanup.
+  // cancellation value releases the waiter before best-effort screen cleanup.
   if (reason == PromptCancelReason::Shutdown)
   {
     abandon_active_request();
     return PromptServiceOutcome::Completed;
   }
-  // Interactive cancellation retains visible/audit feedback while the claim is held.
+  // Interactive cancellation retains visible/audit feedback while the request is held.
   // Only completion below releases the worker after all borrowed callbacks retire.
   if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&active_request_))
   {
@@ -867,7 +867,7 @@ void RuntimePromptCoordinator::fail_active_render()
 void RuntimePromptCoordinator::fail_pending_requests()
 {
   // Queued requests have no UI callbacks and can be interrupted immediately.
-  // The TUI thread alone resolves an active claim, preserving automatic answers
+  // The TUI thread alone resolves a held request, preserving automatic answers
   // and retiring borrowed callbacks before its waiting worker can return.
   {
     std::lock_guard lock(prompt_request_mutex_);

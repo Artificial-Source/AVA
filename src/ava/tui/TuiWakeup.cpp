@@ -1,4 +1,4 @@
-// Implements producer notification with a temporary shared pin of OS resources.
+// Keeps OS resources alive through a producer notification using a temporary shared reference.
 #include "sys.h"
 #include "TuiWaitState.h"
 #include "TuiWakeup.h"

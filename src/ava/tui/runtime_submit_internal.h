@@ -57,9 +57,8 @@ class RuntimeSubmitController final
                           RuntimePromptStashController& prompt_stash, TranscriptSearchController& transcript_search,
                           RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors, SettingsDialog& settings_dialog,
                           SessionSelector& session_selector);
-  // Keep one routing boundary responsible for draft consumption and history recording.
+  // Not copyable: one router consumes drafts and records history using these session owners.
   RuntimeSubmitController(RuntimeSubmitController const&) = delete;
-  // Session collaborator references must not be replaced during dispatch.
   RuntimeSubmitController& operator=(RuntimeSubmitController const&) = delete;
 
   // TUI thread while idle: accept completion first, then consume owned draft text.
@@ -73,7 +72,7 @@ class RuntimeSubmitController final
  private:
   // Session borrow for local settings, attachment and backend action capabilities.
   TuiFrontEnd& frontend_;
-  // Session projection receives status, local output and settings only on the TUI thread.
+  // Session screen data receives status, local output and settings only on the TUI thread.
   RuntimePresentationState& presentation_state_;
   // Session editor owns completion state and history; submit consumes its draft once.
   Composer& draft_state_;

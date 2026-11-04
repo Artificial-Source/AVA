@@ -1,4 +1,4 @@
-// Routes one decoded input through composition's ordered modal and feature owners.
+// Routes one decoded input through the session's ordered modal and feature handlers.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
@@ -17,13 +17,13 @@ struct InputEvent;
 // TUI-thread handler result; dispatch stops on the first result other than Pass.
 enum class TuiInputOutcome
 {
-  // This owner did not consume the event; the next handler may claim it.
+  // This owner did not consume the event; the next handler may handle it.
   Pass,
   // This owner consumed the event successfully; lower-priority handlers must not see it.
   Handled,
-  // The event requests session exit; composition must leave the input stage.
+  // The event requests session exit; TuiSession must leave the input stage.
   Exit,
-  // Handling failed, including a legacy paint failure; composition terminates the turn.
+  // Handling failed, including a legacy paint failure; TuiSession terminates the turn.
   Failure
 };
 
@@ -45,9 +45,9 @@ class TuiInputDispatcher final
   // TUI thread: copy nonempty handler bindings in priority order. Their borrowed
   // targets must be fully constructed before the first dispatch and outlive this owner.
   explicit TuiInputDispatcher(std::initializer_list<Handler> handlers);
-  // TUI thread with all targets alive: offer input in order until one owner claims
-  // it. Input is borrowed only until return; all-Pass leaves it unhandled, and Exit
-  // or Failure is returned unchanged for composition to act on.
+  // TUI thread with all targets alive: offer input in order until a handler returns
+  // something other than Pass. Input is borrowed only until return; all-Pass leaves
+  // it unhandled, and Exit or Failure is returned unchanged for TuiSession to act on.
   [[nodiscard]] TuiInputOutcome dispatch(runtime_input::RuntimeInput const& input) const;
   // TUI thread: wrap a nonempty legacy binding without invoking it. The returned
   // handler borrows only input.event on dispatch and maps optional render success

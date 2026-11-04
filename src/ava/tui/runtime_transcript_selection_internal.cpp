@@ -1,4 +1,4 @@
-// Maps pointer input and copied text through the layout authority that actually supplies transcript rows.
+// Maps pointer input and copied text through the layout that supplies transcript rows.
 #include "sys.h"
 #include "runtime_state_internal.h"
 #include "ava/tui/composer_internal.h"
@@ -248,7 +248,7 @@ std::optional<TranscriptSelectionEndpoint> endpoint_for_absolute_line(detail::Tr
 {
   if (layout.message_starts.empty() || absolute_line >= layout.lines.size())
     return std::nullopt;
-  // Zero-allocation upper_bound directly on the const vector authority (no copy).
+  // Zero-allocation upper_bound directly on the const message-start vector (no copy).
   auto it = std::upper_bound(layout.message_starts.begin(), layout.message_starts.end(), absolute_line);
   if (it == layout.message_starts.begin())
     return std::nullopt;  // unowned leading spacer
@@ -361,7 +361,7 @@ TranscriptSelectionExtractResult extract_transcript_selection_text(detail::Trans
                                                                    std::size_t max_bytes)
 {
   TranscriptSelectionExtractResult result;
-  // Validate and order both endpoints against one immutable authority before extracting any bytes.
+  // Validate and order both endpoints against one unchanged layout before extracting any bytes.
   auto const ordered = ordered_endpoints(range, layout);
   auto const start_abs = absolute_line_for_endpoint(layout, ordered.first);
   auto const end_abs = absolute_line_for_endpoint(layout, ordered.second);
@@ -477,7 +477,7 @@ void apply_transcript_selection_overlay(std::vector<std::string>& visible_lines,
   if (!start_abs || !end_abs || *start_abs > *end_abs)
     return;
 
-  // Only touch rows intersecting the validated range; visible copies receive styling while authoritative text
+  // Only touch rows intersecting the validated range; visible copies receive styling while cached text
   // remains unchanged for hit-testing/copy.
   for (std::size_t row = 0; row < visible_lines.size(); ++row)
   {
@@ -857,7 +857,7 @@ std::optional<TranscriptSelectionHit> RuntimeTranscriptSelectionState::hit_test(
                                                                                 std::size_t row, std::size_t column,
                                                                                 std::ptrdiff_t frozen_to_live_item_index_shift) const
 {
-  // Reject unavailable body geometry before translating terminal coordinates; drawn cache supplies both row
+  // Reject unavailable body geometry before translating terminal coordinates; the supplied cache supplies both row
   // ownership and display-cluster boundaries.
   auto const viewport = viewport_for(snapshot, cache);
   if (!viewport || row == 0 || column == 0)
@@ -885,7 +885,7 @@ std::optional<TranscriptSelectionHit> RuntimeTranscriptSelectionState::hit_test(
   {
     hit.on_header = true;
     // Header kind is classified against the live transcript item after mapping any
-    // deferred frozen→live cap shift. Geometry stays on the frozen layout authority.
+    // deferred frozen→live cap shift. Geometry stays on the frozen layout.
     auto const live_item = shift_transcript_selection_item_index(endpoint->item_index, frozen_to_live_item_index_shift);
     if (live_item && *live_item < snapshot.transcript.size())
     {
@@ -904,7 +904,7 @@ void RuntimeTranscriptSelectionState::begin_selection(TranscriptSelectionEndpoin
     draft_state->clear_selection();
   reset_granular_drag();
   range_ = TranscriptSelectionRange{.anchor = endpoint, .focus = endpoint};
-  // Endpoints stay on the frozen layout authority; source identity is captured from the
+  // Endpoints stay on the frozen layout; source identity is captured from the
   // live transcript item after mapping any deferred frozen→live cap shift.
   auto const live_item = shift_transcript_selection_item_index(endpoint.item_index, frozen_to_live_item_index_shift).value_or(endpoint.item_index);
   anchor_source_authority_ = source_authority(snapshot, live_item);
@@ -1035,7 +1035,7 @@ bool RuntimeTranscriptSelectionState::toggle_header_at_frozen_item(ComposerSnaps
   auto const live_item = shift_transcript_selection_item_index(frozen_item_index, frozen_to_live_item_index_shift);
   if (!live_item)
     return false;
-  // Map to live source only for action validation; selection geometry remains in the frozen authority the user
+  // Map to live source only for action validation; selection geometry remains in the frozen layout the user
   // clicked.
   auto const current = source_authority(snapshot, *live_item);
   if (!current)
@@ -1066,7 +1066,7 @@ bool RuntimeTranscriptSelectionState::finish_header_click(ComposerSnapshot const
   auto const thinking = armed_thinking_header_;
   auto const expected_source = armed_source_authority_;
   // Retire the armed action before invoking a toggle: that synchronous callback may prepare layout and reenter
-  // selection authority handling.
+  // selection layout validation.
   armed_header_item_.reset();
   armed_press_endpoint_.reset();
   armed_source_authority_.reset();
@@ -1097,7 +1097,7 @@ bool RuntimeTranscriptSelectionState::autoscroll_for_row(RuntimePresentationStat
   // Transcript hit rows start at the first frame row; a drag beyond the painted body
   // clamps to the matching scroll edge.
   auto const transcript_row = screen_row - 1;
-  // Compute a bounded one-row change against drawn viewport geometry, then publish it before the caller re-hit-
+  // Compute a bounded one-row change against cached viewport geometry, then publish it before the caller re-hit-
   // tests the pointer.
   bool changed = false;
   if (transcript_row == 0 && transcript_scroll_offset < viewport.max_scroll_offset)
@@ -1182,7 +1182,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autosc
       cancel_pointer_interaction();
       return TranscriptSelectionMouseResult::HandledNeedsRender;
     }
-    // After moving the viewport, hit-test a clamped edge coordinate in the same authority and extend the
+    // After moving the viewport, hit-test a clamped edge coordinate in the same layout and extend the
     // correct character/word/line unit.
     auto const edge_row = edge_mouse_row_ <= 1 ? std::size_t{1} : viewport->transcript_height;
     auto const edge_column = std::clamp(edge_mouse_column_, viewport->canvas_left + 1, viewport->canvas_left + viewport->content_width);
@@ -1247,7 +1247,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     if (!hit || !word)
     {
       // Press outside transcript body: clear armed header / selection drag, keep
-      // existing selection until a new body selection starts or composer claims.
+      // existing selection until a new body selection starts or Composer starts a draft selection.
       if (drag_ == DragKind::HeaderArmed || drag_ == DragKind::Selecting)
         cancel_pointer_interaction();
       else
@@ -1306,7 +1306,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
     if (viewport)
       static_cast<void>(autoscroll_for_row(presentation, *viewport, event.mouse_row, transcript_scroll_offset));
 
-    // Re-hit after possible autoscroll against the same frozen authority.
+    // Re-hit after possible autoscroll against the same frozen layout.
     auto drag_hit = hit_test(snapshot, layout_cache, event.mouse_row, event.mouse_column, frozen_to_live_item_index_shift);
     if (!drag_hit)
     {
@@ -1496,7 +1496,7 @@ bool RuntimeTranscriptSelectionState::copy_selection(RuntimePresentationState& p
     ava::core::Application::instance().terminal_context().beep();
     return false;
   }
-  // Copy only from compatible drawn rows and enforce the clipboard byte bound before touching terminal
+  // Copy only from compatible cached rows and enforce the clipboard byte bound before touching terminal
   // clipboard transport.
   auto extracted = extract_transcript_selection_text(layout_cache.layout, *range_, kSelectionCopySoftCeiling);
   if (extracted.oversize)

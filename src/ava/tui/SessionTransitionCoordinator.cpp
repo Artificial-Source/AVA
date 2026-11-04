@@ -42,7 +42,7 @@ bool SessionTransitionCoordinator::apply(std::string committed_session_id)
   workspace_.close();
   draft_.reset_for_session_transition();
   renderer_.reset_for_session_transition();
-  // Clear old projection and selector rows before publishing committed identity last.
+  // Clear old display data and selector rows before storing the committed identity last.
   // A reader after apply returns therefore cannot mistake old content for the new session.
   presentation_.reset_session_projection(selectors_.kind() == ActiveSelectList::Overview);
   selectors_.close();

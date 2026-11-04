@@ -1,4 +1,4 @@
-// Coordinates selector policy around the single published selector view.
+// Coordinates selector input around the single view stored for display.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #include "sys.h"
 #include "SelectorHost.h"
@@ -65,7 +65,7 @@ void SelectorHost::replace(SelectListView view)
 
 void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t selected_index, std::string query)
 {
-  // Resolve identity while the old view is still alive; publishing replacement invalidates
+  // Resolve identity while the old view is still alive; replacing it invalidates
   // its row pointers. A missing identity falls back to the new view selection, then clamps.
   view.query = std::move(query);
   if (auto const* item = selected_item(selected_index); item && !item->value.empty())

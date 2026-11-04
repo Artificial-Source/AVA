@@ -1,4 +1,5 @@
-// Coordinates worker prompt rendezvous and TUI modal claims; see docs/engineering/tui-architecture.md.
+// Queues worker prompts and holds their workers until TUI callbacks retire.
+// See docs/engineering/tui-architecture.md for the surrounding session lifetime.
 #pragma once
 
 #include "PendingPermissionRequest.h"
@@ -44,13 +45,13 @@ namespace runtime_input {
 struct RuntimeInput;
 }
 
-// TUI control result; only permission input can retain a claim while requesting run stop.
+// TUI control result; only permission input can keep its request held while asking for run stop.
 enum class PromptServiceOutcome
 {
-  None, // No active or newly claimed prompt owns this service turn.
-  Active, // The claim still protects worker-borrowed callbacks.
+  None, // No active or newly started prompt owns this service turn.
+  Active, // The TUI holds the worker while callbacks may borrow its stack.
   Completed, // Callbacks retired and the worker may consume its result.
-  // The claim remains held: publish run stop, then cancel_active(RunStop).
+  // Keep the request held: request run stop, then cancel_active(RunStop).
   RequestRunStop,
 };
 
@@ -62,29 +63,29 @@ enum class PromptCancelReason
   Shutdown, // Retire callbacks and use prepared cancellation without automatic resolution.
 };
 
-// TUI caller learns which owner consumed a retained search key under admission arbitration.
+// TUI caller learns whether an existing/queued prompt or search consumed the retained key.
 enum class SearchInputPromptDispatchResult
 {
-  PromptServiced, // Prompt authority won; never replay this key into its new view.
-  InputHandled, // Search ran while new prompt admission was excluded.
+  PromptServiced, // A prompt was serviced; never replay this key into a newly opened view.
+  InputHandled, // Search ran after unlocking the queue; later arrivals await a later prompt check.
   InputFailed, // Search ran but its input/render path reported failure.
 };
 
-// Session-owned modal coordinator. UI state and active claims belong to the TUI
-// thread; resolver workers use the locked queues and block in shared requests.
-// Session collaborators and this stable address must outlive every resolver call.
-// A claim protects worker-borrowed callbacks until they retire, even after a result
-// exists. Stop admission, retire the claim and join workers before destruction.
+// TuiSession owns this coordinator. Only the TUI thread accesses prompt views and
+// the active request; resolver workers enqueue under a mutex and wait for a result.
+// A claim is the TUI's hold on that request: its worker remains blocked while TUI
+// callbacks can borrow the worker's stack, even if a result is already stored.
+// Close the queues, remove those callbacks, release the hold and join workers before
+// destruction. Session collaborators and this stable address outlive every resolver call.
 class RuntimePromptCoordinator final
 {
  public:
-  // TUI thread: bind session collaborators and member timers before opening admission.
+  // TUI thread: bind session collaborators and member timers before accepting requests.
   // The optional selector and loop must outlive this stable callback target.
   RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
                            RuntimeRenderer& renderer, TuiEventLoop& loop, SelectorHost* selectors = nullptr);
-  // One coordinator owns the claim and timers; duplicating it would split retirement.
+  // Not copyable: one owner releases active requests, and resolver/timer callbacks retain its address.
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
-  // Keep resolver and timer targets bound to the same synchronization identity.
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;
 
   // TUI thread after resolver workers join: shut down residual UI state and timers.
@@ -92,19 +93,19 @@ class RuntimePromptCoordinator final
   ~RuntimePromptCoordinator();
 
   // The session and borrowed UI collaborators outlive every resolver invocation;
-  // stop admission and join workers before destroying this coordinator.
-  // Open only after prior submission workers and claimed UI resolution retire.
+  // stop accepting requests and join workers before destroying this coordinator.
+  // Reopen only after prior submission workers and active TUI prompts are gone.
   void open_admission();
-  // TUI-thread teardown closes admission, retires a claim with prepared cancellation,
-  // clears audit/projection state, and cancels timers before destruction.
+  // TUI teardown stops new requests, releases the active request with prepared
+  // cancellation, clears audit/screen data and cancels timers before destruction.
   void shutdown();
   // TUI setup: return a raw-this callback for workers. Its callers must finish before
-  // coordinator destruction; denied admission returns Deny without waiting.
+  // coordinator destruction; a closed queue returns Deny without waiting.
   [[nodiscard]] ava::permissions::PermissionResolver permission_resolver();
   // TUI setup: return a raw-this worker callback with the same join requirement.
-  // Admitted callers remain blocked until both answer and claim retirement exist.
+  // Accepted callers wait until an answer exists and the TUI releases its hold.
   [[nodiscard]] ava::agent::QuestionResolver question_resolver();
-  // Either thread: close admission and interrupt queued waiters without allocation.
+  // TUI thread: stop accepting requests and interrupt queued waiters without allocation.
   // A claimed request stays with the TUI; service/cancel retires its callbacks first.
   void fail_pending_requests();
   // TUI thread: claim the next queued request before presenting it; an existing
@@ -130,13 +131,13 @@ class RuntimePromptCoordinator final
   // borrowed prompt callbacks before waking its worker with the original Io error.
   // A failure must not run automatic question resolution and turn into success.
   void fail_active_render();
-  // TUI thread: test claim ownership, which can outlast the visible prompt projection.
+  // TUI thread: test whether a request is still held, even after its view is cleared.
   [[nodiscard]] bool has_active() const noexcept;
   // Either thread: synchronized queue readiness, separate from TUI-only active claim state.
   [[nodiscard]] bool has_pending_requests() const;
   // TUI thread: choose a queued prompt under the mutex, then invoke either prompt
   // startup or search after unlocking. A request queued during search waits for
-  // the next turn; this retained key can never answer that new prompt.
+  // a later prompt check; this retained key can never answer that new prompt.
   [[nodiscard]] SearchInputPromptDispatchResult dispatch_search_input_with_prompt_precedence(std::function<bool()> const& dispatch_search_input,
                                                                                              std::function<bool()> stop_requested = {},
                                                                                              std::function<void()> before_prompt = {});
@@ -149,23 +150,23 @@ class RuntimePromptCoordinator final
 
  private:
   // Shared ownership keeps a request alive independently for its waiting worker,
-  // queue and claimed UI resolution. Only the request owns result synchronization.
+  // queue and active TUI prompt. Only the request owns result synchronization.
   using ClaimedPromptRequest = std::variant<std::monostate, std::shared_ptr<PendingPermissionRequest>, std::shared_ptr<PendingQuestionRequest>>;
   // Owned permission outcome moved to a request only after its callbacks retire.
   using PermissionResult = ava::core::Result<ava::permissions::PermissionResolutionDecision>;
   // Owned answer/error moved to the sole waiting question resolver after retirement.
   using QuestionResult = ava::core::Result<ava::agent::QuestionAnswer>;
 
-  // Worker thread: construct and enqueue under admission lock, notify after unlock,
+  // Worker thread: construct and enqueue under the queue lock, notify after unlock,
   // then wait without retaining the queue mutex. The coordinator must outlive the call.
   [[nodiscard]] ava::core::Result<ava::permissions::PermissionResolutionDecision> request_permission(ava::permissions::PermissionPrompt const& prompt);
   // Worker thread: retain a request share while waiting, so removal from the queue
-  // cannot destroy the rendezvous or release borrowed callbacks prematurely.
+  // cannot destroy the request while TUI callbacks may still borrow worker data.
   [[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> request_question(ava::agent::QuestionPrompt const& prompt);
   // TUI thread with prompt_request_mutex_: prefer permission over question FIFO.
   // Claim the request before unlocking so cancellation cannot release its worker early.
   [[nodiscard]] ClaimedPromptRequest claim_pending_request_locked();
-  // TUI thread after unlocking admission: install the claim before invoking hooks
+  // TUI thread after unlocking the queue: install the held request before invoking hooks
   // or presenting the prompt. Exceptions abandon only after retiring callbacks.
   [[nodiscard]] PromptServiceOutcome start_claimed_request(ClaimedPromptRequest request, std::function<bool()> stop_requested,
                                                            std::function<void()> before_prompt);
@@ -174,13 +175,13 @@ class RuntimePromptCoordinator final
   void emit_prompt_audit(std::string status, std::string text, std::string permission_request_id = {}, std::string tool_name = {}, std::string reason = {},
                          std::string resolution_reason = {});
   // TUI thread with a permission claim: audit and reuse an eligible session grant,
-  // otherwise publish a default-deny view. A returned result completes immediately.
+  // otherwise prepare a default-deny view. A returned result completes immediately.
   [[nodiscard]] std::optional<PermissionResult> start_permission_prompt(ava::permissions::PermissionPrompt const& prompt);
-  // TUI thread with a question claim: publish the view before arming automatic polling.
+  // TUI thread with a question claim: paint the view before arming automatic polling.
   // A render error is returned for completion; absence leaves the claim active.
   [[nodiscard]] std::optional<QuestionResult> start_question_prompt(ava::agent::QuestionPrompt const& prompt);
   // TUI thread with a permission claim: validate/store remembered or session choices
-  // before returning execution authority. Storage/eligibility failure denies.
+  // before returning an Allow decision. Storage/eligibility failure denies.
   [[nodiscard]] PermissionResult resolve_permission_choice(PermissionPromptChoice selected, std::string user_guidance = {});
   // TUI thread with a permission claim: sample queued cancellation under its
   // mutex, then call the borrowed stop predicate unlocked and observe signals.
@@ -192,7 +193,7 @@ class RuntimePromptCoordinator final
   // TUI thread while claim protects the worker: invoke the optional borrowed callback.
   // No answer keeps the claim; successful discovery returns an answer or render error.
   [[nodiscard]] std::optional<QuestionResult> auto_resolve_question();
-  // TUI thread: keep Escape claimed until ActiveRun publishes stop. Other choices
+  // TUI thread: Escape keeps the request held until ActiveRun requests worker stop. Other choices
   // resolve through permission policy before releasing the request.
   [[nodiscard]] PromptServiceOutcome handle_permission_input(runtime_input::RuntimeInput const& input);
   // TUI thread: update selection/text before deriving an answer, audit/copy as needed,
@@ -212,9 +213,9 @@ class RuntimePromptCoordinator final
   // TUI thread: remove both prompt surfaces without deciding or releasing a request.
   void clear_prompt_projection();
   // TUI thread on teardown/unwind: retire callbacks, release with prepared cancellation,
-  // then attempt projection cleanup so UI failure cannot strand the waiter.
+  // then clear screen data so UI failure cannot strand the waiter.
   void abandon_active_request();
-  // TUI timer callback: request a later service check; never invoke worker callbacks
+  // TUI timer callback: request a later service check; never invoke borrowed prompt callbacks
   // from timer dispatch itself.
   void mark_auto_resolution_due(TuiTimer::Clock::time_point now);
   // TUI timer callback: restore wheel eligibility and reset burst state after the quiet period.
@@ -228,26 +229,26 @@ class RuntimePromptCoordinator final
 
   // Session borrow used on the TUI thread for persistent permission-rule decisions.
   TuiFrontEnd const& frontend_;
-  // Session-owned TUI projection; workers never access prompt views.
+  // Session-owned screen data; workers never access prompt views.
   RuntimePresentationState& presentation_;
-  // Session-owned TUI grant authority; checked before displaying eligible permission prompts.
+  // Session-owned grant registry; the TUI checks it before showing eligible permission prompts.
   TuiSessionGrantRegistry& session_grants_;
   // Session-owned TUI renderer; rendering never occurs under the audit mutex.
   RuntimeRenderer& renderer_;
   // Optional session borrow used only on the TUI thread. Prompt acquisition closes
   // overview/stash lists that would otherwise hide beneath its new surface.
   SelectorHost* selectors_ = nullptr;
-  // Serializes worker admission, queue removal and pending cancellation. All
+  // Serializes worker enqueueing, queue removal and pending cancellation. All
   // callbacks run after unlock so reentry cannot deadlock this queue.
   mutable std::mutex prompt_request_mutex_;
-  // Under admission mutex: permission FIFO shares pair with blocked workers
-  // and take priority over queued questions when the TUI chooses a new claim.
+  // Under queue mutex: shared requests stay alive for blocked permission workers
+  // and take priority over queued questions when the TUI chooses its next prompt.
   std::deque<std::shared_ptr<PendingPermissionRequest>> pending_permission_requests_;
-  // Under admission mutex: queued shares keep question rendezvous alive alongside workers.
+  // Under queue mutex: shared requests keep questions alive alongside their waiting workers.
   std::deque<std::shared_ptr<PendingQuestionRequest>> pending_question_requests_;
-  // Under admission mutex: TUI opens between submissions; either thread closes on stop.
+  // Under queue mutex: the TUI accepts requests between open_admission() and stop.
   bool accept_prompt_requests_ = false;
-  // Under admission mutex: cancellation signals TUI service to retire its active claim;
+  // Under queue mutex: cancellation asks TUI service to release its active request;
   // it does not interrupt that claim or overwrite an automatic answer.
   bool cancellation_pending_ = false;
   // Protects sink replacement/copy only; callbacks always run after unlock.
@@ -255,8 +256,8 @@ class RuntimePromptCoordinator final
   // Synchronized endpoint copied for audit emission; its captures must survive in-flight calls.
   ava::event::RuntimeEventSink prompt_audit_sink_;
 
-  // Only the TUI thread owns a claim. Other threads publish cancellation under
-  // prompt_request_mutex_; service() resolves it after checking automatic answers.
+  // Only the TUI thread owns this hold. Cancellation is stored separately under
+  // prompt_request_mutex_; service() checks automatic answers before handling it.
   // Retire every borrowed callback before completing and releasing its worker.
   ClaimedPromptRequest active_request_;
   // TUI thread sets this when claiming a prompt and clears it only after decoding
@@ -276,7 +277,7 @@ class RuntimePromptCoordinator final
   WheelBurstGovernor wheel_governor_;
   // TUI-only quiet-period deadline set after navigation and cleared on non-wheel input/retirement.
   std::optional<TuiTimer::Clock::time_point> wheel_suppression_deadline_;
-  // Weak loop capability; workers notify only after queue publication or cancellation.
+  // Weak wake handle; notify the loop only after enqueueing a request or recording cancellation.
   TuiWakeup wakeup_;
   // TUI registration marks automatic discovery due every 100 ms while a question
   // offers it. The borrowed loop and stable target outlive both registrations.

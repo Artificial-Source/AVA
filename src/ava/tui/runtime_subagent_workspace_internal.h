@@ -40,7 +40,7 @@ class RuntimeSubagentWorkspaceController final
  public:
   // TUI-thread monotonic clock shared with discovery timer scheduling.
   using Clock = std::chrono::steady_clock;
-  // While a workspace surface is open, refresh snapshots every 150 ms; closed mode leaves no discovery wake.
+  // Schedule discovery every 150 ms while open; loop work may delay dispatch. Closed mode has no discovery wake.
   static constexpr auto kPollInterval = std::chrono::milliseconds(150);
 
   // Frontend, projection and selector host outlive this TUI-owned presentation.
@@ -48,9 +48,8 @@ class RuntimeSubagentWorkspaceController final
   RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, SelectorHost& selectors);
   // TUI thread: close presentation and timer while borrowed host/projection still live.
   ~RuntimeSubagentWorkspaceController();
-  // Keep one owner of workspace projection and discovery registration.
+  // Not copyable: one controller owns workspace state, selector restoration, and the discovery callback target.
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
-  // Do not replace lifetime-bound dependencies or duplicate the selector checkpoint.
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
   // Loop and renderer outlive this stable owner; attached polling only runs from
@@ -65,10 +64,10 @@ class RuntimeSubagentWorkspaceController final
   // TUI thread while active: route selector/workspace actions and return changed/beep feedback; backend
   // callbacks are synchronous borrowed calls.
   [[nodiscard]] RuntimeSubagentWorkspaceInputResult handle_input(InputEvent const& event, Clock::time_point now = Clock::now());
-  // Close presentation and polling admission while the borrowed host/snapshot live.
+  // Close the workspace view and stop polling while the borrowed host/snapshot live.
   void close();
 
-  // TUI thread: report whether discovery and workspace-specific input routing remain admitted.
+  // TUI thread: report whether the workspace still uses discovery and its own input routing.
   [[nodiscard]] bool active() const noexcept;
   // TUI thread: distinguish the job chooser from inspector mode before routing list input.
   [[nodiscard]] bool selector_active() const noexcept;
@@ -88,7 +87,7 @@ class RuntimeSubagentWorkspaceController final
   // TUI-thread exclusive surface state; publish ensures selector and inspector are never displayed together.
   enum class Mode
   {
-    // No workspace input or periodic discovery is admitted.
+    // No workspace input routing or periodic discovery is active.
     Closed,
     // SelectorHost owns the visible list's current query and selection.
     Selector,
@@ -114,8 +113,8 @@ class RuntimeSubagentWorkspaceController final
   [[nodiscard]] bool set_workspace_scroll(std::size_t offset);
   // TUI thread: retire inspected-job state and restore list checkpoint while leaving discovery active.
   void close_to_selector();
-  // TUI thread: enforce mutually exclusive surfaces and clamp their selections/scroll before named projection
-  // publication.
+  // TUI thread: show at most one workspace surface and clamp its selection/scroll before updating the
+  // screen data.
   void publish();
   // TUI thread discovery: refresh list first, inspect only after a successful list read, then publish once if
   // changed.
@@ -129,16 +128,13 @@ class RuntimeSubagentWorkspaceController final
   TuiFrontEnd const& frontend_;
   // Borrowed projection owner outlives the controller; close/destruction publishes surface retirement here.
   RuntimePresentationState& presentation_;
-  // The session-owned host outlives this controller.
-  // Borrowed session host outlives this owner; while chooser is visible, it alone owns query and current
-  // selection.
+  // Borrowed session host outlives this controller; while the chooser is visible, it owns the query and
+  // current selection.
   SelectorHost& selectors_;
-  // TUI-thread surface authority changed by open/close/cycle transitions and consumed by input/discovery.
+  // TUI-thread visible mode changed by open/close/cycle transitions and consumed by input/discovery.
   Mode mode_ = Mode::Closed;
-  // Rebuild/checkpoint data for returning from workspace mode. While the selector
-  // is visible, the host alone owns its current query and selection.
-  // TUI-thread owned list checkpoint; refreshed from SelectorHost before leaving chooser or reconciling backend
-  // rows.
+  // TUI-thread list checkpoint for returning from the inspector. Refresh from SelectorHost before leaving
+  // the chooser or reconciling backend rows; the host owns the visible query and selection.
   SelectListView selector_;
   // TUI-thread owned inspector content and scroll; reset whenever selected job changes or workspace closes.
   SubagentWorkspaceView workspace_;

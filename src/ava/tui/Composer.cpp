@@ -132,7 +132,7 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
     return result;
   }
   // This phase is reached after transcript bindings. Within it, completion rows precede
-  // history, and unclaimed arrow keys become cross-owner transcript scrolling requests.
+  // history, and unhandled arrow keys request transcript scrolling from the caller.
   if (phase == ComposerInputPhase::Navigation)
   {
     auto const& event = input.event;
@@ -242,7 +242,7 @@ ComposerInputResult Composer::handle_key(runtime_input::RuntimeInput const& inpu
   if (phase == ComposerInputPhase::Tail)
   {
     // Cancel gives the draft selection priority over the transcript selection,
-    // then dismisses completion. Only an unclaimed Escape reaches double-Escape clearing.
+    // then dismisses completion. Only an unhandled Escape reaches double-Escape clearing.
     if (is_action(TuiAction::Cancel))
     {
       if (selection_bounds())
@@ -299,7 +299,7 @@ ComposerInputResult Composer::step_completion(CompletionStep step, detail::Compl
   cancel_escape();
   auto const count = slash ? filter_slash_commands(draft_.text, draft_.cursor, snapshot.slash_commands).size()
                            : (completions.model ? completions.model->ranked_source_indices.size() : 0);
-  // An empty visible palette still claims navigation, preventing accidental history movement.
+  // An empty visible palette still handles navigation, preventing accidental history movement.
   if (count == 0)
     return {.handled = true, .status = slash ? "no matching slash commands" : reference ? "no matching file references" : "no matching paths"};
   if (slash)
@@ -367,7 +367,7 @@ ComposerInputResult Composer::force_path_completion(ComposerSnapshot const& snap
   auto const was_suppressed = slash_palette_suppressed_;
   slash_palette_suppressed_ = false;
   path_completion_force_active_ = true;
-  // Query the prospective flags before publishing them. The prepared normal
+  // Query with the proposed flags before storing them. The prepared normal
   // cache still describes the previous flags and must not be reused here.
   detail::CompletionMatchCache completions;
   detail::refresh_completion_match_cache(completions, draft_.text, draft_.cursor, slash_palette_suppressed_, path_completion_force_active_,

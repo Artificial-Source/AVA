@@ -176,7 +176,7 @@ TuiInputOutcome TuiSession::handle_signals()
     if (!Signals::received(terminal_signals))
       return TuiInputOutcome::Pass;
     // An already answerable question resolves automatically before signal denial.
-    // Claim the signal only after that prompt policy, matching active-run behavior.
+    // Consume the pending signal only after that prompt policy, matching active-run behavior.
     static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::TerminalSignal));
     bool const exit_requested = Signals::try_obtain(SIGTERM);
     bool const claimed_sigint = !exit_requested && Signals::try_obtain(SIGINT);
@@ -225,7 +225,7 @@ TuiInputOutcome TuiSession::handle_signals()
           return terminal_write_failed_ ? TuiInputOutcome::Failure : TuiInputOutcome::Exit;
         return TuiInputOutcome::Handled;
       }
-      // We failed to claim either terminal signal; fall-through.
+      // Neither terminal signal was available to consume; fall through.
     }
     else if (exit_requested)
     {
@@ -250,7 +250,7 @@ TuiInputOutcome TuiSession::handle_signals()
       }
       return TuiInputOutcome::Handled;
     }
-    // Failed to claim either terminal signal; fall-through.
+    // Neither terminal signal was available to consume; fall through.
   }
   return TuiInputOutcome::Pass;
 }
@@ -708,7 +708,7 @@ void TuiSession::service_control()
   if (loop_.stopped() || terminal_closing_ || (!loop_.terminal_hangup() && !loop_.terminal_error()))
     return;
 
-  // Stop admission before draining final buffered bytes. HUP is a normal close;
+  // Stop ordinary dispatch before draining final buffered bytes. HUP is a normal close;
   // descriptor errors are failures. Neither can remain a level-triggered wait.
   terminal_closing_ = true;
   terminal_write_failed_ = terminal_write_failed_ || loop_.terminal_error();
@@ -742,7 +742,7 @@ bool TuiSession::service_application_updates()
   return active_run_controller_.has_pending_updates();
 }
 
-// Resolve feature outcomes before input sees their new modal/projection state.
+// Apply feature results before input sees the changed modal or display state.
 // Stop immediately on failure so later features cannot hide the exit cause.
 void TuiSession::service_presentations()
 {
@@ -790,7 +790,7 @@ bool TuiSession::service_input_batch()
     if (polled.kind == runtime_input::InputPollKind::Discarded)
       continue;
     auto const& input = polled.input;
-    // Claim signals again after decoding: a handled signal consumes the retained
+    // Check and consume signals again after decoding: a handled signal consumes the retained
     // key before either active or idle feature dispatch can use it.
     auto const control = handle_signals();
     apply_input_outcome(control);

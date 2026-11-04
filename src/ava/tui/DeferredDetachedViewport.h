@@ -9,7 +9,8 @@
 namespace ava::tui {
 
 // TranscriptView owns this optional TUI-thread value while scrolled away from the
-// live tail. The first anchor stays fixed; later evictions accumulate as shifts.
+// live tail. The first anchor stays fixed; removing N front items contributes -N
+// to the index adjustment used to restore both viewport and selection.
 // It owns its anchor and does not retain the layout cache used to capture it.
 class DeferredDetachedViewport final
 {
@@ -20,7 +21,7 @@ class DeferredDetachedViewport final
   void accumulate_shift(std::ptrdiff_t item_index_shift) noexcept;
   // TUI thread: borrow until this value is reset, normally after layout synchronization.
   [[nodiscard]] detail::TranscriptViewportAnchor const& anchor() const noexcept;
-  // TUI thread: use the same total when restoring viewport and selection authority.
+  // TUI thread: use the same total when restoring viewport and selection indices.
   [[nodiscard]] std::ptrdiff_t item_index_shift() const noexcept;
   AVA_DEBUG_PRINT_MEMBERS_ON
  private:

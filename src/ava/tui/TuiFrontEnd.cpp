@@ -61,9 +61,8 @@ class RuntimeBeforeShutdownGuard
  public:
   // TUI thread: borrow the frontend before any startup operation can fail.
   explicit RuntimeBeforeShutdownGuard(TuiFrontEnd& frontend) : frontend_(frontend) { }
-  // One guard owns the single shutdown attempt for this run.
+  // Not copyable: one guard owns the single shutdown attempt for this run.
   RuntimeBeforeShutdownGuard(RuntimeBeforeShutdownGuard const&) = delete;
-  // Reassignment could lose the pending cleanup obligation.
   RuntimeBeforeShutdownGuard& operator=(RuntimeBeforeShutdownGuard const&) = delete;
   // TUI thread: cover every early exit; invoke suppresses repeated attempts.
   ~RuntimeBeforeShutdownGuard() { static_cast<void>(invoke()); }
@@ -105,9 +104,8 @@ class ComposerTerminalGraphicsGuard
  public:
   // TUI thread: acquire cleanup responsibility after Context initialization.
   ComposerTerminalGraphicsGuard(terminal::Context& terminal_context) : terminal_context_(terminal_context) { }
-  // Exactly one guard clears the overlays for this session scope.
+  // Not copyable: exactly one guard clears the overlays for this session scope.
   ComposerTerminalGraphicsGuard(ComposerTerminalGraphicsGuard const&) = delete;
-  // Preserve the original terminal and cleanup responsibility until scope exit.
   ComposerTerminalGraphicsGuard& operator=(ComposerTerminalGraphicsGuard const&) = delete;
   // TUI thread after session retirement: erase overlays while Context still lives.
   ~ComposerTerminalGraphicsGuard() { detail::clear_composer_terminal_graphics(terminal_context_); }
@@ -130,12 +128,11 @@ class TerminalBackgroundDetectionGuard
     runtime_input::reset_input_decoder();
   }
 
-  // Probe admission and startup input have one scope owner, not copyable snapshots.
+  // Not copyable: one scope owns probe cleanup and queued startup input.
   TerminalBackgroundDetectionGuard(TerminalBackgroundDetectionGuard const&) = delete;
-  // Reassignment would confuse which scope retires the global probe handler.
   TerminalBackgroundDetectionGuard& operator=(TerminalBackgroundDetectionGuard const&) = delete;
 
-  // TUI thread: close probe admission before clearing queued startup input.
+  // TUI thread: stop accepting probe replies before clearing queued startup input.
   ~TerminalBackgroundDetectionGuard()
   {
     disarm_terminal_background_response_handler();

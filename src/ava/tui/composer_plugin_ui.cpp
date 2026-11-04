@@ -9,20 +9,21 @@
 namespace ava::tui {
 namespace {
 
-// TUI thread: measure the identity as displayed, including replacements for
-// unsafe bytes. Binding validation is not a substitute for the renderer boundary.
+// TUI thread: build the plugin ID label with unsafe bytes replaced, so measurement
+// and display use the same text even if earlier binding validation was bypassed.
 std::string plugin_id_host_text(TuiPluginUiBinding const& binding)
 {
   return "Plugin ID · " + sanitize_terminal_text(binding.plugin_id);
 }
 
-// TUI thread: command attribution must fit after sanitation; measuring raw SGR
-// would hide bytes that the screen shows as literal replacement text.
+// TUI thread: build the command label with unsafe bytes replaced. Measuring raw
+// styling escapes would undercount the replacement text actually shown.
 std::string plugin_command_host_text(TuiPluginUiBinding const& binding)
 {
   return "Command · " + sanitize_terminal_text(binding.command);
 }
 
+// Return the fixed keyboard/deadline help included in this kind of plugin surface.
 std::string plugin_controls_host_text(TuiPluginUiKind kind)
 {
   switch (kind)
@@ -38,6 +39,7 @@ std::string plugin_controls_host_text(TuiPluginUiKind kind)
   return {};
 }
 
+// Count the mandatory identity, content and control rows before modal padding.
 std::size_t plugin_minimum_surface_rows(TuiPluginUiKind kind)
 {
   switch (kind)
@@ -56,6 +58,8 @@ std::size_t plugin_minimum_surface_rows(TuiPluginUiKind kind)
 
 }  // namespace
 
+// TUI thread: require room for identity/control labels and minimum content after
+// sanitizing their text. Allocation or measurement failure reports that it cannot fit.
 bool plugin_ui_host_chrome_fits(TuiPluginUiBinding const& binding, TuiPluginUiKind kind, std::size_t width, std::size_t max_lines) noexcept
 {
   try
@@ -78,11 +82,13 @@ bool plugin_ui_host_chrome_fits(TuiPluginUiBinding const& binding, TuiPluginUiKi
 namespace detail {
 namespace {
 
+// TUI thread: pad one owned dock row using a borrowed style valid for this call.
 std::string plugin_surface_line(std::string content, std::size_t width, std::string_view background)
 {
   return surface_line(background, "  " + std::move(content), width);
 }
 
+// TUI thread: fit an owned modal row inside its inset before applying the background.
 std::string plugin_modal_surface_line(std::string content, std::size_t width)
 {
   auto const inset = modal_horizontal_inset(width);
@@ -90,17 +96,20 @@ std::string plugin_modal_surface_line(std::string content, std::size_t width)
   return surface_line(kSgrComposerBg, std::string(inset, ' ') + std::move(content), width);
 }
 
+// TUI thread: Confirm has two fixed choices; Select uses the borrowed view's options.
 std::size_t plugin_option_count(TuiPluginUiModalView const& view)
 {
   return view.kind == TuiPluginUiKind::Confirm ? std::size_t{2} : view.options.size();
 }
 
+// TUI thread: reserve label/control rows and padding before allocating option rows.
 std::size_t plugin_option_row_budget(std::size_t max_lines)
 {
   auto const fixed_rows = std::size_t{5} + 2 * modal_vertical_inset(max_lines);
   return max_lines > fixed_rows ? max_lines - fixed_rows : 0;
 }
 
+// TUI thread: choose the first visible option so the clamped selection stays in view.
 std::size_t plugin_first_visible_option(TuiPluginUiModalView const& view, std::size_t max_lines)
 {
   auto const count = plugin_option_count(view);
@@ -113,6 +122,8 @@ std::size_t plugin_first_visible_option(TuiPluginUiModalView const& view, std::s
   return std::min(selected - budget + 1, count - budget);
 }
 
+// TUI thread: copy sanitized option text, using fixed Confirm labels or an empty
+// pair for an invalid index. The returned strings do not borrow the view.
 std::pair<std::string, std::optional<std::string>> plugin_option_text(TuiPluginUiModalView const& view, std::size_t index)
 {
   if (view.kind == TuiPluginUiKind::Confirm)
@@ -174,7 +185,7 @@ std::vector<std::string> render_plugin_ui_dock(TuiPluginUiDockView const& view, 
 }
 
 // TUI thread: build owned modal rows from a borrowed view; no field may supply
-// terminal controls. Sanitation also keeps row fitting consistent with admission.
+// terminal controls. Sanitizing also matches the geometry check used to accept the view.
 std::vector<std::string> render_plugin_ui_modal(TuiPluginUiModalView const& view, std::size_t width, std::size_t max_lines)
 {
   if (!plugin_ui_host_chrome_fits(view.binding, view.kind, width, max_lines))

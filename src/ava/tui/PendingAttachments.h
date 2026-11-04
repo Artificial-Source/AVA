@@ -16,19 +16,18 @@ struct PendingAttachmentItem;
 // References and presentation badges have the same order and lifetime until take
 // or clear; session presentation outlives this owner and its borrowing controllers.
 // There is no worker or lock. Destruction releases local references; backend
-// attachment persistence remains frontend-owned, and Session retires the projection.
+// attachment persistence remains frontend-owned, and Session discards the display state.
 class PendingAttachments final
 {
  public:
   // TUI thread: borrow a presentation with no staged badges; it outlives this owner.
   explicit PendingAttachments(RuntimePresentationState& presentation);
-  // One draft must not duplicate ownership of staged references and their badge pairing.
+  // Not copyable: one staging area keeps submission references paired with their display badges.
   PendingAttachments(PendingAttachments const&) = delete;
-  // Keep the presentation paired with the references for the entire staging lifetime.
   PendingAttachments& operator=(PendingAttachments const&) = delete;
 
   // TUI thread: append one backend reference and its badge in the same order. If badge
-  // publication throws, remove the new reference so counts remain paired.
+  // insertion throws, remove the new reference so counts remain paired.
   void stage(ava::session::ImageAttachmentRef reference, PendingAttachmentItem badge);
   // TUI thread: transfer all staged references to submission and clear their badges
   // before another draft is painted. The returned vector owns its references.
@@ -43,7 +42,7 @@ class PendingAttachments final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Borrowed from Session; projection holding the corresponding badges; only named publications mutate it.
+  // Borrowed from Session; holds the corresponding badges, updated through presentation methods.
   RuntimePresentationState& presentation_;
   // TUI-thread ordered submission payload; stage appends, take transfers and clear discards.
   std::vector<ava::session::ImageAttachmentRef> references_;

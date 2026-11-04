@@ -14,7 +14,7 @@ PendingAttachments::PendingAttachments(RuntimePresentationState& presentation) :
 
 void PendingAttachments::stage(ava::session::ImageAttachmentRef reference, PendingAttachmentItem badge)
 {
-  // Store the submission reference first, then roll it back if badge publication fails.
+  // Store the submission reference first, then roll it back if adding its badge fails.
   // The TUI thread cannot observe a partial pair between these synchronous steps.
   references_.push_back(std::move(reference));
   try

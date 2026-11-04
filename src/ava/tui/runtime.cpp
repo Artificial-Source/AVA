@@ -1,3 +1,4 @@
+// Applies shared TUI feedback and paints selector handoffs before backend actions.
 #include "sys.h"
 #include "SelectorHost.h"
 #include "composer.h"
@@ -24,6 +25,8 @@ ava::core::Result<std::string> dispatch_tui_selector_authority(RuntimePresentati
                                                                std::function<bool()> const& render,
                                                                std::function<ava::core::Result<std::string>()> const& callback)
 {
+  // Clear the old selector before painting pending status, so a blocking backend
+  // action cannot leave the previous choice looking interactive.
   selectors.close();
   presentation.publish_status(std::move(pending_status));
   if (!render())

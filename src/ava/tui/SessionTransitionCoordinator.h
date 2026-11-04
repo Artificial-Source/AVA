@@ -20,9 +20,9 @@ class TuiFrontEnd;
 
 // Session owns transition ordering shared by idle selection and active-run completion.
 // Every member is TUI-thread-only and borrows owners that outlive this coordinator.
-// The backend must already have committed identity; equal identities preserve local
-// state. Cleanup finishes before new identity is published. No worker or callback
-// retains this coordinator, so destruction needs no join or lock.
+// The backend must already have committed the session change; equal identities preserve
+// local state. Cleanup finishes before display state gets the new identity. No worker
+// or callback retains this coordinator, so destruction needs no join or lock.
 class SessionTransitionCoordinator final
 {
  public:
@@ -31,13 +31,12 @@ class SessionTransitionCoordinator final
   SessionTransitionCoordinator(RuntimePresentationState& presentation, Composer& draft, RuntimeRenderer& renderer, TranscriptSearchController& search,
                                RuntimeSubagentWorkspaceController& workspace, SelectorHost& selectors, PendingAttachments& attachments,
                                TuiSessionGrantRegistry& grants);
-  // One session controls transition ordering; copying adds no independent authority.
+  // Not copyable: one coordinator orders cleanup across the same session owners.
   SessionTransitionCoordinator(SessionTransitionCoordinator const&) = delete;
-  // Preserve the same collaborators for all committed-identity comparisons.
   SessionTransitionCoordinator& operator=(SessionTransitionCoordinator const&) = delete;
 
   // TUI thread: receive the backend's committed identity, then clean old presentation
-  // before publishing a different identity. A match preserves all local session state.
+  // before storing a different identity. Return true after cleanup; false preserves local state.
   [[nodiscard]] bool apply(std::string committed_session_id);
   // TUI thread: apply committed identity cleanup, then refresh frontend facts even
   // when identity matched. Return whether session-specific cleanup was necessary.
@@ -47,7 +46,7 @@ class SessionTransitionCoordinator final
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // Borrowed from Session; projection; compare old identity here and publish the new identity last.
+  // Borrowed from Session; display state; compare the old identity here and store the new one last.
   RuntimePresentationState& presentation_;
   // Borrowed from Session; draft owner; transition discards old draft, history and interaction state.
   Composer& draft_;
@@ -57,7 +56,7 @@ class SessionTransitionCoordinator final
   TranscriptSearchController& search_;
   // Borrowed from Session; workspace owner; close any inspector tied to the previous session.
   RuntimeSubagentWorkspaceController& workspace_;
-  // Borrowed from Session; selector owner; retire old rows after projection cleanup.
+  // Borrowed from Session; selector owner; retire old rows after display cleanup.
   SelectorHost& selectors_;
   // Borrowed from Session; staged references; clear them before any new-session submission is possible.
   PendingAttachments& attachments_;

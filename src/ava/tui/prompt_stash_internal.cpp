@@ -90,7 +90,7 @@ PromptStashPushResult PromptStash::push(ComposerDraftState const& draft)
   if (expanded_bytes > kMaxAggregateExpandedBytes - aggregate_expanded_bytes_)
     return PromptStashPushResult::AggregateLimitReached;
 
-  // Admission checks precede snapshot copying and budget changes. Expanded text counts
+  // Size and count checks precede snapshot copying and budget changes. Expanded text counts
   // paste payloads rather than their compact editor markers.
   entries_.push_back(PromptStashEntry{.id = next_id_++,
                                       .text = draft.text,

@@ -1,4 +1,4 @@
-// Prepares feature projections and layout authority before the session's single paint stage.
+// Prepares feature display data and transcript layout before the session's single paint stage.
 #include "sys.h"
 #include "TuiEventLoop.h"
 #include "runtime_state_internal.h"
@@ -333,8 +333,8 @@ std::size_t RuntimeRenderer::sidebar_drawer_max_scroll() const
 
 void RuntimeRenderer::synchronize_detached_transcript_layout()
 {
-  // Navigation publishes chrome before max-scroll math so reserved-row geometry
-  // matches the eventual paint, while deferred output remains frozen until here.
+  // Update the output count before computing maximum scroll so its reserved row matches the next paint.
+  // This is the navigation boundary at which deferred output can change layout.
   transcript_.publish_chrome();
   if (!transcript_.has_deferred_update())
     return;
@@ -428,11 +428,9 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
   auto const& snapshot = presentation_.screen();
   bool wrote = false;
   {
-    // Project editor and viewport chrome before geometry: reserved new-output/modal rows must participate in
-    // the same layout that will be painted.
+    // Update editor, scroll, and output-count data before computing geometry. The new-output badge must
+    // reserve its row even when the preceding stream update was not painted.
     presentation_.publish_composer(draft_state_);
-    // Publish viewport chrome before freeze/sync/clamp so the N-new reserved row
-    // participates in geometry even when the prior stream update was not painted.
     transcript_.begin_frame();
     auto const [width, height] = terminal_size();
     presentation_.publish_dimensions(width, height);
@@ -453,7 +451,7 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
     auto const synchronized_detached_viewport = transcript_.has_deferred_update() && !freeze_detached_viewport;
     if (synchronized_detached_viewport)
       synchronize_detached_transcript_layout();
-    // Clamp independent surfaces after deciding which transcript authority can remain frozen; none may reuse an
+    // Clamp independent surfaces after deciding which transcript layout can remain frozen; none may reuse an
     // offset beyond current geometry.
     presentation_.publish_sidebar_drawer(snapshot.sidebar_drawer_visible,
                                          std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(frontend_, snapshot)));
@@ -483,8 +481,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
       detail::refresh_transcript_layout_cache(transcript_layout_cache_, snapshot.transcript, snapshot.transcript_generation, width, snapshot.tool_presentation,
                                               snapshot.thinking_visible, compact, detail::active_mermaid_projection(snapshot));
     }
-    // Resolve selection against the chosen drawn authority only after modal precedence and geometry are
-    // settled, then emit one consistent frame.
+    // Choose selection endpoints only after determining which modal is visible and which layout will be
+    // drawn, so the highlight and transcript rows agree.
     auto const selection_projection = selection_blocked          ? TranscriptSelectionProjection::Suppressed
                                       : freeze_detached_viewport ? TranscriptSelectionProjection::Frozen
                                                                  : TranscriptSelectionProjection::Live;

@@ -107,7 +107,7 @@ void test_inbox_bounded_fifo_and_received_history()
   auto event_sink = inbox->event_sink();
   auto envelope_sink = inbox->envelope_sink();
   auto launch_sink = inbox->subagent_launch_sink();
-  expect(!inbox->has_pending() && !inbox->received_any() && !inbox->terminal_ready() && inbox->drain().empty(),
+  expect(!inbox->has_pending() && !inbox->received_any() && !inbox->result_ready() && inbox->drain().empty(),
          "a new inbox has no pending work or receive history");
 
   inbox->set_request_id("request-first");
@@ -144,27 +144,27 @@ void test_inbox_bounded_fifo_and_received_history()
   expect(inbox->drain(2).empty() && inbox->received_any(), "draining an empty inbox leaves receive history intact");
 }
 
-// Discard clears event storage and receive history while preserving an independently published terminal.
-void test_inbox_discard_preserves_terminal()
+// Discard clears event storage and receive history while preserving an independently published final result.
+void test_inbox_discard_preserves_result()
 {
   auto inbox = make_inbox();
   auto sink = inbox->event_sink();
   expect(sink(message_event("discarded")).has_value(), "the inbox accepts an event before discard");
   ava::tui::TuiSubmitResult result;
-  result.output = {"kept terminal"};
-  inbox->publish_terminal(std::move(result));
+  result.output = {"kept final result"};
+  inbox->publish_result(std::move(result));
   inbox->discard();
-  expect(inbox->drain().empty() && !inbox->received_any() && inbox->has_pending() && inbox->terminal_ready(),
-         "discard resets queued-event history but leaves terminal work pending");
-  auto terminal = inbox->take_terminal();
-  auto const* submitted = terminal ? std::get_if<ava::tui::TuiSubmitResult>(&*terminal) : nullptr;
-  expect(submitted && submitted->output == std::vector<std::string>{"kept terminal"} && !inbox->has_pending(),
-         "the terminal payload survives event discard unchanged");
+  expect(inbox->drain().empty() && !inbox->received_any() && inbox->has_pending() && inbox->result_ready(),
+         "discard resets queued-event history but leaves final result work pending");
+  auto final_result = inbox->take_result();
+  auto const* submitted = final_result ? std::get_if<ava::tui::TuiSubmitResult>(&*final_result) : nullptr;
+  expect(submitted && submitted->output == std::vector<std::string>{"kept final result"} && !inbox->has_pending(),
+         "the final result payload survives event discard unchanged");
   expect(sink(message_event("after discard")).has_value() && inbox->received_any() && inbox->has_pending(),
          "discard keeps admission open and new publications establish new receive history");
 }
 
-// Retirement rejects every late producer route while retaining previously accepted events and terminal data.
+// Retirement rejects every late producer route while retaining previously accepted events and final result data.
 void test_inbox_retirement_preserves_accepted_work()
 {
   auto inbox = make_inbox();
@@ -183,8 +183,8 @@ void test_inbox_retirement_preserves_accepted_work()
   expect(envelopes(envelope).has_value(), "the inbox accepts an envelope before retirement");
   launches({.tool_call_id = "accepted-launch", .request_id = {}, .correlation_id = {}, .display = {}});
   ava::tui::TuiSubmitResult result;
-  result.output = {"accepted terminal"};
-  inbox->publish_terminal(std::move(result));
+  result.output = {"accepted final result"};
+  inbox->publish_result(std::move(result));
 
   inbox->retire();
   inbox->retire();
@@ -195,7 +195,7 @@ void test_inbox_retirement_preserves_accepted_work()
   launches({.tool_call_id = "late-launch", .request_id = {}, .correlation_id = {}, .display = {}});
   expect(follow_up({.request_id = "late-follow-up", .message = {}}).has_value() && follow_up_calls == 0,
          "retirement prevents a wrapped follow-up callback from running");
-  inbox->publish_terminal(std::make_exception_ptr(std::runtime_error("late terminal")));
+  inbox->publish_result(std::make_exception_ptr(std::runtime_error("late final result")));
 
   auto accepted = inbox->drain();
   if (!ava::tests::require(accepted.size() == 3, "retirement retains exactly the three accepted events"))
@@ -203,47 +203,47 @@ void test_inbox_retirement_preserves_accepted_work()
   auto const* accepted_envelope = std::get_if<ava::event::EventEnvelope>(&accepted[1]);
   auto const* accepted_launch = std::get_if<ava::agent::SubagentLaunchNotification>(&accepted[2]);
   expect(is_message(accepted[0], "accepted", "accepted-request") && accepted_envelope && accepted_envelope->event_id == "accepted-envelope" &&
-             accepted_launch && accepted_launch->tool_call_id == "accepted-launch" && inbox->received_any() && inbox->terminal_ready(),
-         "retirement preserves accepted event order, identities, request context, and terminal readiness");
-  auto terminal = inbox->take_terminal();
-  auto const* submitted = terminal ? std::get_if<ava::tui::TuiSubmitResult>(&*terminal) : nullptr;
-  expect(submitted && submitted->output == std::vector<std::string>{"accepted terminal"} && !inbox->has_pending(),
-         "retirement retains the accepted terminal and late producers cannot replenish the drained inbox");
+             accepted_launch && accepted_launch->tool_call_id == "accepted-launch" && inbox->received_any() && inbox->result_ready(),
+         "retirement preserves accepted event order, identities, request context, and final result readiness");
+  auto final_result = inbox->take_result();
+  auto const* submitted = final_result ? std::get_if<ava::tui::TuiSubmitResult>(&*final_result) : nullptr;
+  expect(submitted && submitted->output == std::vector<std::string>{"accepted final result"} && !inbox->has_pending(),
+         "retirement retains the accepted final result and late producers cannot replenish the drained inbox");
 }
 
-// The first submit result wins permanently, including after its terminal value has been consumed.
-void test_inbox_first_submit_terminal_wins_after_take()
+// The first submit result wins permanently, even after the TUI consumes it.
+void test_inbox_first_submit_result_wins_after_take()
 {
   auto inbox = make_inbox();
   ava::tui::TuiSubmitResult first;
   first.quit = true;
-  first.output = {"first terminal"};
-  inbox->publish_terminal(std::move(first));
-  inbox->publish_terminal(std::make_exception_ptr(std::runtime_error("duplicate terminal")));
-  expect(inbox->terminal_ready() && inbox->has_pending() && !inbox->received_any(), "terminal readiness is independent of historical event receipt");
-  auto terminal = inbox->take_terminal();
-  auto const* submitted = terminal ? std::get_if<ava::tui::TuiSubmitResult>(&*terminal) : nullptr;
-  expect(submitted && submitted->quit && submitted->output == std::vector<std::string>{"first terminal"},
+  first.output = {"first final result"};
+  inbox->publish_result(std::move(first));
+  inbox->publish_result(std::make_exception_ptr(std::runtime_error("duplicate final result")));
+  expect(inbox->result_ready() && inbox->has_pending() && !inbox->received_any(), "final result readiness is independent of whether any event arrived");
+  auto final_result = inbox->take_result();
+  auto const* submitted = final_result ? std::get_if<ava::tui::TuiSubmitResult>(&*final_result) : nullptr;
+  expect(submitted && submitted->quit && submitted->output == std::vector<std::string>{"first final result"},
          "the first submit result survives a later exception publication");
-  expect(!inbox->terminal_ready() && !inbox->has_pending() && !inbox->take_terminal(), "taking a terminal consumes its readiness exactly once");
-  inbox->publish_terminal(ava::tui::TuiSubmitResult{});
-  inbox->publish_terminal(std::make_exception_ptr(std::runtime_error("after consumption")));
-  expect(!inbox->terminal_ready() && !inbox->has_pending() && !inbox->take_terminal(),
-         "consuming a terminal never reopens terminal publication for another result or exception");
+  expect(!inbox->result_ready() && !inbox->has_pending() && !inbox->take_result(), "taking a final result consumes its readiness exactly once");
+  inbox->publish_result(ava::tui::TuiSubmitResult{});
+  inbox->publish_result(std::make_exception_ptr(std::runtime_error("after consumption")));
+  expect(!inbox->result_ready() && !inbox->has_pending() && !inbox->take_result(),
+         "consuming a final result never reopens final result publication for another result or exception");
 }
 
 // The first exception retains its exact identity and also blocks publication after consumption.
-void test_inbox_first_exception_terminal_wins_after_take()
+void test_inbox_first_exception_result_wins_after_take()
 {
   auto inbox = make_inbox();
   auto first = std::make_exception_ptr(std::runtime_error("first exception"));
-  inbox->publish_terminal(first);
-  inbox->publish_terminal(ava::tui::TuiSubmitResult{});
-  auto terminal = inbox->take_terminal();
-  auto const* error = terminal ? std::get_if<std::exception_ptr>(&*terminal) : nullptr;
+  inbox->publish_result(first);
+  inbox->publish_result(ava::tui::TuiSubmitResult{});
+  auto final_result = inbox->take_result();
+  auto const* error = final_result ? std::get_if<std::exception_ptr>(&*final_result) : nullptr;
   expect(error && *error == first, "an exception published first survives a duplicate submit result with its identity intact");
-  inbox->publish_terminal(std::make_exception_ptr(std::runtime_error("second exception")));
-  expect(!inbox->take_terminal() && !inbox->terminal_ready() && !inbox->has_pending(), "consuming the first exception does not admit a second exception");
+  inbox->publish_result(std::make_exception_ptr(std::runtime_error("second exception")));
+  expect(!inbox->take_result() && !inbox->result_ready() && !inbox->has_pending(), "consuming the first exception does not admit a second exception");
 }
 
 // Stop requests latch once without inventing queued work or retiring producer admission.
@@ -253,7 +253,7 @@ void test_inbox_stop_request_is_idempotent()
   expect(!inbox->stop_requested(), "a new inbox has no stop request");
   expect(inbox->request_stop() && inbox->stop_requested(), "the first stop request reports and records a transition");
   expect(!inbox->request_stop() && inbox->stop_requested() && !inbox->request_stop(), "subsequent stop requests remain latched and report no transition");
-  expect(!inbox->has_pending() && !inbox->received_any() && !inbox->terminal_ready(), "a stop request does not fabricate events or terminal data");
+  expect(!inbox->has_pending() && !inbox->received_any() && !inbox->result_ready(), "a stop request does not fabricate events or final result data");
   auto sink = inbox->event_sink();
   expect(sink(message_event("after stop")).has_value() && inbox->has_pending(),
          "a stop request leaves accepted producer delivery available for final draining");
@@ -261,7 +261,7 @@ void test_inbox_stop_request_is_idempotent()
   expect(!inbox->request_stop() && inbox->stop_requested(), "retirement preserves the existing stop latch");
 }
 
-// Event and terminal publications wake a real loop with their payloads already available to the consumer.
+// Publishing events or final results wakes a real loop after their payloads are available.
 void test_inbox_publication_wakes_event_loop()
 {
   RuntimeOwnerPipe pipe;
@@ -284,14 +284,14 @@ void test_inbox_publication_wakes_event_loop()
 
   deadline.arm_at(ava::tests::now_plus_seconds(2));
   ava::tui::TuiSubmitResult result;
-  result.output = {"wake terminal"};
-  inbox->publish_terminal(std::move(result));
+  result.output = {"wake final result"};
+  inbox->publish_result(std::move(result));
   loop.wait(ava::tui::TuiWaitMode::Block);
   loop.service_due();
-  auto terminal = inbox->take_terminal();
-  auto const* submitted = terminal ? std::get_if<ava::tui::TuiSubmitResult>(&*terminal) : nullptr;
-  expect(fallback.expirations() == 0 && !loop.notification_failed() && submitted && submitted->output == std::vector<std::string>{"wake terminal"},
-         "terminal publication produces a fresh wake with its complete payload available");
+  auto final_result = inbox->take_result();
+  auto const* submitted = final_result ? std::get_if<ava::tui::TuiSubmitResult>(&*final_result) : nullptr;
+  expect(fallback.expirations() == 0 && !loop.notification_failed() && submitted && submitted->output == std::vector<std::string>{"wake final result"},
+         "final result publication produces a fresh wake with its complete payload available");
 }
 
 // Retained producer capabilities outlive both their UI owner and waiter and release the inbox with the final endpoint.
@@ -457,10 +457,10 @@ void run_tui_runtime_owner_tests()
 {
   test_active_run_outcomes_preserve_signal_and_write_failure();
   test_inbox_bounded_fifo_and_received_history();
-  test_inbox_discard_preserves_terminal();
+  test_inbox_discard_preserves_result();
   test_inbox_retirement_preserves_accepted_work();
-  test_inbox_first_submit_terminal_wins_after_take();
-  test_inbox_first_exception_terminal_wins_after_take();
+  test_inbox_first_submit_result_wins_after_take();
+  test_inbox_first_exception_result_wins_after_take();
   test_inbox_stop_request_is_idempotent();
   test_inbox_publication_wakes_event_loop();
   test_inbox_retained_endpoints_outlive_owner_and_loop();

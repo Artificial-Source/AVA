@@ -1,4 +1,4 @@
-// Coordinates selector policy around the single published selector view.
+// Coordinates selector input around the single view stored for display.
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
@@ -28,7 +28,7 @@ enum class SelectorDispatchRequest
   OpenedSession, // Reconcile committed identity before publishing success feedback.
   SessionError, // Reconcile committed identity before publishing error feedback.
   SummarizeParent, // Start a separately owned branch-summary operation.
-  RenderFailed, // A synchronous selector authority handoff could not paint.
+  RenderFailed, // Painting failed before a synchronous frontend operation.
   Beep, // The feature already published the reason; Session emits the bell.
 };
 
@@ -51,19 +51,18 @@ struct SelectorDispatchResult
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Session owns this TUI-thread coordinator of selector policy and publication.
-// Presentation outlives it and holds the single view; renderer and feature owners
-// borrow that view as const. Named publications keep kind and view in step within
-// each dispatch. No UI mutex or worker accesses this state. Destruction is local
-// after borrowers retire; feature owners separately undo any temporary previews.
+// Session owns this TUI-thread coordinator of selector input and view changes.
+// Presentation outlives it and holds the single view; renderer and features borrow
+// that view as const on the TUI thread. Host operations keep kind and view in step.
+// Features must undo their temporary previews before replacing or closing a view,
+// and controllers borrowing the host must be destroyed before it. Workers never use it.
 class SelectorHost final
 {
  public:
-  // TUI thread: borrow presentation and begin with no published selector.
+  // TUI thread: borrow presentation, which must start without a selector and outlive this host.
   explicit SelectorHost(RuntimePresentationState& presentation);
-  // A copied host could disagree about the kind of the one published view.
+  // Not copyable: one stable host keeps the selector kind paired with its displayed view.
   SelectorHost(SelectorHost const&) = delete;
-  // Keep the host identity stable for controllers that borrow it.
   SelectorHost& operator=(SelectorHost const&) = delete;
 
   // TUI thread: synchronize feature policy, classify one input, and route it to
@@ -74,7 +73,7 @@ class SelectorHost final
 
   // TUI thread: choose the feature policy corresponding to the currently published view.
   [[nodiscard]] ActiveSelectList kind() const noexcept;
-  // TUI thread: borrow the sole projection; any host mutation may invalidate its rows.
+  // TUI thread: borrow the displayed view; any host mutation may invalidate its rows.
   [[nodiscard]] std::optional<SelectListView> const& view() const noexcept;
   // TUI thread: borrow a source row by index, or return null for absent/out-of-range
   // rows. The pointer expires at the next selector mutation or host destruction.
@@ -94,19 +93,18 @@ class SelectorHost final
   void close();
   // TUI thread: publish selection/query for an open view without copying its row vector.
   void update_selection(std::size_t index, std::string query);
-  // TUI thread: publish operation feedback into open selector chrome; closed views ignore it.
+  // TUI thread: set the open selector's subtitle; closed views ignore this feedback.
   void set_subtitle(std::string subtitle);
   // TUI thread only. Keep unchanged search rows, replace the changed suffix, and
-  // publish selection/chrome together. No borrowed row survives this mutation.
+  // update selection, query and subtitle together. No borrowed row survives this mutation.
   void replace_rows(std::size_t first_changed, std::vector<SelectListItemView> rows, std::size_t selected, std::string query, std::string subtitle);
 
-  // Selector rows may contain stashed prompts or transcript excerpts, and the
-  // borrowed snapshot contains arbitrary messages. Neither aggregate has a safe
-  // generated content printer; keep these contents out of debug output.
+  // Selector rows may contain stashed prompts or transcript excerpts; keep their content
+  // out of debug output. The host itself retains only a presentation reference and kind.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Session-owned sole view storage; outlives this host and is mutated through named publications.
+  // Session-owned display storage; outlives this host, which changes it through presentation methods.
   RuntimePresentationState& presentation_;
   // TUI-thread discriminator changed with open/close; None accompanies an absent view.
   ActiveSelectList kind_ = ActiveSelectList::None;

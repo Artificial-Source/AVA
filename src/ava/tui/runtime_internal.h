@@ -1,3 +1,4 @@
+// Shared TUI command and selector handoffs used by the feature owners.
 #pragma once
 
 #include "ava/tui/composer_internal.h"
@@ -41,9 +42,11 @@ struct TuiActiveNonblockingCommandDispatchResult
                                                                                                       TuiActiveRunQueues const& queues,
                                                                                                       std::string const& submitted);
 
-// Clears a selector and paints truthful pending authority state before invoking
-// a synchronous model/session callback. The callback remains authoritative;
-// this boundary never applies or claims its result.
+// TUI thread: close the selector and paint pending status before a synchronous
+// model/session callback can block. render must perform the handoff paint, not
+// merely request a frame. Failure returns an I/O error without calling callback.
+// Otherwise return the backend result and display any error; the caller applies
+// success. Borrowed owners and callbacks need only outlive this synchronous call.
 [[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(RuntimePresentationState& presentation, SelectorHost& selectors,
                                                                              std::string pending_status, std::function<bool()> const& render,
                                                                              std::function<ava::core::Result<std::string>()> const& callback);

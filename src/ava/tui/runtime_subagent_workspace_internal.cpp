@@ -130,7 +130,7 @@ void RuntimeSubagentWorkspaceController::publish()
     presentation_.publish_workspace(std::nullopt);
     return;
   }
-  // Inspector publication closes selector projection first and clamps its own scroll, keeping one visible
+  // Showing the inspector clears the selector view first and clamps its own scroll, keeping one visible
   // workspace surface.
   workspace_.scroll_offset =
       std::min(workspace_.scroll_offset, subagent_workspace_max_scroll_offset(workspace_, presentation_.screen().width, presentation_.screen().height));

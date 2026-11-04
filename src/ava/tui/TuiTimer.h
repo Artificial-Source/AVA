@@ -1,4 +1,4 @@
-// Provides feature owners with exclusive RAII retirement of an event-loop timer.
+// Removes a feature's event-loop timer registration when its owning handle is destroyed.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
@@ -14,7 +14,7 @@ class TuiEventLoop;
 // operations and destruction run on the TUI thread. The loop and stable callback
 // target outlive the handle; an executing callback must also finish before its
 // target dies. Destruction removes the registration, while cancel only disarms it.
-// Moving transfers retirement responsibility but does not retarget the callback.
+// Moving transfers responsibility for removing the registration without changing its callback target.
 class TuiTimer final
 {
  public:
@@ -26,19 +26,18 @@ class TuiTimer final
   // TUI thread before the loop dies: remove this registration, even if disarmed.
   // A callback already copied for its current invocation still has to return.
   ~TuiTimer();
-  // A registration has one retirement owner; copying would allow double retirement.
+  // Not copyable: exactly one handle owns removal of each registration.
   TuiTimer(TuiTimer const&) = delete;
-  // Prevent two handles from claiming the same registration on any thread.
   TuiTimer& operator=(TuiTimer const&) = delete;
   // TUI thread: take other's registration and leave other empty; the callback's
   // target address and the requirement that its loop outlive this handle persist.
   TuiTimer(TuiTimer&& other) noexcept;
-  // TUI thread with both loops alive: retire this handle's old registration, then
+  // TUI thread with both loops alive: remove this handle's old registration, then
   // take other's. Self-assignment preserves it; callback targets are never moved.
   TuiTimer& operator=(TuiTimer&& other) noexcept;
 
-  // TUI thread: disarm without releasing ownership and invalidate a queued dispatch
-  // generation. Does not interrupt an already executing callback; empty is harmless.
+  // TUI thread: disarm without releasing ownership; any due-work snapshot becomes
+  // stale. Does not interrupt an already executing callback; empty is harmless.
   void cancel() noexcept;
   // TUI thread with the loop alive: report an armed deadline, not whether a callback
   // is currently running. Empty and disarmed handles report false.
@@ -50,7 +49,7 @@ class TuiTimer final
   // overflow saturates, and no callback runs until dispatch. Empty is harmless.
   void arm_after(Clock::duration delay, Clock::time_point now = Clock::now());
   // TUI thread: require a positive interval and schedule the first tick after now.
-  // Dispatch coalesces missed ticks while keeping the original cadence; empty is harmless.
+  // Dispatch skips missed ticks while keeping the original cadence; empty is harmless.
   void repeat(Clock::duration interval, Clock::time_point now = Clock::now());
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -66,7 +65,7 @@ class TuiTimer final
   void release() noexcept;
 
   // Borrowed stable registry address, changed only by TUI-thread moves/release.
-  // Null means empty; a nonnull pointer must remain valid through retirement.
+  // Null means empty; a nonnull pointer must stay valid until this registration is removed.
   TuiEventLoop* loop_ = nullptr;
   // Registry-assigned identity paired with loop_; TUI moves transfer it and release
   // clears it. Zero denotes an empty handle and is never a registered ID.

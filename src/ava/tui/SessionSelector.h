@@ -15,18 +15,17 @@ class Context;
 
 // Session owns this TUI-thread browsing and archive-confirmation policy. SelectorHost
 // uses it while the session list is active. Frontend callbacks own persistence and
-// session changes; this owner only publishes views and returns outcomes. All borrowed
+// session changes; this owner updates display data and returns outcomes. All borrowed
 // owners outlive it. No worker refers to it, and destruction discards only local confirmation.
 class SessionSelector final
 {
  public:
   // TUI thread: start without archive intent; open loads the current catalog later.
-  // Borrowed session collaborators outlive this selector and each authority handoff.
+  // Borrowed session collaborators outlive this selector and each synchronous frontend call.
   SessionSelector(TuiFrontEnd& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                   terminal::Context& terminal_context);
-  // A second instance would split the two-press archive confirmation across owners.
+  // Not copyable: one stable selector owns the two-press archive confirmation.
   SessionSelector(SessionSelector const&) = delete;
-  // Keep borrowed presentation and authority identities fixed during browsing.
   SessionSelector& operator=(SessionSelector const&) = delete;
 
   // TUI thread: cancel old archive intent, load current catalog and show the live tail.
@@ -42,12 +41,11 @@ class SessionSelector final
   // TUI thread: validate a rename/label row and copy its identity before closing the list.
   // Return owned command text for Composer, or keep the view and report unavailable.
   [[nodiscard]] std::optional<std::string> draft_command(SelectListInputResult const& input);
-  // Results request composition-level reconciliation; only the frontend's
-  // committed identity establishes whether a session transition happened.
   // TUI thread: copy selected identity, retire the list and paint pending status before
-  // the frontend opens it. Caller reconciles committed identity even if the result fails.
+  // the frontend opens it. The caller checks the backend's committed identity even on
+  // failure: the return value alone cannot establish whether the session changed.
   [[nodiscard]] core::Result<std::string> resolve(SelectListInputResult const& input);
-  // TUI thread: validate the row and paint before parent/child authority work. No value
+  // TUI thread: validate the row and paint before opening a parent/child session. No value
   // means no action was possible; an error still requires caller identity reconciliation.
   [[nodiscard]] std::optional<core::Result<std::string>> navigate_branch(SelectListInputResult const& input);
 
@@ -61,7 +59,7 @@ class SessionSelector final
 
   // Borrowed from Session; boundary for catalogs and persistent session operations.
   TuiFrontEnd& frontend_;
-  // Borrowed from Session; projection; this owner publishes transient feedback through named operations.
+  // Borrowed from Session; display state; receives transient status updates.
   RuntimePresentationState& presentation_state_;
   // Borrowed from Session; sole list storage; selected row pointers expire when it changes.
   SelectorHost& selectors_;

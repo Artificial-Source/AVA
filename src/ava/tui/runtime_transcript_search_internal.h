@@ -89,15 +89,15 @@ struct TranscriptSearchItemInterval
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Copied TUI-thread work counters for search behavior inspection. They contain no text or authority and can be
+// Copied TUI-thread work counters for search behavior inspection. They contain no text or borrowed state and can be
 // consumed after the controller call.
 struct TranscriptSearchDiagnostics
 {
-  // TUI-thread cumulative diagnostic: individual affected items rendered under captured authoritative settings.
+  // TUI-thread cumulative diagnostic: individual affected items rendered under the saved transcript render settings.
   std::size_t authoritative_mutation_item_render_count = 0;
   // TUI-thread cumulative diagnostic: owned searchable projections constructed from rendered rows.
   std::size_t projection_build_count = 0;
-  // TUI-thread cumulative diagnostic: authoritative layout/item positions visited while constructing projections.
+  // TUI-thread cumulative diagnostic: prepared layout/item positions visited while constructing projections.
   std::size_t layout_position_visit_count = 0;
   // TUI-thread cumulative diagnostic: cached projections evaluated by the literal matcher.
   std::size_t match_projection_evaluation_count = 0;
@@ -118,7 +118,7 @@ struct TranscriptSearchDiagnostics
 class TranscriptSearchProjectionCache final
 {
  public:
-  // TUI thread after authoritative layout preparation: replace every item projection and rematch the retained
+  // TUI thread after preparing the underlying transcript layout: replace every item projection and rematch the retained
   // query.
   [[nodiscard]] TranscriptSearchUpdate rebuild_all(ComposerSnapshot const& snapshot, TranscriptLayout const& layout);
   // TUI thread at search/session retirement: release projections, query, and matches while retaining cumulative
@@ -136,11 +136,11 @@ class TranscriptSearchProjectionCache final
   [[nodiscard]] std::vector<TranscriptSearchMatch> const& matches() const noexcept;
   // TUI thread: borrow accepted literal query until update_query/clear or cache destruction.
   [[nodiscard]] std::string const& query() const noexcept;
-  // TUI-thread cumulative diagnostic: individual affected items rendered under captured authoritative settings.
+  // TUI-thread cumulative diagnostic: individual affected items rendered under the saved transcript render settings.
   [[nodiscard]] std::size_t authoritative_mutation_item_render_count() const noexcept;
   // TUI-thread cumulative diagnostic: owned searchable projections constructed from rendered rows.
   [[nodiscard]] std::size_t projection_build_count() const noexcept;
-  // TUI-thread cumulative diagnostic: authoritative layout/item positions visited while constructing projections.
+  // TUI-thread cumulative diagnostic: prepared layout/item positions visited while constructing projections.
   [[nodiscard]] std::size_t layout_position_visit_count() const noexcept;
   // TUI-thread cumulative diagnostic: cached projections evaluated by the literal matcher.
   [[nodiscard]] std::size_t match_projection_evaluation_count() const noexcept;
@@ -158,7 +158,7 @@ class TranscriptSearchProjectionCache final
   // TUI thread: clear affected projection slots and recompute context-run ownership before rebuilding rendered
   // text.
   void reset_affected_metadata(ComposerSnapshot const& snapshot, std::vector<TranscriptSearchItemInterval> const& affected);
-  // TUI thread: reset interval metadata then reuse authoritative rows instead of rerendering unchanged items.
+  // TUI thread: reset interval metadata then reuse prepared layout rows instead of rerendering unchanged items.
   void rebuild_affected_from_layout(ComposerSnapshot const& snapshot, TranscriptLayout const& layout,
                                     std::vector<TranscriptSearchItemInterval> const& affected);
   // TUI thread with captured render settings: render only affected items when frozen modal layout must remain
@@ -178,11 +178,11 @@ class TranscriptSearchProjectionCache final
   // TUI-thread owned chronological results; query/mutation updates preserve ordering needed for binary-search
   // selection restoration.
   std::vector<TranscriptSearchMatch> matches_;
-  // TUI-thread cumulative diagnostic: individual affected items rendered under captured authoritative settings.
+  // TUI-thread cumulative diagnostic: individual affected items rendered under the saved transcript render settings.
   std::size_t authoritative_mutation_item_render_count_ = 0;
   // TUI-thread cumulative diagnostic: owned searchable projections constructed from rendered rows.
   std::size_t projection_build_count_ = 0;
-  // TUI-thread cumulative diagnostic: authoritative layout/item positions visited while constructing projections.
+  // TUI-thread cumulative diagnostic: prepared layout/item positions visited while constructing projections.
   std::size_t layout_position_visit_count_ = 0;
   // TUI-thread cumulative diagnostic: cached projections evaluated by the literal matcher.
   std::size_t match_projection_evaluation_count_ = 0;
@@ -212,8 +212,8 @@ void update_transcript_search_select_list_rows(SelectListView& view, std::vector
 
 // Session-owned TUI-thread modal search policy. Presentation, renderer, navigation, and SelectorHost outlive
 // it. It retains owned query/cache and a pre-search viewport anchor; SelectorHost owns visible rows. Search
-// temporarily withdraws modal projection for authoritative layout preparation, then restores it before
-// returning.
+// temporarily removes its selector from screen data to prepare the underlying transcript layout, then
+// restores it before returning.
 class TranscriptSearchController final
 {
  public:
@@ -221,9 +221,8 @@ class TranscriptSearchController final
   // retain this object.
   TranscriptSearchController(RuntimePresentationState& presentation_state, RuntimeRenderer& renderer, RuntimeNavigationController& navigation,
                              SelectorHost& selectors);
-  // Keep one owner for saved viewport, query, and selector reconciliation.
+  // Not copyable: one controller restores the saved viewport and manages search rows in the shared selector.
   TranscriptSearchController(TranscriptSearchController const&) = delete;
-  // Preserve lifetime-bound dependencies and prevent competing search state for one selector.
   TranscriptSearchController& operator=(TranscriptSearchController const&) = delete;
 
   // TUI thread: validate query, capture pre-modal viewport/settings, rebuild matches, and publish search
@@ -237,9 +236,9 @@ class TranscriptSearchController final
   // TUI thread after mutation, before next viewport preparation: accumulate eviction shift and preserve
   // selected item while refreshing affected matches.
   void refresh_after_transcript_mutation(std::ptrdiff_t item_index_shift, std::size_t changed_from_item_index);
-  // TUI thread: rebuild under new authoritative geometry while preserving selected item when still present.
+  // TUI thread: rebuild using the resized underlying transcript layout while preserving selected item when still present.
   void refresh_after_resize();
-  // TUI thread before prompt admission: close active search and restore the saved viewport so modal geometry
+  // TUI thread before opening a permission/question prompt: close active search and restore the saved viewport so modal geometry
   // does not leak.
   void close_before_prompt();
   // TUI thread before new session data: close search and discard old query/cache/anchor without restoring
@@ -267,7 +266,7 @@ class TranscriptSearchController final
   // Borrowed TUI-thread projection owner outlives search; named publications update status/dimensions without
   // writable snapshot access.
   RuntimePresentationState& presentation_state_;
-  // Borrowed renderer outlives search; supplies authoritative layout and all viewport transitions.
+  // Borrowed renderer outlives search; supplies the underlying transcript layout and all viewport transitions.
   RuntimeRenderer& renderer_;
   // Borrowed navigation owner outlives search; resolves confirmed matches into explicit transcript navigation.
   RuntimeNavigationController& navigation_;
@@ -297,13 +296,13 @@ class TranscriptSearchController final
   std::size_t authoritative_terminal_height_ = 0;
   // TUI-thread content width supplied to direct item rendering while the modal holds a frozen underlying cache.
   std::size_t authoritative_layout_width_ = 0;
-  // TUI-thread tool style captured from layout; mismatch requires full authoritative rebuild.
+  // TUI-thread tool style captured from layout; mismatch requires a full underlying-layout rebuild.
   ToolPresentation authoritative_tool_presentation_ = ToolPresentation::Rich;
   // TUI-thread thinking visibility captured from layout; mismatch changes searchable rendered rows.
   bool authoritative_thinking_visible_ = true;
   // TUI-thread spacing policy captured from layout; mismatch requires reflow before search refresh.
   bool authoritative_compact_spacing_ = false;
-  // TUI-thread marker set from prepared cache validity and cleared when saved search authority is retired.
+  // TUI-thread marker set from prepared cache validity and cleared when saved layout settings are discarded.
   bool authoritative_settings_valid_ = false;
   // TUI-thread sum of mutations while search is open; maps saved viewport anchor to retained items on
   // cancellation.
