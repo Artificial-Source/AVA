@@ -124,7 +124,10 @@ void test_yank_pop_preserves_suffix_and_raw_span()
   auto const joined = starter + suffix;
   ComposerDraftState draft;
   ava::tui::reset_composer_draft(draft, suffix, 0);
-  draft.kill_ring = {starter, "xy"};
+  // Build the retained choices directly; GCC 16 with TSan misdiagnoses the
+  // temporary initializer-list strings as possibly uninitialized.
+  draft.kill_ring.push_back(starter);
+  draft.kill_ring.emplace_back("xy");
 
   bool const yanked = ava::tui::apply_composer_draft_action(draft, TuiAction::Yank);
   expect(yanked && draft.text == joined && draft.cursor == 0 && draft.yank_start == 0 && draft.yank_end == 1,
