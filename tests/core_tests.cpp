@@ -217,14 +217,26 @@ constexpr std::array<std::string_view, 12> kKeyboardCases{
 constexpr std::array<std::string_view, 2> kMouseCases{"context_lifecycle", "handoff_lifecycle"};
 constexpr std::array<std::string_view, 5> kColorCases{"srgb_round_trip", "osc4_protocol", "mutable_palette", "xterm_indexed", "portable_pairs"};
 constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_color", "screen", "tmux", "kitty", "wezterm"};
-constexpr std::array<std::string_view, 9> kComposerRenderingCases{
-    "search_tail",         "changed_session",          "session_transition",  "atomic_search",          "message_navigation",
-    "detached_completion", "message_navigation_empty", "display_reload_poll", "display_reload_overview"};
+constexpr std::array<std::string_view, 11> kComposerRenderingCases{
+    "search_tail",         "changed_session",          "session_transition",  "atomic_search",           "message_navigation",
+    "detached_completion", "message_navigation_empty", "display_reload_poll", "display_reload_overview", "prompt_security",
+    "paste_security"};
 // Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
-constexpr std::array<std::string_view, 10> kSessionCases{"turn_order",           "frame_deadline",          "hangup",
-                                                         "descriptor_error",     "control_timer",           "signal_after_decode",
-                                                         "notification_failure", "prompt_paint_permission", "prompt_paint_question",
-                                                         "close_after_submit"};
+constexpr std::array<std::string_view, 15> kSessionCases{"turn_order",
+                                                         "frame_deadline",
+                                                         "hangup",
+                                                         "descriptor_error",
+                                                         "control_timer",
+                                                         "signal_after_decode",
+                                                         "notification_failure",
+                                                         "prompt_paint_permission",
+                                                         "prompt_paint_question",
+                                                         "close_after_submit",
+                                                         "active_signal_at_control",
+                                                         "active_signal_after_decode",
+                                                         "permission_hangup",
+                                                         "prompt_security_permission",
+                                                         "prompt_security_question"};
 
 // Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
 void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)

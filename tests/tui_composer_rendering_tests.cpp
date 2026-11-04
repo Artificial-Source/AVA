@@ -65,6 +65,11 @@
 #include <vector>
 #include <unistd.h>
 
+// Prompt security cases share this suite's isolated terminal setup.
+void run_tui_prompt_security_tests();
+// Native paste cases use the same initialized Context and isolated process.
+void run_tui_paste_security_tests();
+
 namespace {
 
 // The ordinary composer suite uses a regular input file for ncurses. A real
@@ -801,6 +806,7 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
     // Resolve through the coordinator so the run remains alive for the deferred plugin dialog.
       ava::tui::runtime_input::RuntimeInput enter;
       enter.event.key = ava::tui::terminal::Key::Enter;
+      expect(prompt_coordinator.input_drained(), "fixture drains input before intentional host answer");
       static_cast<void>(prompt_coordinator.handle_input(enter));
       bool const host_retired = !prompt_coordinator.has_active();
       static_cast<void>(active_run.consume());
@@ -1063,6 +1069,7 @@ bool test_atomic_search_input_prompt_precedence()
                                             .text = {},
                                             .bracketed_paste = false,
                                             .resize = false};
+  expect(coordinator.input_drained(), "fixture drains input before intentional permission Escape");
   auto const effect = coordinator.handle_input(escape);
   bool const claim_held = coordinator.has_active();
   bool const worker_blocked = permission_worker.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
@@ -2079,7 +2086,11 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 // The caller selects a registered `test_case` and runs each case in a fresh process to avoid ncurses state leaking between cases.
 void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
 {
-  if (test_case == "search_tail")
+  if (test_case == "prompt_security")
+    run_tui_prompt_security_tests();
+  else if (test_case == "paste_security")
+    run_tui_paste_security_tests();
+  else if (test_case == "search_tail")
   {
     expect(
         test_transcript_search_controller_tail_refresh_avoids_full_layout(),
@@ -2108,10 +2119,9 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   {
     expect(test_claimed_question_cancellation_keeps_automatic_answer(), "claimed cancellation preserves automatic answers and retires throwing callbacks");
     expect(test_attached_prompt_render_failure_returns_io(), "deferred prompt paint failure reaches its worker as Io before shutdown");
-    expect(
-        test_atomic_search_input_prompt_precedence(),
-        "actual prompt-coordinator locking linearizes retained search input before provider enqueue, then lets the queued prompt discard stale input and run "
-        "before-prompt ahead of nested resolution across 50 synchronized repetitions");
+    expect(test_atomic_search_input_prompt_precedence(),
+           "prompt-coordinator arbitration runs retained search input outside the queue lock, then lets the queued prompt discard stale input and run "
+           "before-prompt ahead of nested resolution across 50 synchronized repetitions");
   }
   else if (test_case == "message_navigation")
   {

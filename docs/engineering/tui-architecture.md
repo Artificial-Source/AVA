@@ -175,6 +175,22 @@ Permission Escape is special: publish run stop first, then cancel the active
 claim. A failed deferred paint completes the active prompt with an I/O error
 before generic shutdown can answer it as interrupted.
 
+Opening a host prompt and delivering its answer are synchronous rendering
+handoffs. Queuing a frame is not proof that a choice was displayed successfully.
+After opening, the coordinator discards input until the session decoder reports
+empty, then flushes native and replay input. This prevents buffered keys from
+answering a prompt they preceded. The flush also covers decoding errors, which
+ncurses reports like empty input. Failure cancels the request with an I/O error.
+
+Pasted text cannot invoke permission or question shortcuts. Only explicit text
+fields accept it. A paste that reaches its one-MiB limit or times out still owns
+later bytes: polling discards that tail until its closing marker arrives. Each
+discarded character counts toward the usual 32-item input budget. A prompt flush
+does not reset incomplete-paste tracking; only an actual terminal-session boundary
+does. Permission resolution checks cancellation again after painting, before
+releasing its worker. An already available automatic question answer retains its
+existing precedence over ordinary cancellation.
+
 Plugin endpoints hold weak references to private synchronized transport state.
 Requests retain their submission binding and deadline. The TUI polls and
 publishes them only when host modal policy permits. A host permission/question

@@ -775,6 +775,10 @@ bool TuiSession::service_input_batch()
     auto polled = runtime_input::poll_curses_input();
     if (polled.kind == runtime_input::InputPollKind::Empty)
     {
+      // A newly painted host prompt rejects typeahead until this empty boundary
+      // and a final native flush, since a decoding error can also report Empty.
+      if (!prompt_coordinator_.input_drained())
+        apply_input_outcome(TuiInputOutcome::Failure);
       if (terminal_closing_)
         loop_.request_stop();
       return false;

@@ -308,6 +308,8 @@ set(AVA_TESTS_SOURCES
   "tui_feature_owner_tests.cpp"
   "tui_runtime_owner_tests.cpp"
   "tui_session_tests.cpp"
+  "tui_prompt_security_tests.cpp"
+  "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
   "tui_transcript_view_tests.cpp"
   "tui_keybinding_tests.cpp"
@@ -353,6 +355,9 @@ target_link_options(ava_tests PRIVATE
   "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13start_pendingESt8functionIFbvEES2_IFvvEE"
   "LINKER:--wrap=write"
   "LINKER:--wrap=fflush"
+  "LINKER:--wrap=_ZN3ava3tui15RuntimeRenderer17paint_for_handoffEv"
+  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInput8dispatchERKNS0_13runtime_input12RuntimeInputE"
+  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator14set_audit_sinkESt8functionIFSt8expectedIvNS_4core5ErrorEERKNS_5event12RuntimeEventEEE"
 )
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
 target_link_libraries(ava_tests PRIVATE ava_process_gate_test_support)
@@ -491,10 +496,10 @@ set(AVA_TERMINAL_COLOR_CASES srgb_round_trip osc4_protocol mutable_palette xterm
 set(AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES baseline no_color screen tmux kitty wezterm)
 set(AVA_TUI_COMPOSER_RENDERING_CASES
   search_tail changed_session session_transition atomic_search message_navigation detached_completion
-  message_navigation_empty display_reload_poll display_reload_overview)
+  message_navigation_empty display_reload_poll display_reload_overview prompt_security paste_security)
 set(AVA_TUI_SESSION_CASES
   turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
-  notification_failure prompt_paint_permission prompt_paint_question close_after_submit)
+  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})

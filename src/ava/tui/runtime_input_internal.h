@@ -85,9 +85,13 @@ struct InputPollResult
 // for both discarded and absent input; escape/paste continuation has its own timeout.
 [[nodiscard]] std::optional<RuntimeInput> read_curses_input_with_timeout(std::chrono::milliseconds timeout);
 
-// TUI thread at the session boundary before collecting new startup input: discard
-// the process-static replay queue so a later session cannot inherit old events.
+// TUI thread: discard owned startup replay without changing native input, timeout
+// or incomplete-paste tracking. Prompt quarantine uses this without allowing a
+// delayed paste tail to become ordinary keys.
 void clear_startup_input_queue();
+// TUI thread at actual terminal-session entry/exit: retire both startup replay
+// and incomplete-paste tracking. Never use this when switching prompt ownership.
+void reset_input_decoder();
 // TUI thread: inspect preserved startup events without consuming them; capacity is
 // 64 and no producer thread may read or mutate this unsynchronized queue.
 [[nodiscard]] std::size_t startup_input_queue_size();

@@ -127,7 +127,7 @@ class TerminalBackgroundDetectionGuard
   {
     disarm_terminal_background_response_handler();
     reset_detected_terminal_background_appearance();
-    runtime_input::clear_startup_input_queue();
+    runtime_input::reset_input_decoder();
   }
 
   // Probe admission and startup input have one scope owner, not copyable snapshots.
@@ -140,7 +140,7 @@ class TerminalBackgroundDetectionGuard
   {
     disarm_terminal_background_response_handler();
     reset_detected_terminal_background_appearance();
-    runtime_input::clear_startup_input_queue();
+    runtime_input::reset_input_decoder();
   }
 
   // This is an anonymous namespace - we can't generate print_members.

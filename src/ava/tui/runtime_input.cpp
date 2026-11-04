@@ -31,13 +31,42 @@ constexpr std::size_t kMaxEscapeSequenceBytes = 16 * 1024;
 // Preserve only this many startup events before leaving later input for normal polling.
 constexpr std::size_t kStartupInputQueueCap = 64;
 
-// TUI thread only: return the process-static FIFO used across startup-probe calls.
-// Session entry clears it explicitly; no terminal storage is borrowed and no worker
-// may access it concurrently, even though local-static initialization is thread-safe.
-std::deque<RuntimeInput>& startup_input_queue_storage()
+// The decoder's session state is shared by startup probing and normal polling.
+// Only the registered TUI thread uses it; session entry/exit resets it. It owns
+// replay values and a bounded paste-marker cursor, never terminal storage.
+struct InputReplay
 {
-  static std::deque<RuntimeInput> queue;
-  return queue;
+  // Startup probing appends at most 64 owned events; ordinary polling removes them.
+  std::deque<RuntimeInput> startup;
+  // A truncated/timed-out paste still owns later bytes. Polling discards its tail
+  // until a full closing marker, even if a prompt flush removed earlier bytes.
+  bool discard_paste_tail = false;
+  // TUI decoder's matched prefix of ESC[201~; preserved across timeouts and batches.
+  std::size_t paste_end_prefix = 0;
+
+  // TUI thread: track one literal character, including escape-parser consumption.
+  // True means the full marker ended paste ownership; no text is retained here.
+  bool observe_paste_character(wchar_t character)
+  {
+    constexpr std::wstring_view end = L"\x1b[201~";
+    paste_end_prefix = character == end[paste_end_prefix] ? paste_end_prefix + 1 : (character == end.front() ? 1 : 0);
+    if (paste_end_prefix != end.size())
+      return false;
+    paste_end_prefix = 0;
+    discard_paste_tail = false;
+    return true;
+  }
+
+  // Internal-linkage decoder state contains user input and cannot be debug-printed.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+// TUI thread only: one state owner spans startup and interactive decoding. The
+// local static keeps the existing replay lifetime; no worker may access it.
+InputReplay& input_replay()
+{
+  static InputReplay state;
+  return state;
 }
 
 // TUI decoder: create an owned nontext event from a semantic key; callers use
@@ -112,11 +141,15 @@ std::string read_escape_sequence_body(terminal::Context& terminal_context)
 }
 
 // TUI thread after consuming paste-start, with Context alive: assemble one owned
-// normalized paste until end marker, signal, read failure/timeout or byte cap.
+// normalized paste prefix until end marker, signal, read failure/timeout or byte cap.
 // The temporary 1 s timeout applies to each read, not to the complete paste; restore
-// the previous timeout before returning and never dispatch partial paste characters.
+// the previous timeout before returning. If the marker has not arrived, later polls
+// discard the tail instead of dispatching its characters as ordinary keys.
 RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
 {
+  auto& replay = input_replay();
+  replay.discard_paste_tail = true;
+  replay.paste_end_prefix = 0;
   std::string pasted;
   {
     auto scoped_timeout = terminal_context.timeout(std::chrono::milliseconds(1000));
@@ -125,6 +158,8 @@ RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
       auto const character = terminal_context.read_plain_wide_character();
       if (!character)
         break;
+      if (replay.observe_paste_character(*character))
+        break;
       if (*character == L'\x1b')
       {
         // Protocol ownership: assemble a complete bounded escape/control sequence
@@ -132,7 +167,10 @@ RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
         // discarded without joining the paste payload; all other escape content is
         // preserved under ordinary paste normalization and the byte cap.
         auto const consumed = read_escape_sequence_body(terminal_context);
-        if (consumed == "[201~")
+        bool ended = false;
+        for (unsigned char byte : consumed)
+          ended = replay.observe_paste_character(byte) || ended;
+        if (ended)
           break;
         if (terminal_background_response_handle(consumed))
           continue;
@@ -187,7 +225,7 @@ std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& termin
 // touching newer terminal input; absence leaves the caller free to perform a native read.
 std::optional<RuntimeInput> take_startup_input()
 {
-  auto& queue = startup_input_queue_storage();
+  auto& queue = input_replay().startup;
   if (queue.empty())
     return std::nullopt;
   auto input = std::move(queue.front());
@@ -240,20 +278,28 @@ std::optional<std::string> printable_jump_target(RuntimeInput const& input)
 // TUI session boundary: drop owned replay values so they cannot leak into a later session.
 void clear_startup_input_queue()
 {
-  startup_input_queue_storage().clear();
+  input_replay().startup.clear();
+}
+
+void reset_input_decoder()
+{
+  auto& replay = input_replay();
+  replay.startup.clear();
+  replay.discard_paste_tail = false;
+  replay.paste_end_prefix = 0;
 }
 
 // TUI startup code uses this nonconsuming count to avoid reading beyond replay capacity.
 std::size_t startup_input_queue_size()
 {
-  return startup_input_queue_storage().size();
+  return input_replay().startup.size();
 }
 
 // TUI startup decoder: save an actionable owned event in arrival order. Full means
 // the passed value is not saved; callers must check capacity before reading more input.
 bool enqueue_startup_input(RuntimeInput input)
 {
-  auto& queue = startup_input_queue_storage();
+  auto& queue = input_replay().startup;
   if (queue.size() >= kStartupInputQueueCap)
     return false;
   queue.push_back(std::move(input));
@@ -274,6 +320,16 @@ static std::optional<RuntimeInput> decode_terminal_input(terminal::Context& term
   // preserve the existing CtrlC routing for a terminal signal already observed here.
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
+  if (auto& replay = input_replay(); replay.discard_paste_tail)
+  {
+    // A cap or timeout ends the retained prefix, not the terminal's paste. Spend
+    // one input-budget item per tail character; never turn it into prompt keys.
+    if (key == Key::WideCharacter || key == Key::Escape)
+      static_cast<void>(replay.observe_paste_character(static_cast<wchar_t>(value)));
+    else
+      replay.paste_end_prefix = 0;
+    return unknown_input();
+  }
   if (key == Key::WideCharacter)
   {
     wchar_t const character = static_cast<wchar_t>(value);
@@ -388,7 +444,7 @@ void drain_startup_probe_input(std::chrono::milliseconds deadline)
   auto const started = clock::now();
   // Bypass the startup queue below; reading through read_curses_input would take
   // the oldest saved event and enqueue it again instead of draining the terminal.
-  while (startup_input_queue_storage().size() < kStartupInputQueueCap)
+  while (input_replay().startup.size() < kStartupInputQueueCap)
   {
     auto const elapsed = clock::now() - started;
     if (elapsed >= deadline)

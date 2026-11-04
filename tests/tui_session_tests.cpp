@@ -31,6 +31,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -87,6 +88,13 @@ struct Turn
 // worker join. Producer threads never see this thread_local probe.
 struct SessionProbe
 {
+  // TUI-only copies identify which decoded character actually reached active
+  // dispatch. Retained-key assertions must not infer dispatch from decoder counts.
+  std::vector<char> active_dispatched_characters;
+  // Copied into the real audit endpoint's call-through tee. This callback may run
+  // on either thread; its synchronized captures must survive Session's worker join.
+  std::function<void(ava::event::RuntimeEvent const&, bool)> after_audit;
+
   // Completed and current turn observations, retained until assertions finish.
   std::vector<Turn> turns;
   // Borrowed only while Session exists; wrappers capture its public loop address.
@@ -121,6 +129,12 @@ struct SessionProbe
   std::function<void(ava::tui::runtime_input::InputPollResult const&)> after_poll;
   // Runs after the real coordinator reports its prompt claim outcome.
   std::function<void(ava::tui::PromptServiceOutcome)> after_prompt;
+  // Runs before claiming a queued prompt, allowing typeahead to precede its paint.
+  std::function<void(ava::tui::RuntimePromptCoordinator&)> before_prompt;
+  // Runs before a real synchronous paint, including prompt ownership handoffs.
+  std::function<void()> before_handoff;
+  // Runs after actual handoff I/O, before the caller can release a prompt result.
+  std::function<void()> after_handoff;
 
   // Return the current TUI turn; all instrumented stages follow its control marker.
   Turn& turn() { return turns.back(); }
@@ -225,13 +239,13 @@ class SessionInput final
     ava::core::UniqueFd writer(descriptors[1]);
     redirect_.replace(error_mode ? writer.get() : reader.get());
     peer_ = error_mode ? std::move(reader) : std::move(writer);
-    ava::tui::runtime_input::clear_startup_input_queue();
+    ava::tui::runtime_input::reset_input_decoder();
   }
   // Destroy only after Session joined all workers; discard retained keys before
   // restoring the original descriptor so another case cannot inherit input.
   ~SessionInput()
   {
-    ava::tui::runtime_input::clear_startup_input_queue();
+    ava::tui::runtime_input::reset_input_decoder();
     for (std::size_t remaining = 0; remaining < 256; ++remaining)
       if (ava::tui::runtime_input::poll_curses_input().kind == InputPollKind::Empty)
         break;
@@ -740,13 +754,19 @@ void test_prompt_paint(bool permission)
     return ava::tui::TuiSubmitResult{};
   };
   SessionProbe probe;
+  bool prompt_active = false;
   bool failure_armed = false;
-  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) {
-    if (!failure_armed && outcome == ava::tui::PromptServiceOutcome::Active)
+  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) { prompt_active = prompt_active || outcome == ava::tui::PromptServiceOutcome::Active; };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (!failure_armed && prompt_active)
     {
+      // Startup painted synchronously and the input stage drained typeahead.
+      // A fresh navigation key requests the ordinary deferred repaint under test.
+      native_input("\t");
       probe.fail_paint_flush = true;
       failure_armed = true;
       reach_frame_deadline(probe);
+      notify_before_block(loop, mode);
     }
   };
   seed_submission();
@@ -757,7 +777,474 @@ void test_prompt_paint(bool permission)
          "the real frame renderer reports the injected terminal flush failure");
 }
 
+// R18: a SIGTERM pending at an active turn's control checkpoint requests worker
+// cancellation before due timers or input, then preserves exit 130 through join.
+void test_active_signal_at_control()
+{
+  SessionInput input;
+  SessionSignals signals;
+  WorkerGate gate;
+  // A second bounded publication lets the worker sample cancellation while the
+  // TUI remains at the before-due boundary, before any later phase can cancel it.
+  WorkerGate cancellation_checked;
+  std::atomic_size_t submissions{0};
+  std::atomic_bool released{false};
+  std::atomic_bool worker_stopped{false};
+  std::atomic_bool worker_returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [gate = &gate, checked = &cancellation_checked, submissions = &submissions, released = &released, stopped = &worker_stopped,
+                                returned = &worker_returned](std::string const&, ava::tui::TuiSubmitContext context) {
+    if (submissions->fetch_add(1) != 0)
+      return ava::tui::TuiSubmitResult{};
+    gate->published();
+    released->store(gate->wait_for_release());
+    stopped->store(context.cancel_requested && context.cancel_requested());
+    returned->store(true);
+    checked->published();
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  bool injected = false;
+  bool control_checked = false;
+  bool cancelled_before_due = false;
+  probe.before_wait = [gate = &gate, probe = &probe, injected = &injected](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (probe->turns.size() == 1)
+    {
+      expect(gate->wait_for_publication(), "active control worker reaches its bounded gate");
+      expect(::raise(SIGTERM) == 0, "inject SIGTERM before the next active control checkpoint");
+      *injected = true;
+      expect(ava::core::Signals::received(ava::core::Signals::to_mask(SIGTERM)), "active control signal is pending before wait returns");
+    }
+    notify_before_block(loop, mode);
+  };
+  probe.before_due = [gate = &gate, checked = &cancellation_checked, probe = &probe, control_checked = &control_checked, cancelled = &cancelled_before_due,
+                      stopped = &worker_stopped, returned = &worker_returned](TuiEventLoop&, Clock::time_point) {
+    if (probe->turns.size() != 2)
+      return;
+    *control_checked = true;
+    expect(!returned->load(), "active worker remains held until the control checkpoint finishes");
+    bool const signal_claimed = !ava::core::Signals::received(ava::core::Signals::to_mask(SIGTERM));
+    expect(probe->turn().input.empty(), "active control cancellation precedes all input in its turn");
+    gate->release();
+    bool const checked_in_time = checked->wait_for_publication();
+    *cancelled = signal_claimed && checked_in_time && stopped->load();
+  };
+  seed_submission();
+  int exit_code = -1;
+  {
+    ProbeScope scope(probe);
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    // On unwind this releases before Session's destructor joins; the ordinary
+    // path above releases before run() performs its own shutdown/join.
+    ReleaseWorker release(gate);
+    exit_code = session.run([] { return true; });
+  }
+  expect(exit_code == 130 && !probe.timed_out && injected && control_checked && cancelled_before_due,
+         "active control SIGTERM cancels before due dispatch and preserves signal exit through worker settlement");
+  expect(submissions.load() == 1 && released.load() && worker_returned.load(), "active control test releases and joins exactly one submitted worker");
+}
+
+// R18: SIGTERM delivered after decoding x consumes x before active dispatch.
+// The held worker keeps the run active, so following y/Enter may still drain
+// through the close-state active handler before cancellation settles with 130.
+void test_active_signal_after_decode()
+{
+  SessionInput input;
+  SessionSignals signals;
+  WorkerGate gate;
+  std::atomic_size_t submissions{0};
+  std::atomic_bool released{false};
+  std::atomic_bool worker_stopped{false};
+  std::atomic_bool worker_returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [gate = &gate, submissions = &submissions, released = &released, stopped = &worker_stopped, returned = &worker_returned](
+                                   std::string const&, ava::tui::TuiSubmitContext context) {
+    if (submissions->fetch_add(1) != 0)
+      return ava::tui::TuiSubmitResult{};
+    gate->published();
+    released->store(gate->wait_for_release());
+    stopped->store(context.cancel_requested && context.cancel_requested());
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  bool injected = false;
+  bool claimed_before_following_key = false;
+  probe.after_poll = [probe = &probe, injected = &injected, claimed = &claimed_before_following_key](ava::tui::runtime_input::InputPollResult const& result) {
+    if (probe->turns.size() < 2 || result.kind != InputPollKind::Input || result.input.event.key != ava::tui::terminal::Key::Character)
+      return;
+    if (!*injected && result.input.event.character == 'x')
+    {
+      *injected = true;
+      expect(::raise(SIGTERM) == 0, "inject active SIGTERM after the real retained x decode");
+    }
+    else if (*injected && result.input.event.character == 'y')
+      *claimed = !ava::core::Signals::received(ava::core::Signals::to_mask(SIGTERM));
+  };
+  probe.before_wait = [gate = &gate, probe = &probe, injected = &injected, returned = &worker_returned](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (probe->turns.size() == 1)
+    {
+      expect(gate->wait_for_publication(), "post-decode signal worker is active before native keys are buffered");
+      native_input("xy\n");
+    }
+    else if (*injected && !returned->load())
+    {
+      // Release only after the entire input stage, so worker completion cannot
+      // suppress the following-key observation or explain x's missing dispatch.
+      gate->release();
+    }
+    notify_before_block(loop, mode);
+  };
+  seed_submission();
+  int exit_code = -1;
+  {
+    ProbeScope scope(probe);
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    ReleaseWorker release(gate);
+    exit_code = session.run([] { return true; });
+  }
+  expect(exit_code == 130 && !probe.timed_out && injected && claimed_before_following_key && released.load() && worker_stopped.load() && worker_returned.load(),
+         "post-decode active SIGTERM is claimed before another key and cancels the joined worker with signal exit");
+  expect(std::ranges::count(probe.active_dispatched_characters, 'x') == 0 && std::ranges::count(probe.active_dispatched_characters, 'y') == 1,
+         "the signal's retained x never enters active dispatch while the following y still reaches close-state drainage");
+  expect(submissions.load() == 1, "following Enter cannot submit another run after active signal cancellation");
+}
+
+// R18: a genuine descriptor HUP after a permission frame is visible returns Deny
+// and emits its interrupted audit. Observe the real sink publication because HUP
+// skips application consumption and shutdown retires the inbox without draining.
+void test_permission_hangup()
+{
+  SessionInput input;
+  WorkerGate gate;
+  std::atomic_size_t submissions{0};
+  std::atomic_bool released{false};
+  std::atomic_bool worker_denied{false};
+  std::atomic_bool worker_returned{false};
+  // All tee observations are synchronized even if future audit emission moves
+  // onto the worker; these owners survive the last copied callback and join.
+  std::atomic_size_t audit_requests{0};
+  std::atomic_size_t audit_denials{0};
+  std::atomic_size_t interrupted_denials{0};
+  std::atomic_bool audit_forward_failed{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [gate = &gate, submissions = &submissions, released = &released, denied = &worker_denied, returned = &worker_returned](
+                                   std::string const&, ava::tui::TuiSubmitContext context) {
+    if (submissions->fetch_add(1) != 0)
+      return ava::tui::TuiSubmitResult{};
+    ava::permissions::PermissionPrompt prompt;
+    prompt.operation = ava::permissions::Operation::RunCommand;
+    prompt.mode = ava::core::Mode::Build;
+    prompt.command = "echo permission";
+    prompt.tool_name = "bash";
+    prompt.permission_request_id = "r18-hup-permission";
+    gate->published();
+    auto result = context.permission_resolver(prompt);
+    denied->store(result && *result == ava::permissions::PermissionResolution::Deny);
+    released->store(gate->wait_for_release());
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  bool claimed = false;
+  bool visible_before_hup = false;
+  bool observed_hup = false;
+  std::optional<std::size_t> closed_after_turn;
+  probe.after_audit = [requests = &audit_requests, denials = &audit_denials, interrupted = &interrupted_denials, failed = &audit_forward_failed](
+                          ava::event::RuntimeEvent const& event, bool accepted) {
+    auto const* provider = std::get_if<ava::event::ProviderEvent>(&event.payload());
+    if (!provider || provider->payload.permission_request_ids.size() != 1 || provider->payload.permission_request_ids.front() != "r18-hup-permission")
+      return;
+    if (!accepted)
+      failed->store(true);
+    auto const& payload = provider->payload;
+    if (payload.status == "tui:permission_request")
+      requests->fetch_add(1);
+    if (payload.status == "tui:permission_deny")
+    {
+      denials->fetch_add(1);
+      if (payload.error_details == "interrupted" && payload.text == "permission denied: interrupted" && payload.tool == "bash")
+        interrupted->fetch_add(1);
+    }
+  };
+  probe.after_prompt = [probe = &probe, claimed = &claimed](ava::tui::PromptServiceOutcome outcome) {
+    if (!*claimed && outcome == ava::tui::PromptServiceOutcome::Active)
+    {
+      *claimed = true;
+      // Active means the real coordinator owns the claim. Make its requested
+      // frame eligible, then wait for an actual successful flush before HUP.
+      reach_frame_deadline(*probe);
+    }
+  };
+  probe.before_wait = [input = &input, gate = &gate, probe = &probe, claimed = &claimed, visible = &visible_before_hup, closed = &closed_after_turn](
+                          TuiEventLoop& loop, TuiWaitMode mode) {
+    if (probe->turns.size() == 1)
+      expect(gate->wait_for_publication(), "HUP worker reaches the permission resolver before closure");
+    if (!*closed && *claimed && probe->turn().painted == true && probe->turn().flushes > 0)
+    {
+      *visible = true;
+      *closed = probe->turns.size();
+      input->close_peer();
+      // run() joins during shutdown; release before it enters the HUP control
+      // turn. The resolver still keeps the worker pending until real cancellation.
+      gate->release();
+    }
+    notify_before_block(loop, mode);
+  };
+  probe.after_poll = [probe = &probe, observed = &observed_hup](ava::tui::runtime_input::InputPollResult const&) {
+    if (probe->loop && probe->loop->terminal_hangup())
+      *observed = true;
+  };
+  seed_submission();
+  int exit_code = -1;
+  {
+    ProbeScope scope(probe);
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    ReleaseWorker release(gate);
+    exit_code = session.run([] { return true; });
+  }
+  expect(exit_code == 0 && !probe.timed_out && visible_before_hup && observed_hup && released.load() && worker_denied.load() && worker_returned.load(),
+         "real HUP after a flushed permission frame returns Deny and joins the worker with normal close exit");
+  expect(submissions.load() == 1 && audit_requests.load() == 1 && audit_denials.load() == 1 && interrupted_denials.load() == 1 && !audit_forward_failed.load(),
+         "HUP forwards exactly one correlated permission request and interrupted denial through the original audit sink");
+  if (!ava::tests::require(closed_after_turn.has_value(), "permission HUP occurs only after a visible prompt"))
+    return;
+  for (std::size_t index = *closed_after_turn; index < probe.turns.size(); ++index)
+    expect(probe.turns[index].stages == std::vector<Stage>{Stage::Control, Stage::Input},
+           "permission HUP closes through control/input without an application drain, deferred paint, or another wait");
+}
+
+// S1: keys already in startup replay, ncurses, or the fd cannot answer a newly
+// painted prompt. The empty boundary permits a later deliberate key instead.
+void test_prompt_input_boundary(bool permission, int source)
+{
+  SessionInput input;
+  std::atomic_bool answered{false};
+  std::atomic_bool returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [permission, answered = &answered, returned = &returned](std::string const&, ava::tui::TuiSubmitContext context) {
+    if (permission)
+    {
+      ava::permissions::PermissionPrompt prompt;
+      prompt.operation = ava::permissions::Operation::RunCommand;
+      prompt.mode = ava::core::Mode::Build;
+      prompt.command = "echo security";
+      prompt.tool_name = "bash";
+      auto result = context.permission_resolver(prompt);
+      answered->store(result && *result == ava::permissions::PermissionResolution::Allow);
+    }
+    else
+    {
+      ava::agent::QuestionPrompt prompt{.header = "Security", .question = "Choose", .options = {{.value = "yes", .label = "Yes"}}};
+      auto result = context.question_resolver(prompt);
+      answered->store(result && result->selected_options == std::vector<std::string>{"yes"});
+    }
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  ava::tui::RuntimePromptCoordinator* prompts = nullptr;
+  bool buffered = false;
+  bool active = false;
+  bool fresh_sent = false;
+  bool stale_ignored = false;
+  char const key = permission ? 'a' : '1';
+  probe.before_prompt = [&](ava::tui::RuntimePromptCoordinator& coordinator) {
+    prompts = &coordinator;
+    if (buffered || !coordinator.has_pending_requests())
+      return;
+    buffered = true;
+    if (source == 0)
+    {
+      // More than one turn's budget proves quarantine persists across batches.
+      for (std::size_t count = 0; count < 63; ++count)
+      {
+        ava::tui::runtime_input::RuntimeInput stale;
+        stale.event = {.key = ava::tui::terminal::Key::Character, .character = key, .text = std::string(1, key), .mouse_column = 0, .mouse_row = 0};
+        stale.text = std::string(1, key);
+        expect(ava::tui::runtime_input::enqueue_startup_input(std::move(stale)), "queue stale startup answer key");
+      }
+    }
+    else if (source == 1)
+      native_input(std::string(60, key) + "\n");
+    else
+      expect(input.write_bytes(std::string("\xff", 1) + key + "\n"), "queue invalid UTF-8 followed by stale answer bytes");
+  };
+  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) { active = active || outcome == ava::tui::PromptServiceOutcome::Active; };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (buffered && prompts && !prompts->has_active() && !fresh_sent)
+    {
+      loop.request_stop();
+      return;
+    }
+    if (active && !fresh_sent && !probe.turn().input.empty() && probe.turn().input.back() == InputPollKind::Empty)
+    {
+      stale_ignored = prompts && prompts->has_active() && !returned.load();
+      fresh_sent = true;
+      native_input(std::string(1, key));
+      notify_before_block(loop, mode);
+    }
+    if (returned.load())
+      loop.request_stop();
+  };
+  seed_submission();
+  auto const exit_code = run_session(frontend, probe);
+  expect(exit_code == 0 && !probe.timed_out && buffered && active && stale_ignored && fresh_sent && returned.load() && answered.load(),
+         "pre-prompt buffered input is discarded; only a fresh key after drainage answers");
+}
+
+// S1: actual synchronous paint failure at startup or answer must release the
+// resolver with Io. A selected Allow must not escape before terminal I/O succeeds.
+void test_prompt_handoff_failure(bool permission, bool at_answer)
+{
+  SessionInput input;
+  std::atomic_bool io{false};
+  std::atomic_bool returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [permission, io = &io, returned = &returned](std::string const&, ava::tui::TuiSubmitContext context) {
+    if (permission)
+    {
+      ava::permissions::PermissionPrompt prompt;
+      prompt.operation = ava::permissions::Operation::RunCommand;
+      prompt.mode = ava::core::Mode::Build;
+      prompt.command = "echo security";
+      prompt.tool_name = "bash";
+      auto result = context.permission_resolver(prompt);
+      io->store(!result && result.error().category() == ava::core::ErrorCategory::Io);
+    }
+    else
+    {
+      ava::agent::QuestionPrompt prompt{.header = "Security", .question = "Choose", .options = {{.value = "yes", .label = "Yes"}}};
+      auto result = context.question_resolver(prompt);
+      io->store(!result && result.error().category() == ava::core::ErrorCategory::Io);
+    }
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  bool active = false;
+  bool fresh_sent = false;
+  bool inject = false;
+  bool injected = false;
+  char const key = permission ? 'a' : '1';
+  probe.before_prompt = [&](ava::tui::RuntimePromptCoordinator& coordinator) {
+    if (!at_answer && coordinator.has_pending_requests())
+      inject = true;
+  };
+  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) { active = active || outcome == ava::tui::PromptServiceOutcome::Active; };
+  probe.after_poll = [&](ava::tui::runtime_input::InputPollResult const& result) {
+    if (at_answer && fresh_sent && result.kind == InputPollKind::Input && result.input.event.character == key)
+      inject = true;
+  };
+  probe.before_handoff = [&] {
+    if (inject && !injected)
+    {
+      injected = true;
+      probe.fail_paint_flush = true;
+    }
+  };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (at_answer && active && !fresh_sent)
+    {
+      fresh_sent = true;
+      native_input(std::string(1, key));
+      notify_before_block(loop, mode);
+    }
+  };
+  seed_submission();
+  auto const exit_code = run_session(frontend, probe);
+  expect(exit_code == 1 && !probe.timed_out && injected && probe.failed_paint_flushes == 1 && io.load() && returned.load(),
+         "failed prompt handoff paint returns Io instead of permission or question success");
+  expect(!at_answer || (active && fresh_sent), "answer failure is injected only after a visible prompt and fresh key");
+}
+
+// S1: a visible permission fails closed on explicit shutdown, eventfd failure,
+// an exception while repainting, or a signal during a successful answer paint.
+void test_permission_exit(int cause)
+{
+  SessionInput input;
+  SessionSignals signals;
+  std::atomic_bool denied{false};
+  std::atomic_bool returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.hooks().on_submit = [denied = &denied, returned = &returned](std::string const&, ava::tui::TuiSubmitContext context) {
+    ava::permissions::PermissionPrompt prompt;
+    prompt.operation = ava::permissions::Operation::RunCommand;
+    prompt.mode = ava::core::Mode::Build;
+    prompt.command = "echo security";
+    prompt.tool_name = "bash";
+    auto result = context.permission_resolver(prompt);
+    denied->store(result && *result == ava::permissions::PermissionResolution::Deny);
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  bool active = false;
+  bool triggered = false;
+  bool answer_sent = false;
+  bool caught = false;
+  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) { active = active || outcome == ava::tui::PromptServiceOutcome::Active; };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (!active || triggered || answer_sent)
+      return;
+    if (cause == 0)
+    {
+      triggered = true;
+      loop.request_stop();
+    }
+    else if (cause == 1)
+    {
+      triggered = true;
+      probe.fail_notify_write = true;
+      loop.wakeup().notify();
+      probe.fail_notify_write = false;
+    }
+    else
+    {
+      answer_sent = true;
+      native_input("a");
+      notify_before_block(loop, mode);
+    }
+  };
+  probe.before_handoff = [&] {
+    if (!answer_sent || triggered)
+      return;
+    triggered = true;
+    if (cause == 2)
+      throw std::runtime_error("injected prompt handoff exception");
+  };
+  probe.after_handoff = [&] {
+    if (cause == 3 && triggered)
+      expect(::raise(SIGTERM) == 0, "inject signal after successful permission answer paint");
+  };
+  seed_submission();
+  int exit_code = -1;
+  try
+  {
+    exit_code = run_session(frontend, probe);
+  }
+  catch (std::runtime_error const& error)
+  {
+    caught = std::string_view(error.what()) == "injected prompt handoff exception";
+  }
+  expect(active && triggered && !probe.timed_out && denied.load() && returned.load(), "pending permission never allows on exit or exception");
+  expect(cause == 2 ? caught : exit_code == (cause == 3 ? 130 : cause == 1 ? 1 : 0), "permission exit preserves its original reason");
+}
+
 } // namespace
+
+// Preserve active dispatch; only copy the character at its actual entry boundary.
+extern "C" ava::tui::TuiInputOutcome session_real_active_dispatch(ava::tui::ActiveRunInput*, ava::tui::runtime_input::RuntimeInput const&) asm(
+    "__real__ZN3ava3tui14ActiveRunInput8dispatchERKNS0_13runtime_input12RuntimeInputE");
+// Observe the retained-key boundary without changing the active input outcome.
+extern "C" ava::tui::TuiInputOutcome session_wrap_active_dispatch(ava::tui::ActiveRunInput*, ava::tui::runtime_input::RuntimeInput const&) asm(
+    "__wrap__ZN3ava3tui14ActiveRunInput8dispatchERKNS0_13runtime_input12RuntimeInputE");
+// Keep coordinator audit installation, its mutex, and endpoint retirement intact.
+extern "C" void session_real_set_audit_sink(ava::tui::RuntimePromptCoordinator*, ava::event::RuntimeEventSink) asm(
+    "__real__ZN3ava3tui24RuntimePromptCoordinator14set_audit_sinkESt8functionIFSt8expectedIvNS_4core5ErrorEERKNS_5event12RuntimeEventEEE");
+// Tee a nonempty endpoint while preserving every real publication and its result.
+extern "C" void session_wrap_set_audit_sink(ava::tui::RuntimePromptCoordinator*, ava::event::RuntimeEventSink) asm(
+    "__wrap__ZN3ava3tui24RuntimePromptCoordinator14set_audit_sinkESt8functionIFSt8expectedIvNS_4core5ErrorEERKNS_5event12RuntimeEventEEE");
 
 // Exact aliases let GNU ld interpose C++ member calls without a production test
 // hook. Member ABI is represented explicitly by the leading borrowed this pointer.
@@ -789,6 +1276,10 @@ extern "C" ava::tui::runtime_input::InputPollResult session_wrap_poll() asm("__w
 extern "C" bool session_real_paint(ava::tui::RuntimeRenderer*) asm("__real__ZN3ava3tui15RuntimeRenderer17paint_ready_frameEv");
 // Scope terminal-flush observations to the real TUI paint operation.
 extern "C" bool session_wrap_paint(ava::tui::RuntimeRenderer*) asm("__wrap__ZN3ava3tui15RuntimeRenderer17paint_ready_frameEv");
+// Preserve the real synchronous paint used when a host prompt takes or releases input.
+extern "C" bool session_real_handoff(ava::tui::RuntimeRenderer*) asm("__real__ZN3ava3tui15RuntimeRenderer17paint_for_handoffEv");
+// Observe terminal I/O during handoff without changing its result or scheduling.
+extern "C" bool session_wrap_handoff(ava::tui::RuntimeRenderer*) asm("__wrap__ZN3ava3tui15RuntimeRenderer17paint_for_handoffEv");
 // Use the real coordinator claim and its lifetime-controlled callbacks.
 extern "C" ava::tui::PromptServiceOutcome session_real_prompt(ava::tui::RuntimePromptCoordinator*, std::function<bool()>, std::function<void()>) asm(
     "__real__ZN3ava3tui24RuntimePromptCoordinator13start_pendingESt8functionIFbvEES2_IFvvEE");
@@ -803,6 +1294,31 @@ extern "C" ssize_t __wrap_write(int, void const*, std::size_t);
 extern "C" int __real_fflush(FILE*);
 // Observe only Context output during paint; an armed fault lasts one flush.
 extern "C" int __wrap_fflush(FILE*);
+
+// A following key may still reach the closing active handler; record actual
+// characters separately so consuming the signal's retained key is observable.
+extern "C" ava::tui::TuiInputOutcome session_wrap_active_dispatch(ava::tui::ActiveRunInput* input_owner, ava::tui::runtime_input::RuntimeInput const& input)
+{
+  if (auto* probe = session_probe; probe && input.event.key == ava::tui::terminal::Key::Character)
+    probe->active_dispatched_characters.push_back(input.event.character);
+  return session_real_active_dispatch(input_owner, input);
+}
+
+// The copied observer never borrows thread_local SessionProbe. Its test-owned
+// atomics outlive Session; the original mailbox endpoint owns its normal state.
+// Empty replacements remain empty, preserving coordinator audit retirement.
+extern "C" void session_wrap_set_audit_sink(ava::tui::RuntimePromptCoordinator* coordinator, ava::event::RuntimeEventSink sink)
+{
+  if (auto* probe = session_probe; probe && sink && probe->after_audit)
+  {
+    sink = [sink = std::move(sink), observe = probe->after_audit](ava::event::RuntimeEvent const& event) -> ava::core::VoidResult {
+      auto result = sink(event);
+      observe(event, result.has_value());
+      return result;
+    };
+  }
+  session_real_set_audit_sink(coordinator, std::move(sink));
+}
 
 // Observe exactly the real due call, with optional signal injection at its boundary.
 extern "C" void session_wrap_due(TuiEventLoop* loop, Clock::time_point now)
@@ -910,10 +1426,30 @@ extern "C" bool session_wrap_paint(ava::tui::RuntimeRenderer* renderer)
   return result;
 }
 
-// Prompt failure scenarios act only after the real claim and scheduling complete.
+// Bound flush observation to actual handoff painting. Initial Session painting
+// precedes the first loop turn, so it has no per-turn observation to update.
+extern "C" bool session_wrap_handoff(ava::tui::RuntimeRenderer* renderer)
+{
+  auto* probe = session_probe;
+  if (!probe || probe->turns.empty())
+    return session_real_handoff(renderer);
+  if (probe->before_handoff)
+    probe->before_handoff();
+  auto const previous = std::exchange(probe->painting, true);
+  bool const result = session_real_handoff(renderer);
+  probe->painting = previous;
+  if (probe->after_handoff)
+    probe->after_handoff();
+  return result;
+}
+
+// Prompt scenarios surround the real claim; buffered keys can be staged before
+// startup, while after_prompt observes the completed paint/claim outcome.
 extern "C" ava::tui::PromptServiceOutcome session_wrap_prompt(ava::tui::RuntimePromptCoordinator* coordinator, std::function<bool()> stop_requested,
                                                               std::function<void()> before_prompt)
 {
+  if (auto* probe = session_probe; probe && probe->before_prompt)
+    probe->before_prompt(*coordinator);
   auto const result = session_real_prompt(coordinator, std::move(stop_requested), std::move(before_prompt));
   if (auto* probe = session_probe; probe && probe->after_prompt)
     probe->after_prompt(result);
@@ -968,6 +1504,23 @@ void run_tui_session_test_case(std::string_view test_case)
     test_turn_order();
   else if (test_case == "close_after_submit")
     test_close_after_submit_drains_input();
+  else if (test_case == "active_signal_at_control")
+    test_active_signal_at_control();
+  else if (test_case == "active_signal_after_decode")
+    test_active_signal_after_decode();
+  else if (test_case == "permission_hangup")
+    test_permission_hangup();
+  else if (test_case == "prompt_security_permission" || test_case == "prompt_security_question")
+  {
+    bool const permission = test_case == "prompt_security_permission";
+    for (int source : {0, 1, 2})
+      test_prompt_input_boundary(permission, source);
+    for (bool at_answer : {false, true})
+      test_prompt_handoff_failure(permission, at_answer);
+    if (permission)
+      for (int cause : {0, 1, 2, 3})
+        test_permission_exit(cause);
+  }
   else if (test_case == "frame_deadline")
     test_frame_deadline();
   else if (test_case == "hangup")

@@ -120,6 +120,8 @@ void RuntimePromptCoordinator::emit_prompt_audit(std::string status, std::string
 
 std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinator::start_permission_prompt(ava::permissions::PermissionPrompt const& prompt)
 {
+  if (permission_interrupted())
+    return PermissionResult{ava::permissions::PermissionResolution::Deny};
   auto const& snapshot = presentation_.screen();
   auto& command_session_grants = session_grants_;
   auto permission_label = std::string("permission requested");
@@ -143,10 +145,10 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
     {
       presentation_.publish_status("permission allowed for this session");
     }
-    // This automatic reuse has no visible prompt claim. Preserve the existing
-    // decision even if status painting fails; session control observes renderer
-    // failure separately. The active-modal I/O-error path below does not apply.
-    static_cast<void>(renderer_.render());
+    // Reused grants still belong to a pending request. A failed terminal handoff
+    // must return an error instead of releasing this worker with Allow.
+    if (!renderer_.paint_for_handoff())
+      return PermissionResult{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"))};
     ava::permissions::PermissionResolutionDecision decision{ava::permissions::PermissionResolution::AllowSessionGrant};
     decision.resolution_source = "tui_session_grant";
     return PermissionResult{std::move(decision)};
@@ -165,7 +167,9 @@ std::optional<RuntimePromptCoordinator::PermissionResult> RuntimePromptCoordinat
                                      : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject");
   }
   ava::core::Application::instance().terminal_context().beep();
-  if (!renderer_.render())
+  // A prompt takes input from the composer. Paint this ownership change now;
+  // scheduling a later frame is not evidence that the user has seen the choice.
+  if (!renderer_.paint_for_handoff())
   {
     return PermissionResult{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"))};
   }
@@ -181,6 +185,15 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
   auto const allow =
       selected == PermissionPromptChoice::Allow || selected == PermissionPromptChoice::AllowSession || selected == PermissionPromptChoice::AllowRemember;
   auto const remember = selected == PermissionPromptChoice::AllowRemember || selected == PermissionPromptChoice::DenyRemember;
+  if (allow)
+  {
+    // Check actual output and control before a persistent or session-wide choice
+    // can be stored. A scheduled frame alone cannot establish this safety gate.
+    if (!renderer_.paint_for_handoff())
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
+    if (permission_interrupted())
+      return ava::permissions::PermissionResolution::Deny;
+  }
   std::string remembered_rule_id;
   // Persistence is decided before constructing an Allow response. Unavailable or
   // failed storage resolves to Deny instead of granting the one-shot action silently.
@@ -194,7 +207,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
         presentation_.publish_permission_prompt(std::nullopt);
         presentation_.publish_status("permission rule unavailable; denied");
       }
-      if (!renderer_.render())
+      if (!renderer_.paint_for_handoff())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
       }
@@ -211,7 +224,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
         presentation_.publish_permission_prompt(std::nullopt);
         presentation_.publish_status("permission rule failed; denied");
       }
-      if (!renderer_.render())
+      if (!renderer_.paint_for_handoff())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
       }
@@ -236,7 +249,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
         presentation_.publish_permission_prompt(std::nullopt);
         presentation_.publish_status(cap_reached ? "permission session grant cap reached; denied" : "permission session grant no longer eligible; denied");
       }
-      if (!renderer_.render())
+      if (!renderer_.paint_for_handoff())
       {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
       }
@@ -250,7 +263,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
       presentation_.publish_permission_prompt(std::nullopt);
       presentation_.publish_status("permission allowed for this session");
     }
-    if (!renderer_.render())
+    if (!renderer_.paint_for_handoff())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
     }
@@ -269,7 +282,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
       presentation_.publish_permission_prompt(std::nullopt);
       presentation_.publish_status(remember ? "permission allow rule saved" : "permission allowed once");
     }
-    if (!renderer_.render())
+    if (!renderer_.paint_for_handoff())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
     }
@@ -288,7 +301,7 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
     presentation_.publish_permission_prompt(std::nullopt);
     presentation_.publish_status(remember ? "permission deny rule saved" : "permission denied");
   }
-  if (!renderer_.render())
+  if (!renderer_.paint_for_handoff())
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear permission prompt"));
   }
@@ -307,6 +320,16 @@ RuntimePromptCoordinator::PermissionResult RuntimePromptCoordinator::resolve_per
   return decision;
 }
 
+bool RuntimePromptCoordinator::permission_interrupted() const
+{
+  bool canceled;
+  {
+    std::lock_guard lock(prompt_request_mutex_);
+    canceled = cancellation_pending_;
+  }
+  return canceled || Signals::received(terminal_signals) || (stop_requested_ && stop_requested_());
+}
+
 std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator::start_question_prompt(ava::agent::QuestionPrompt const& prompt)
 {
   emit_prompt_audit("tui:question_request", prompt.question.empty() ? std::string("question requested") : "question requested: " + prompt.question);
@@ -318,10 +341,10 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
                                                  : "question required: Enter sends, numbers choose, Esc cancels");
   }
   ava::core::Application::instance().terminal_context().beep();
-  if (!renderer_.render())
-  {
+  // The input quarantine starts with this visible handoff, before any answer key
+  // is eligible. A failed paint keeps the worker on the error path.
+  if (!renderer_.paint_for_handoff())
     return QuestionResult{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"))};
-  }
 
   // Arm discovery only after presentation succeeds. The claim keeps the worker
   // stack alive until service invokes this optional borrowed callback and retires it.
@@ -361,7 +384,7 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
     presentation_.publish_question_prompt(std::nullopt);
     presentation_.publish_status("question answered");
   }
-  if (!renderer_.render())
+  if (!renderer_.paint_for_handoff())
   {
     return ava::core::Result<ava::agent::QuestionAnswer>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear question prompt"))};
   }
@@ -374,6 +397,10 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
   using Key = terminal::Key;
   auto const& snapshot = presentation_.screen();
   bool const wheel_input = input.event.key == Key::MouseWheelUp || input.event.key == Key::MouseWheelDown;
+  // A pasted number or option label is text, never an answer shortcut. Keep
+  // paste useful in explicit custom/search fields without interpreting its prefix.
+  if (input.bracketed_paste && (!snapshot.question_prompt || (!snapshot.question_prompt->allow_custom && !snapshot.question_prompt->searchable)))
+    return PromptServiceOutcome::Active;
   // Interpret the retained key against the current view, including pointer targets.
   // Apply changed selection/text before deriving a submitted answer from that view.
   auto input_result = [&]() {
@@ -384,7 +411,10 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
       if (auto const clicked = question_option_for_screen_position(snapshot, input.event.mouse_row, input.event.mouse_column))
         return activate_question_option(*snapshot.question_prompt, *clicked);
     }
-    return handle_question_prompt_input(*snapshot.question_prompt, input.event);
+    auto event = input.event;
+    if (input.bracketed_paste)
+      event.character = '\0';
+    return handle_question_prompt_input(*snapshot.question_prompt, std::move(event));
   }();
   if (input_result.action == QuestionPromptInputAction::Cancel)
     return complete_question(cancel_question());
@@ -423,7 +453,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
       presentation_.publish_question_prompt(std::nullopt);
       presentation_.publish_status(answer ? "question answered" : "question canceled");
     }
-    if (!renderer_.render())
+    if (!renderer_.paint_for_handoff())
     {
       return complete_question(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to clear question prompt")));
     }
@@ -434,7 +464,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_question_input(RuntimeInpu
         {
           presentation_.publish_status(copy_text_to_terminal_clipboard(*copy_text) ? "clipboard copy request sent" : "clipboard copy failed");
         }
-        static_cast<void>(renderer_.render());
+        static_cast<void>(renderer_.paint_for_handoff());
       }
       emit_prompt_audit("tui:question_answer", question_answer_audit_detail(*answer));
     }
@@ -467,6 +497,10 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_permission_input(RuntimeIn
 {
   using Key = terminal::Key;
   auto const& snapshot = presentation_.screen();
+  // Only the explicit rejection-guidance field accepts paste. Its text handler
+  // cannot grant permission; outside that field even a one-byte paste is ignored.
+  if (input.bracketed_paste && (!snapshot.permission_prompt || !snapshot.permission_prompt->guidance_mode))
+    return PromptServiceOutcome::Active;
   if (input.event.key == Key::Escape)
   {
     // Keep the claim held until the caller publishes run stop, then calls
@@ -551,6 +585,7 @@ void RuntimePromptCoordinator::suppress_wheel_input()
 
 RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::retire_active_callbacks()
 {
+  input_quarantined_ = false;
   auto_resolution_timer_.cancel();
   wheel_expiry_timer_.cancel();
   auto_resolution_due_ = false;
@@ -568,6 +603,14 @@ void RuntimePromptCoordinator::clear_prompt_projection()
 
 PromptServiceOutcome RuntimePromptCoordinator::complete_permission(PermissionResult result)
 {
+  // A signal or stop may arrive during the final paint. While this request is
+  // still pending it must fail closed, even when the selected choice was Allow.
+  if (result && result->resolution != ava::permissions::PermissionResolution::Deny && permission_interrupted())
+  {
+    auto const& prompt = std::get<std::shared_ptr<PendingPermissionRequest>>(active_request_)->prompt();
+    emit_prompt_audit("tui:permission_deny", "permission denied: interrupted", prompt.permission_request_id, prompt.tool_name, prompt.reason, "interrupted");
+    result = ava::permissions::PermissionResolution::Deny;
+  }
   clear_prompt_projection();
   auto request = retire_active_callbacks();
   std::get<std::shared_ptr<PendingPermissionRequest>>(request)->complete(std::move(result));
@@ -599,9 +642,14 @@ PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedProm
   // Install the claim before any UI hook can fail or invoke a borrowed callback.
   // Unwinding below abandons it only after clearing this owner's callbacks and timers.
   active_request_ = std::move(request);
+  input_quarantined_ = true;
   stop_requested_ = std::move(stop_requested);
   try
   {
+    // A permission queued just before cancellation must not reuse a session
+    // grant. Check control while holding its claim, before invoking UI hooks.
+    if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_) && service() != PromptServiceOutcome::Active)
+      return PromptServiceOutcome::Completed;
     if (before_prompt)
       before_prompt();
     // Overview closes even when the new request resolves automatically. Other
@@ -686,6 +734,10 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
     auto const serviced = service();
     if (serviced != PromptServiceOutcome::Active)
       return serviced;
+    // Input already buffered when this prompt opened belongs to the previous
+    // screen. Session drains it with its normal budget and acknowledges Empty.
+    if (input_quarantined_)
+      return PromptServiceOutcome::Active;
     if (input.resize)
     {
       wheel_expiry_timer_.cancel();
@@ -719,6 +771,32 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
     abandon_active_request();
     throw;
   }
+}
+
+bool RuntimePromptCoordinator::input_drained()
+{
+  if (!input_quarantined_)
+    return true;
+  // ncurses ERR also covers invalid/incomplete UTF-8, not just an empty fd.
+  // Clear every replay source and flush native buffering before accepting keys;
+  // otherwise a stale 'a' after a bad byte could become a permission answer.
+  runtime_input::clear_startup_input_queue();
+  auto& terminal = ava::core::Application::instance().terminal_context();
+  wint_t discarded = 0;
+  while (terminal.try_get_buffered_keyboard_input(&discarded))
+  {
+  }
+  if (!terminal::Context::flushinp())
+  {
+    auto error = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to discard buffered prompt input"));
+    if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_))
+      static_cast<void>(complete_permission(std::move(error)));
+    else
+      static_cast<void>(complete_question(std::move(error)));
+    return false;
+  }
+  input_quarantined_ = false;
+  return true;
 }
 
 PromptServiceOutcome RuntimePromptCoordinator::cancel_active_after_auto(PromptCancelReason reason)
@@ -836,17 +914,14 @@ SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_
     return SearchInputPromptDispatchResult::PromptServiced;
   }
   ClaimedPromptRequest request;
-  bool input_handled = false;
   {
     std::lock_guard lock(prompt_request_mutex_);
     request = claim_pending_request_locked();
-    // Only the bounded search handler may run under this lock. It cannot publish
-    // prompts or run commands. Prompt startup begins after releasing the lock.
-    if (std::holds_alternative<std::monostate>(request))
-      input_handled = dispatch_search_input();
   }
+  // Search may render or reenter another owner. The queue decision is complete;
+  // a worker arriving now waits for the next turn, without blocking this callback.
   if (std::holds_alternative<std::monostate>(request))
-    return input_handled ? SearchInputPromptDispatchResult::InputHandled : SearchInputPromptDispatchResult::InputFailed;
+    return dispatch_search_input() ? SearchInputPromptDispatchResult::InputHandled : SearchInputPromptDispatchResult::InputFailed;
   static_cast<void>(start_claimed_request(std::move(request), std::move(stop_requested), std::move(before_prompt)));
   return SearchInputPromptDispatchResult::PromptServiced;
 }

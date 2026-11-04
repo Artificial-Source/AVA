@@ -117,6 +117,12 @@ class RuntimePromptCoordinator final
   // TUI thread: recheck automatic completion before a retained key, then route only
   // to the current prompt. Permission Escape returns with its claim still held.
   [[nodiscard]] PromptServiceOutcome handle_input(runtime_input::RuntimeInput const& input);
+  // TUI input stage, only after the real decoder reports Empty: flush remaining
+  // native/replay input before allowing later keys to answer the painted prompt.
+  // Empty also covers decoding errors. False means flushing failed and the claim
+  // completed with Io; the caller must stop the session. Earlier batches discard
+  // typeahead under the usual input budget, without blocking other loop stages.
+  [[nodiscard]] bool input_drained();
   // TUI thread: normal cancellation checks a ready automatic answer first. Shutdown
   // uses the prepared result and retires callbacks before releasing the worker.
   [[nodiscard]] PromptServiceOutcome cancel_active(PromptCancelReason reason);
@@ -128,8 +134,9 @@ class RuntimePromptCoordinator final
   [[nodiscard]] bool has_active() const noexcept;
   // Either thread: synchronized queue readiness, separate from TUI-only active claim state.
   [[nodiscard]] bool has_pending_requests() const;
-  // TUI thread: serialize claim-or-search under the admission mutex. The synchronous
-  // search callback must not enqueue prompts or run commands; prompt startup runs unlocked.
+  // TUI thread: choose a queued prompt under the mutex, then invoke either prompt
+  // startup or search after unlocking. A request queued during search waits for
+  // the next turn; this retained key can never answer that new prompt.
   [[nodiscard]] SearchInputPromptDispatchResult dispatch_search_input_with_prompt_precedence(std::function<bool()> const& dispatch_search_input,
                                                                                              std::function<bool()> stop_requested = {},
                                                                                              std::function<void()> before_prompt = {});
@@ -175,6 +182,10 @@ class RuntimePromptCoordinator final
   // TUI thread with a permission claim: validate/store remembered or session choices
   // before returning execution authority. Storage/eligibility failure denies.
   [[nodiscard]] PermissionResult resolve_permission_choice(PermissionPromptChoice selected, std::string user_guidance = {});
+  // TUI thread with a permission claim: sample queued cancellation under its
+  // mutex, then call the borrowed stop predicate unlocked and observe signals.
+  // Check before saving an Allow choice and again before releasing its worker.
+  [[nodiscard]] bool permission_interrupted() const;
   // TUI thread with a question claim: audit dismissal and clear its view; caller
   // still owns callback retirement and final delivery of the cancellation error.
   [[nodiscard]] QuestionResult cancel_question();
@@ -226,8 +237,8 @@ class RuntimePromptCoordinator final
   // Optional session borrow used only on the TUI thread. Prompt acquisition closes
   // overview/stash lists that would otherwise hide beneath its new surface.
   SelectorHost* selectors_ = nullptr;
-  // Serializes worker admission, queue removal and pending cancellation. Claim/start
-  // releases it before callbacks; the bounded search arbitration is the stated exception.
+  // Serializes worker admission, queue removal and pending cancellation. All
+  // callbacks run after unlock so reentry cannot deadlock this queue.
   mutable std::mutex prompt_request_mutex_;
   // Under admission mutex: permission FIFO shares pair with blocked workers
   // and take priority over queued questions when the TUI chooses a new claim.
@@ -248,6 +259,9 @@ class RuntimePromptCoordinator final
   // prompt_request_mutex_; service() resolves it after checking automatic answers.
   // Retire every borrowed callback before completing and releasing its worker.
   ClaimedPromptRequest active_request_;
+  // TUI thread sets this when claiming a prompt and clears it only after decoding
+  // to Empty or retiring the claim. Pre-prompt keys must never become answers.
+  bool input_quarantined_ = false;
   // TUI-retained stable-owner predicate installed with a claim and cleared before worker release.
   std::function<bool()> stop_requested_;
   // TUI caches current prompt eligibility; only a checked eligible choice can insert a grant.
