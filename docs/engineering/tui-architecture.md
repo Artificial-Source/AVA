@@ -27,7 +27,7 @@ some APIs and explain the boundaries between features:
 
 | Term | Meaning here |
 | --- | --- |
-| Authority | The component or data that decides a particular operation. For example, backend validation decides whether a session can open; the last painted layout decides where a mouse click landed. A display view alone does not grant backend access. |
+| Authority | The component or data that decides a particular operation. For example, backend validation decides whether a session can open; the renderer's supplied layout maps a mouse click to a transcript item. That layout may be prepared before the next paint. A display view alone does not grant backend access. |
 | Receipt | A request ID returned in `TuiSubmitResult::ordinary_turn_request_ids` to confirm a real model turn. For a slash command, an event enters the conversation only when its nonempty request ID exactly matches one of those IDs. |
 | Admission | Whether a named queue or input route currently accepts new work. Closing a queue, stopping key handling, and requesting worker cancellation are separate actions. |
 | Claim | The TUI coordinator's hold on a pending prompt request. The worker stays blocked until an answer exists and the hold is released, after callbacks borrowing worker data are removed. |

@@ -31,7 +31,8 @@ enum class TranscriptSelectionProjection
 // as a const view to feature callers. Borrowed presentation and Composer outlive it;
 // detached sidebar and anchors are owned copies. The renderer supplies layout rows
 // and retires timer callbacks before destruction. All transitions run serially on
-// the TUI thread; selection coordinates refer to the layout used to paint those rows.
+// the TUI thread; selection coordinates refer to the supplied layout, which may be
+// prepared before the next paint.
 class TranscriptView final
 {
  public:
