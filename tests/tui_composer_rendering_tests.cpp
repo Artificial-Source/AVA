@@ -309,9 +309,8 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
       after.modal_row_build_count == before.modal_row_build_count + 1 && renderer.prepared_transcript_layout().layout_build_count == full_layout_builds &&
       renderer.transcript().has_deferred_update();
 
-  // Drive the same timer and paint path as the session. Attach after the initial
-  // modal handoff so its cached underlying geometry is already established.
-
+  // Drive the session's scheduled paint path after the modal handoff has
+  // established the underlying geometry that this detached frame must preserve.
   auto const scheduled = renderer.request_render(ava::tui::FrameRenderKind::Full);
   // The real frame timer must wake this wait. A separate fallback makes a lost
   // registration fail the test instead of blocking forever.
