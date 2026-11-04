@@ -113,8 +113,9 @@ next control stage. The underlying waiter retries interrupted system calls.
 Escape decoding has a separate default of 100 ms in `config.h`; ncurses uses
 `ESCDELAY` when configured. Neither mechanism promises a 50 ms Escape response.
 Native reads have their own timeout: Escape continuation uses 100 ms and paste
-continuation uses one second. Those are per-read limits, not a bound for decoding
-an entire input sequence or for completing the startup probe.
+continuation uses one second. Those are per-read timeout settings, not a bound
+for decoding an entire input sequence or for completing the startup probe.
+ncurses' own Escape handling can add delay to a continuation read.
 
 ## Threads and publication
 

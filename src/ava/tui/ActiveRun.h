@@ -161,7 +161,7 @@ class ActiveRun final
 
   // TUI thread: synchronous search-only callback after the coordinator has decided
   // no queued prompt takes this key. The queue mutex is unlocked before this call;
-  // prompts arriving during it wait for the next turn. False reports input failure.
+  // new arrivals stay queued for a later prompt check. False reports input failure.
   [[nodiscard]] bool handle_search_input_event(runtime_input::RuntimeInput const& input);
   // TUI thread with an operation: reduce FIFO events, then publish authorized
   // transcript changes with viewport/search bookkeeping before requesting paint.

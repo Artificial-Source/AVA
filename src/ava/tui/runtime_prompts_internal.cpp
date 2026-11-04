@@ -919,7 +919,7 @@ SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_
     request = claim_pending_request_locked();
   }
   // Search may render or reenter another owner. The queue decision is complete;
-  // a worker arriving now waits for the next turn, without blocking this callback.
+  // a worker arriving now waits for a later prompt check, without blocking this callback.
   if (std::holds_alternative<std::monostate>(request))
     return dispatch_search_input() ? SearchInputPromptDispatchResult::InputHandled : SearchInputPromptDispatchResult::InputFailed;
   static_cast<void>(start_claimed_request(std::move(request), std::move(stop_requested), std::move(before_prompt)));
