@@ -1095,7 +1095,7 @@ void test_prompt_input_boundary(bool permission, int source)
 
 // S1: actual synchronous paint failure at startup or answer must release the
 // resolver with Io. A selected Allow must not escape before terminal I/O succeeds.
-void test_prompt_handoff_failure(bool permission, bool at_answer)
+void test_prompt_handoff_failure(bool permission, bool at_answer, std::size_t target_handoff = 1)
 {
   SessionInput input;
   std::atomic_bool io{false};
@@ -1126,6 +1126,7 @@ void test_prompt_handoff_failure(bool permission, bool at_answer)
   bool fresh_sent = false;
   bool inject = false;
   bool injected = false;
+  std::size_t answer_handoffs = 0;
   char const key = permission ? 'a' : '1';
   probe.before_prompt = [&](ava::tui::RuntimePromptCoordinator& coordinator) {
     if (!at_answer && coordinator.has_pending_requests())
@@ -1137,7 +1138,7 @@ void test_prompt_handoff_failure(bool permission, bool at_answer)
       inject = true;
   };
   probe.before_handoff = [&] {
-    if (inject && !injected)
+    if (inject && !injected && ++answer_handoffs == target_handoff)
     {
       injected = true;
       probe.fail_paint_flush = true;
@@ -1155,6 +1156,7 @@ void test_prompt_handoff_failure(bool permission, bool at_answer)
   auto const exit_code = run_session(frontend, probe);
   expect(exit_code == 1 && !probe.timed_out && injected && probe.failed_paint_flushes == 1 && io.load() && returned.load(),
          "failed prompt handoff paint returns Io instead of permission or question success");
+  expect(answer_handoffs == target_handoff, "fault reaches the requested startup/answer handoff");
   expect(!at_answer || (active && fresh_sent), "answer failure is injected only after a visible prompt and fresh key");
 }
 
@@ -1183,6 +1185,8 @@ void test_permission_exit(int cause)
   bool triggered = false;
   bool answer_sent = false;
   bool caught = false;
+  std::size_t answer_handoffs = 0;
+  bool signal_sent = false;
   probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) { active = active || outcome == ava::tui::PromptServiceOutcome::Active; };
   probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
     if (!active || triggered || answer_sent)
@@ -1209,13 +1213,18 @@ void test_permission_exit(int cause)
   probe.before_handoff = [&] {
     if (!answer_sent || triggered)
       return;
+    if (++answer_handoffs != (cause == 4 ? 2u : 1u))
+      return;
     triggered = true;
     if (cause == 2)
       throw std::runtime_error("injected prompt handoff exception");
   };
   probe.after_handoff = [&] {
-    if (cause == 3 && triggered)
-      expect(::raise(SIGTERM) == 0, "inject signal after successful permission answer paint");
+    if (cause >= 3 && triggered && !signal_sent)
+    {
+      signal_sent = true;
+      expect(::raise(SIGTERM) == 0, "inject signal after the requested successful permission answer paint");
+    }
   };
   seed_submission();
   int exit_code = -1;
@@ -1228,7 +1237,76 @@ void test_permission_exit(int cause)
     caught = std::string_view(error.what()) == "injected prompt handoff exception";
   }
   expect(active && triggered && !probe.timed_out && denied.load() && returned.load(), "pending permission never allows on exit or exception");
-  expect(cause == 2 ? caught : exit_code == (cause == 3 ? 130 : cause == 1 ? 1 : 0), "permission exit preserves its original reason");
+  if (cause >= 3)
+    expect(signal_sent && answer_handoffs == (cause == 4 ? 2u : 1u), "signal reaches the requested answer paint boundary");
+  expect(cause == 2 ? caught : exit_code == (cause >= 3 ? 130 : cause == 1 ? 1 : 0), "permission exit preserves its original reason");
+}
+
+// S1: a previously granted session recipe must still return Io if its automatic
+// status handoff fails. The first request establishes the grant through fresh input.
+void test_reused_permission_grant_paint_failure()
+{
+  SessionInput input;
+  std::atomic_bool first_granted{false};
+  std::atomic_bool second_io{false};
+  std::atomic_bool returned{false};
+  tui_test_support::TuiFrontEndFixture frontend;
+  frontend.set_session_identity_metadata("security-grant-session");
+  frontend.hooks().on_submit = [first = &first_granted, second = &second_io, returned = &returned](std::string const&, ava::tui::TuiSubmitContext context) {
+    ava::permissions::CommandPermissionMetadata metadata;
+    metadata.level = ava::command::CommandLevel::Standard;
+    metadata.containment_available = true;
+    metadata.containment_status = ava::permissions::CommandContainmentStatus::Available;
+    metadata.backend_maximum_scope = ava::command::InteractiveScope::Session;
+    metadata.global_recipe_key = "security-grant-global";
+    metadata.workspace_recipe_key = "security-grant-workspace";
+    metadata.effective_allowed_scopes = {ava::command::InteractiveScope::Once, ava::command::InteractiveScope::Session};
+    ava::permissions::PermissionPrompt prompt;
+    prompt.operation = ava::permissions::Operation::RunCommand;
+    prompt.mode = ava::core::Mode::Build;
+    prompt.command = "echo security";
+    prompt.tool_name = "bash";
+    prompt.command_metadata = std::move(metadata);
+    auto granted = context.permission_resolver(prompt);
+    first->store(granted && *granted == ava::permissions::PermissionResolution::AllowSessionGrant);
+    auto reused = context.permission_resolver(prompt);
+    second->store(!reused && reused.error().category() == ava::core::ErrorCategory::Io);
+    returned->store(true);
+    return ava::tui::TuiSubmitResult{};
+  };
+  SessionProbe probe;
+  std::size_t requests = 0;
+  bool first_active = false;
+  bool fresh_sent = false;
+  bool fault_injected = false;
+  probe.before_prompt = [&](ava::tui::RuntimePromptCoordinator& coordinator) {
+    if (coordinator.has_pending_requests())
+      ++requests;
+  };
+  probe.after_prompt = [&](ava::tui::PromptServiceOutcome outcome) {
+    if (requests == 1 && outcome == ava::tui::PromptServiceOutcome::Active)
+      first_active = true;
+  };
+  probe.before_wait = [&](TuiEventLoop& loop, TuiWaitMode mode) {
+    if (first_active && !fresh_sent)
+    {
+      fresh_sent = true;
+      native_input("s");
+      notify_before_block(loop, mode);
+    }
+  };
+  probe.before_handoff = [&] {
+    if (requests == 2 && !fault_injected)
+    {
+      fault_injected = true;
+      probe.fail_paint_flush = true;
+    }
+  };
+  seed_submission();
+  auto const exit_code = run_session(frontend, probe);
+  expect(exit_code == 1 && !probe.timed_out && requests == 2 && first_active && fresh_sent && first_granted.load() && fault_injected &&
+             probe.failed_paint_flushes == 1 && second_io.load() && returned.load(),
+         "a matching session grant cannot bypass failure of its automatic handoff paint");
 }
 
 } // namespace
@@ -1518,8 +1596,12 @@ void run_tui_session_test_case(std::string_view test_case)
     for (bool at_answer : {false, true})
       test_prompt_handoff_failure(permission, at_answer);
     if (permission)
-      for (int cause : {0, 1, 2, 3})
+    {
+      test_prompt_handoff_failure(true, true, 2);
+      for (int cause : {0, 1, 2, 3, 4})
         test_permission_exit(cause);
+      test_reused_permission_grant_paint_failure();
+    }
   }
   else if (test_case == "frame_deadline")
     test_frame_deadline();
