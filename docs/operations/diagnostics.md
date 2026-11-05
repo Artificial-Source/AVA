@@ -86,6 +86,6 @@ AVA_DEBUG_TERMINAL=konsole LIBCWD_RCFILE_OVERRIDE_NAME=/path/to/libcwdrc ava
 Early during startup, before any other thread exists and before AVA reserves its signals, AVA opens the window, routes libcwd output to that window's tty, and runs `gdb -q -p <ava-pid>` in it. AVA then waits until gdb has attached: set breakpoints and `continue`. Because the debugger is attached before signal reservation, SIGINT stays with gdb, so Ctrl-C in the gdb window interrupts AVA.
 
 - `AVA_DEBUG_GDB=0` only displays debug output; `AVA_DEBUG_GDB=/path/to/gdb` selects another debugger.
-- Any terminal that accepts `-e <command> <args>...` works, for example `AVA_DEBUG_TERMINAL=xterm`.
+- Any terminal that accepts `-e <command> <args>...` works, for example `AVA_DEBUG_TERMINAL=xterm`. Konsole is additionally passed `--fullscreen`.
 - With Yama `ptrace_scope=1`, AVA permits same-user debuggers to attach (`PR_SET_PTRACER_ANY`). Scope `2` or `3` makes attaching fail; AVA reports that after the 60 second timeout and continues without a debugger.
 - Setup failures are printed to standard error before the TUI starts, after which AVA continues normally.

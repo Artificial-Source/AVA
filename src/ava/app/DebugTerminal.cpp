@@ -304,8 +304,12 @@ DebugTerminal::DebugTerminal(DebugTerminalConfig config) : impl_(std::make_uniqu
   }
 
   std::string const pid_text = std::to_string(::getpid());
-  std::vector<std::string> const arguments = {config.terminal,  "-e",       "/bin/sh", "-c", terminal_script, "ava-debug-terminal",
-                                              handshake.fifo(), config.gdb, pid_text};
+  std::vector<std::string> arguments = {config.terminal};
+  // Konsole (also when given as a path) opens its window fullscreen, to show as much debug output as possible.
+  std::string_view const terminal_name = std::string_view(config.terminal).substr(config.terminal.rfind('/') + 1);
+  if (terminal_name == "konsole")
+    arguments.emplace_back("--fullscreen");
+  arguments.insert(arguments.end(), {"-e", "/bin/sh", "-c", terminal_script, "ava-debug-terminal", handshake.fifo(), config.gdb, pid_text});
   if (std::string error = spawn_detached(arguments); !error.empty())
   {
     impl_->error = std::move(error);

@@ -15,7 +15,7 @@ namespace ava::app {
 // The terminal emulator and debugger requested through AVA_DEBUG_TERMINAL and AVA_DEBUG_GDB.
 struct DebugTerminalConfig
 {
-  std::string terminal;         // Terminal emulator program, invoked as `<terminal> -e <command> <args>...`.
+  std::string terminal;         // Terminal emulator program, invoked as `<terminal> -e <command> <args>...` (konsole also gets `--fullscreen`).
   std::string gdb;              // Debugger program that attaches to AVA, or empty to only display debug output.
 
   AVA_DEBUG_PRINT_MEMBERS_ON
