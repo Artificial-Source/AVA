@@ -19,6 +19,8 @@
 
 // Protect generated pointer identity and annotated private text in the same debug suite.
 void run_debug_pointer_security_tests();
+// Cover the AVA_DEBUG_TERMINAL environment and tty-path parsing.
+void run_debug_terminal_tests();
 
 // A type in namespace ava::session that owns a print_on method, used to exercise
 // printing of an owning pointer (boost::intrusive_ptr) and an optional of one.
@@ -475,6 +477,7 @@ void test_full_render_smoke()
 void run_debug_tests()
 {
   run_debug_pointer_security_tests();
+  run_debug_terminal_tests();
   test_string_literal_renders_raw();
   test_std_string_is_quoted();
   test_maxlen_truncates_long_string();

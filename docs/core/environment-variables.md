@@ -66,6 +66,8 @@ Defaults, OAuth details, custom-provider rules, and implemented-provider boundar
 | `AVA_DEBUG_OUTPUT` | Set to `1` to opt an ordinary process into libcwd developer diagnostics in libcwd-enabled builds; libcwd output is off by default even there. `AVA_NO_DEBUG_OUTPUT` wins when both are set. |
 | `AVA_NO_DEBUG_OUTPUT` | Hard suppression of libcwd debug initialization; wins over `AVA_DEBUG_OUTPUT`. Only a validated private test output stream (nonempty `AVA_DEBUG_OUTPUT_DIR` under a test identity) overrides it. Used by tests and useful to silence developer debug output. |
 | `AVA_DEBUG_OUTPUT_DIR` | Absolute directory for libcwd debug output. Empty does not opt in; a relative path is rejected. |
+| `AVA_DEBUG_TERMINAL` | libcwd-enabled builds only. Nonempty opens a separate terminal window at startup, routes libcwd output to it and implies debug output on. `1` selects `konsole`; any other value names a terminal accepting `<terminal> -e <command> <args>...`. Ignored for test processes (`AVA_TEST_NAME`). See [diagnostics](../operations/diagnostics.md#debugging-the-tui-with-gdb). |
+| `AVA_DEBUG_GDB` | Used with `AVA_DEBUG_TERMINAL`: unset, empty or `1` attaches `gdb` from the debug window and AVA waits (up to 60 seconds) for it; `0` only displays debug output; any other value names the debugger program, invoked as `<debugger> -q -p <pid>`. |
 | `LIBCWD_NO_STARTUP_MSGS` | libcwd compatibility switch used to suppress its startup message. |
 | `LIBCWD_RCFILE_NAME`, `LIBCWD_RCFILE_OVERRIDE_NAME` | libcwd configuration inputs, not AVA product settings. |
 

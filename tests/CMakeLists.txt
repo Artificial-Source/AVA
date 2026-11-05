@@ -345,7 +345,7 @@ set(AVA_TESTS_SOURCES
 # The debug suite relies on libcwd-backed machinery (ava_debug, CWDEBUG), so it is
 # only compiled in when libcwd is effectively enabled.
 if(OptionEnableLibcwd)
-  list(APPEND AVA_TESTS_SOURCES "debug_tests.cpp" "debug_pointer_security_tests.cpp")
+  list(APPEND AVA_TESTS_SOURCES "debug_tests.cpp" "debug_pointer_security_tests.cpp" "debug_terminal_tests.cpp")
 endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
@@ -1552,6 +1552,9 @@ endif()
 get_property(AVA_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
 if(AVA_REGISTERED_TESTS)
   set_property(TEST ${AVA_REGISTERED_TESTS} APPEND PROPERTY ENVIRONMENT "AVA_SESSION_TITLES=off")
+  # A developer's AVA_DEBUG_TERMINAL must not make test-launched `ava` processes
+  # open a terminal window and wait for a debugger; an empty value disables it.
+  set_property(TEST ${AVA_REGISTERED_TESTS} APPEND PROPERTY ENVIRONMENT "AVA_DEBUG_TERMINAL=")
   foreach(_ava_test IN LISTS AVA_REGISTERED_TESTS)
     # One canonical identity tells any child `ava` process both that it is
     # running under CTest and which per-test libcwd filename it must use.

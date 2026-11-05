@@ -74,3 +74,18 @@ Support retention keeps at most 32 managed exports within 1 MiB, pruning the old
 ## Developer Debugging
 
 When AVA is built with libcwd, existing subsystem channels such as `dc::runtime`, `dc::app`, `dc::config`, `dc::provider`, `dc::session`, `dc::mcp`, and `dc::plugin` provide deeper local diagnostics. Workstream 3 adds bounded operation/state/count messages to those channels. Libcwd output can still contain developer-oriented process metadata and must be treated as private; it is intentionally never copied into `ava support export`.
+
+### Debugging the TUI with gdb
+
+Once the TUI owns the terminal, neither gdb nor libcwd output can share it. In a libcwd-enabled build, start AVA with `AVA_DEBUG_TERMINAL` to move both into a separate window while the TUI stays in the original terminal:
+
+```sh
+AVA_DEBUG_TERMINAL=konsole LIBCWD_RCFILE_OVERRIDE_NAME=/path/to/libcwdrc ava
+```
+
+Early during startup, before any other thread exists and before AVA reserves its signals, AVA opens the window, routes libcwd output to that window's tty, and runs `gdb -q -p <ava-pid>` in it. AVA then waits until gdb has attached: set breakpoints and `continue`. Because the debugger is attached before signal reservation, SIGINT stays with gdb, so Ctrl-C in the gdb window interrupts AVA.
+
+- `AVA_DEBUG_GDB=0` only displays debug output; `AVA_DEBUG_GDB=/path/to/gdb` selects another debugger.
+- Any terminal that accepts `-e <command> <args>...` works, for example `AVA_DEBUG_TERMINAL=xterm`.
+- With Yama `ptrace_scope=1`, AVA permits same-user debuggers to attach (`PR_SET_PTRACER_ANY`). Scope `2` or `3` makes attaching fail; AVA reports that after the 60 second timeout and continues without a debugger.
+- Setup failures are printed to standard error before the TUI starts, after which AVA continues normally.
