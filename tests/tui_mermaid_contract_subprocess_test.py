@@ -38,7 +38,7 @@ def run_case(executable: Path, root: Path) -> None:
     # Preserve the existing helper's complete child environment without overrides.
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         process = subprocess.Popen(
-            [str(executable), "tui_session", "mermaid_missing_notifier"],
+            [str(executable), "tui_mermaid_contract", "mermaid_missing_notifier"],
             stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
             env=environment, cwd=root,
         )

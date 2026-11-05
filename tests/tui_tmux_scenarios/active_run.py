@@ -30,6 +30,42 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     root = ctx.root
     active_workspace = ctx.active_workspace
 
+    def submit_compact(session: str, label: str) -> None:
+        """Type ``/compact`` and run it through the two-step slash-palette Enter.
+
+        A completed assistant transcript can be painted before ActiveRun retires.
+        Enter during that interval follows active-run policy, which rejects slash
+        commands as between-turn work and leaves the palette unchanged. Wait for
+        the empty idle composer without the active-run hint before typing.
+
+        ``/compact`` has an ``[instructions]`` hint, so its slash palette stays
+        open on the exact command text. The first Enter only selects the command
+        and closes the palette, leaving ``/compact`` in the composer; a second
+        Enter runs it. Waiting for that palette-closed frame replaces a fixed
+        sleep plus single capture, which under load could land on a
+        half-repainted composer row and skip the second Enter.
+        """
+
+        draft = r"(?m)^│  /compact(?:\s|$)"
+        wait_for_screen_state(
+            tmux_exe,
+            session,
+            lambda screen: re.search(r"(?m)^│  Type a message\.\.\.", screen) is not None
+            and re.search(r"(?m)^│  Esc stop(?:\s|·|$)", screen) is None,
+            f"{label} idle composer",
+        )
+        send_literal(tmux_exe, session, "/compact")
+        wait_for(tmux_exe, session, r"\[instructions\]", f"{label} palette open")
+        wait_for(tmux_exe, session, draft, f"{label} draft")
+        send_keys(tmux_exe, session, "Enter")
+        wait_for_screen_state(
+            tmux_exe,
+            session,
+            lambda screen: "[instructions]" not in screen and re.search(draft, screen) is not None,
+            f"{label} selected",
+        )
+        send_keys(tmux_exe, session, "Enter")
+
     def wait_for_command_output_closed(
         session: str,
         title_pattern: str,
@@ -81,12 +117,7 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     send_keys(tmux_exe, compact_session, "Enter")
     _wait_for_normal_turn_request_count(compact_provider, 1, "compact source provider request")
     wait_for(tmux_exe, compact_session, r"before compact", "compact source completion", timeout=12.0)
-    send_literal(tmux_exe, compact_session, "/compact")
-    wait_for(tmux_exe, compact_session, r"│  /compact(?:\s|$)", "compact command draft")
-    send_keys(tmux_exe, compact_session, "Enter")
-    time.sleep(0.25)
-    if re.search(r"│  /compact(?:\s|$)", capture(tmux_exe, compact_session)):
-        send_keys(tmux_exe, compact_session, "Enter")
+    submit_compact(compact_session, "compact command")
     compact_provider.wait_for_request(1, "delayed compact summary request")
     send_literal(tmux_exe, compact_session, "queued after compact")
     send_literal(tmux_exe, compact_session, "\x1b\r")
@@ -121,12 +152,7 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     # Repeat in the same production path with a normal follow-up that fails
     # before commit. Its actionable error remains local to the initial command
     # modal and its request receives no conversation projection authority.
-    send_literal(tmux_exe, compact_session, "/compact")
-    wait_for(tmux_exe, compact_session, r"│  /compact(?:\s|$)", "failing compact command draft")
-    send_keys(tmux_exe, compact_session, "Enter")
-    time.sleep(0.25)
-    if re.search(r"│  /compact(?:\s|$)", capture(tmux_exe, compact_session)):
-        send_keys(tmux_exe, compact_session, "Enter")
+    submit_compact(compact_session, "failing compact command")
     compact_provider.wait_for_request(3, "second delayed compact summary request")
     send_literal(tmux_exe, compact_session, "queued compact failure")
     wait_for(tmux_exe, compact_session, r"queued compact failure", "failing compact follow-up draft")

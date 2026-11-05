@@ -360,9 +360,7 @@ plugin dialog does not grant access to mutable session or permission state.
    defaults, and [composer dispatch tests](../../tests/tui_composer_dispatch_tests.cpp)
    for editing and collisions. Add idle/active differences to the
    [shared policy tests](../../tests/tui_composer_policy_tests.cpp).
-   Use the [session tests](../../tests/tui_session_tests.cpp)
-   when the behavior depends on ordering across features. Check both idle and
-   active-run handling where the binding is supported.
+    Check both idle and active-run handling where the binding is supported.
 
 ### Add a selector or modal
 

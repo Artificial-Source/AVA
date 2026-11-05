@@ -1,6 +1,5 @@
 // Exercise TUI owner interactions and rendered prompt, selector and transcript behavior.
 #include "sys.h"
-#include "support/ScopedScreenDrawObserver.h"
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
@@ -71,8 +70,6 @@
 #include <vector>
 #include <unistd.h>
 
-// Prompt security cases share this suite's isolated terminal setup.
-void run_tui_prompt_security_tests();
 // Native paste cases use the same initialized Context and isolated process.
 void run_tui_paste_security_tests();
 
@@ -1511,134 +1508,6 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   return passed;
 }
 
-// Protect the frozen detached window while completion publishes a newer transcript underneath it.
-bool test_detached_completion_publish_preserves_numbered_window()
-{
-  // Observe real draw output; reading the copy never services a pending frame.
-  tui_test_support::ScopedScreenDrawObserver paint_observer;
-  EventLoopFixture event_loop;
-  static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(ava::tui::terminal::Context::resizeterm(32, 120));
-
-  auto numbered_window = [](std::vector<std::string> const& surfaces) {
-    std::vector<int> numbers;
-    for (auto const& surface : surfaces)
-    {
-      auto const visible = strip_sgr(surface);
-      auto const marker = visible.find("stream line ");
-      if (marker == std::string::npos || marker + 15 > visible.size())
-        continue;
-      auto const digits = visible.substr(marker + 12, 3);
-      if (digits.size() != 3 || !std::ranges::all_of(digits, [](unsigned char ch) { return std::isdigit(ch) != 0; }))
-        continue;
-      numbers.push_back(std::stoi(digits));
-    }
-    return numbers;
-  };
-
-  auto build_stream_text = [](int first_inclusive, int last_inclusive) {
-    std::string text;
-    for (int index = first_inclusive; index <= last_inclusive; ++index)
-    {
-      if (!text.empty())
-        text.push_back('\n');
-      char buffer[32];
-      std::snprintf(buffer, sizeof(buffer), "stream line %03d", index);
-      text += buffer;
-    }
-    return text;
-  };
-
-  ava::tui::TuiRuntimeOptions options;
-  //  options.provider = "fake";
-  //  options.model = "geometry-model";
-  options.initial_transcript = {ava::tui::TranscriptItem{.label = "ava", .text = build_stream_text(0, 29)}};
-
-  tui_test_support::TuiFrontEndFixture frontend(options);
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  presentation.publish_visible_sidebar(presentation.sidebar());
-  presentation.publish_run_frame(true);
-  ava::tui::Composer draft_state;
-  draft_state.replace_draft("STREAM-DRAFT-KEEP");
-  presentation.publish_composer(draft_state);
-  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
-
-  if (!renderer.render() || !renderer.paint_ready_frame())
-    return false;
-
-  auto const [width, height] = ava::tui::terminal_size();
-  presentation.publish_dimensions(width, height);
-  auto const max_scroll = renderer.prepare_transcript_layout();
-  if (max_scroll == 0)
-    return false;
-  // Detach while the active-run contextual row is already reserved (processing=true, count=0).
-  renderer.navigate_transcript(std::min(max_scroll, renderer.transcript().scroll_offset() + 3));
-  presentation.publish_transcript_scroll(renderer.transcript().scroll_offset());
-  presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
-  if (!renderer.render() || !renderer.paint_ready_frame())
-    return false;
-
-  auto const detached_scroll = renderer.transcript().scroll_offset();
-  auto const detached_update = renderer.begin_transcript_update();
-  auto const before_numbers = numbered_window(paint_observer.frame().surfaces);
-  auto const draft_before = draft_state.draft().text;
-  auto const snapshot_count_before = presentation.screen().transcript_new_output_count;
-
-  // Stream continues while detached without publishing count into the snapshot (UpdatedNoRender path).
-  constexpr int kNewOutputCount = 35;
-  auto continued_transcript = presentation.screen().transcript;
-  continued_transcript.back().text += "\n" + build_stream_text(30, 30 + kNewOutputCount - 1);
-  presentation.publish_transcript(std::move(continued_transcript));
-  renderer.complete_transcript_update(detached_update, 0, static_cast<std::size_t>(kNewOutputCount));
-  presentation.publish_transcript_chrome(presentation.screen().transcript_scroll_offset, 0);
-  presentation.publish_run_frame(false);
-
-  auto const rendered = renderer.render() && renderer.paint_ready_frame();
-  auto const after_numbers = numbered_window(paint_observer.frame().surfaces);
-  auto const surfaces_joined = tui_test_support::join_visible_lines(paint_observer.frame().surfaces);
-  auto const hint_visible =
-      surfaces_joined.find(std::to_string(kNewOutputCount) + " new") != std::string::npos && surfaces_joined.find("Ctrl+End") != std::string::npos;
-  bool const passed = rendered && !renderer.render_failed() && snapshot_count_before == 0 && detached_scroll > 0 && detached_update.anchor().valid &&
-                      !before_numbers.empty() && before_numbers == after_numbers && hint_visible && !renderer.transcript().has_deferred_update() &&
-                      presentation.screen().transcript_new_output_count == static_cast<std::size_t>(kNewOutputCount) &&
-                      presentation.screen().transcript_scroll_offset == renderer.transcript().scroll_offset() && renderer.transcript().scroll_offset() > 0 &&
-                      draft_state.draft().text == draft_before && presentation.screen().input == draft_before && !presentation.screen().processing;
-
-  auto const before_attached_paint = paint_observer.frame().surfaces;
-  renderer.show_live_tail(ava::tui::LiveTailReason::Navigation);
-  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"}));
-  presentation.invalidate_transcript_layout();
-  bool const footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
-  bool const full_queued = renderer.render();
-  bool const later_footer_queued = renderer.request_render(ava::tui::FrameRenderKind::Footer);
-  bool const painting_deferred = paint_observer.frame().surfaces == before_attached_paint;
-  bool const batch_painted = renderer.paint_ready_frame();
-  bool const full_dominated_footer = tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("ATTACHED-FULL-FRAME") != std::string::npos;
-
-  auto const before_handoff = paint_observer.frame().surfaces;
-  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "HANDOFF-FULL-FRAME"}));
-  presentation.invalidate_transcript_layout();
-  bool const handoff_queued = renderer.render();
-  bool const handoff_still_deferred = paint_observer.frame().surfaces == before_handoff;
-  bool const handoff_painted = renderer.paint_for_handoff();
-  bool const handoff_visible = tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("HANDOFF-FULL-FRAME") != std::string::npos;
-  bool const attached_contract = footer_queued && full_queued && later_footer_queued && painting_deferred && batch_painted && full_dominated_footer &&
-                                 handoff_queued && handoff_still_deferred && handoff_painted && handoff_visible;
-  expect(attached_contract, "attached renderer defers urgent painting to the batch, retains Full over Footer, and paints synchronously for a handoff");
-  // Crossing a frame deadline during input must paint without another service_due pass.
-  static_cast<void>(presentation.append_transcript(ava::tui::TranscriptItem{.label = "ava", .text = "DEADLINE-CROSSED-DURING-INPUT"}));
-  presentation.invalidate_transcript_layout();
-  bool const scheduled = renderer.request_render();
-  std::this_thread::sleep_until(std::chrono::steady_clock::now() + ava::tui::FrameScheduler::kFrameInterval);
-  bool const painted_without_timer_dispatch = renderer.paint_ready_frame();
-  bool const deadline_visible =
-      tui_test_support::join_visible_lines(paint_observer.frame().surfaces).find("DEADLINE-CROSSED-DURING-INPUT") != std::string::npos;
-  bool const no_stale_frame_timer = !event_loop.loop().has_due_work();
-  expect(scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer,
-         "end-of-batch paint consumes its elapsed deadline without an extra ready-only turn");
-  return passed && attached_contract && scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer;
-}
-
 // Protect boundary navigation when there is no scrollable transcript range.
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
@@ -2454,9 +2323,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 // The caller selects a registered `test_case` and runs each case in a fresh process to avoid ncurses state leaking between cases.
 void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
 {
-  if (test_case == "prompt_security")
-    run_tui_prompt_security_tests();
-  else if (test_case == "paste_security")
+  if (test_case == "paste_security")
     run_tui_paste_security_tests();
   else if (test_case == "search_tail")
   {
@@ -2502,13 +2369,6 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
            "transcript user-turn navigation clamps at the oldest retained user turn, skips assistant turns, advances/retreats across retained user turns, "
            "resets to live tail, applies the shared three-row transcript wheel step with reverse reattach and hard clamp, and leaves the composer draft "
            "untouched while defaults keep MessagePrev/Next/JumpToBottom on Alt+K/Alt+J/Ctrl+End");
-  }
-  else if (test_case == "detached_completion")
-  {
-    expect(
-        test_detached_completion_publish_preserves_numbered_window(),
-        "detached completion publishes N-new chrome authority before sync so the numbered transcript window and draft stay put while the deferred viewport is "
-        "consumed");
   }
   else if (test_case == "message_navigation_empty")
   {

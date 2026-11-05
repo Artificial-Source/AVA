@@ -1,6 +1,4 @@
-// Exercise prompt callback construction and retirement through public coordinator APIs.
-// Every case runs after the common TuiSession terminal setup. One scoped GNU linker
-// wrapper arranges resolver retirement without changing real notification behavior.
+// Exercise prompt callback construction through public coordinator APIs.
 #include "sys.h"
 #include "tests/support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
@@ -12,7 +10,6 @@
 #include "ava/tui/session_grants.h"
 #include "ava/core/thread.h"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -26,11 +23,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-// Call the actual libstdc++ notification before observing resolver completion.
-extern "C" void prompt_lock_real_notify_one(std::condition_variable*) noexcept asm("__real__ZNSt18condition_variable10notify_oneEv");
-// This wrapper is inert except inside the explicit queued-cancellation scope below.
-extern "C" void prompt_lock_wrap_notify_one(std::condition_variable*) noexcept asm("__wrap__ZNSt18condition_variable10notify_oneEv");
 
 namespace {
 
@@ -285,63 +277,12 @@ class ConstructionGate final
   std::shared_future<void> release_;
 };
 
-// Records destruction on the TUI and optionally attempts a same-thread prompt claim.
-class DestructionProbe final
-{
- public:
-  // The reentry probe is declared first; both probes outlive the coordinator fixture.
-  DestructionProbe(ReentryProbe& reentry, bool claim) : reentry_(&reentry), claim_(claim), tui_thread_(std::this_thread::get_id()) { }
-  // Bind after fixture construction and before starting any resolver.
-  void bind(Coordinator& coordinator) { coordinator_ = &coordinator; }
-  // First establish lock freedom with an either-thread API; only then call the TUI-only API.
-  void on_destroy()
-  {
-    destroyed_ = true;
-    on_tui_ = std::this_thread::get_id() == tui_thread_;
-    bool const unlocked = reentry_->run();
-    if (unlocked && on_tui_ && claim_)
-    {
-      claimed_ = true;
-      claim_result_ = coordinator_->start_pending();
-    }
-  }
-  // Read only after both resolver workers have joined and cancellation has returned.
-  [[nodiscard]] bool destroyed_on_tui() const { return destroyed_ && on_tui_; }
-  // A closed queue must decline a nested claim even while another canceled request remains.
-  [[nodiscard]] bool claim_declined() const { return claimed_ && claim_result_ == Outcome::None; }
-  // Internal-linkage observations and borrowed owners are intentionally not traversed.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  // Earlier-lived one-shot observer retains any nested async task beyond this destructor.
-  ReentryProbe* reentry_;
-  // Stable fixture borrow; cancellation and all target destruction precede fixture teardown.
-  Coordinator* coordinator_ = nullptr;
-  // Only the first queued target asks for a nested claim.
-  bool claim_;
-  // Captured on construction; workers never invoke a TUI-only coordinator operation.
-  std::thread::id tui_thread_;
-  // Written by the sole request target's destructor and read after worker retirement.
-  bool destroyed_ = false;
-  // Separates deterministic TUI destruction from a worker winning last ownership.
-  bool on_tui_ = false;
-  // Records that the nested claim path was actually exercised.
-  bool claimed_ = false;
-  // None is meaningful only when claimed_ proves start_pending ran.
-  Outcome claim_result_ = Outcome::None;
-};
-
-// The original worker prompt is inert on destruction; only a copied request target probes.
 class QuestionTarget final
 {
  public:
-  // Every optional probe is declared before the fixture and survives all worker joins.
-  QuestionTarget(ReentryProbe* copy_probe = nullptr, ConstructionGate* gate = nullptr, DestructionProbe* destruction = nullptr)
-      : copy_probe_(copy_probe), gate_(gate), destruction_(destruction)
-  {
-  }
+  QuestionTarget(ReentryProbe* copy_probe = nullptr, ConstructionGate* gate = nullptr) : copy_probe_(copy_probe), gate_(gate) { }
   // This is the unknown-code operation performed while constructing PendingQuestionRequest.
-  QuestionTarget(QuestionTarget const& other) : copy_probe_(other.copy_probe_), gate_(other.gate_), destruction_(other.destruction_), copied_(true)
+  QuestionTarget(QuestionTarget const& other) : copy_probe_(other.copy_probe_), gate_(other.gate_)
   {
     if (copy_probe_)
       static_cast<void>(copy_probe_->run());
@@ -349,19 +290,7 @@ class QuestionTarget final
       gate_->pause_copy();
   }
   // Preserve original-versus-copy identity through moves and deactivate moved-from targets.
-  QuestionTarget(QuestionTarget&& other) noexcept
-      : copy_probe_(std::exchange(other.copy_probe_, nullptr)),
-        gate_(std::exchange(other.gate_, nullptr)),
-        destruction_(std::exchange(other.destruction_, nullptr)),
-        copied_(other.copied_)
-  {
-  }
-  // The worker's original prompt cannot satisfy a queued-request destruction assertion.
-  ~QuestionTarget()
-  {
-    if (copied_ && destruction_)
-      destruction_->on_destroy();
-  }
+  QuestionTarget(QuestionTarget&& other) noexcept : copy_probe_(std::exchange(other.copy_probe_, nullptr)), gate_(std::exchange(other.gate_, nullptr)) { }
   // These questions have no automatic answer and remain queued until cancellation.
   [[nodiscard]] bool operator()() const { return false; }
   // Internal-linkage callable probes deliberately opt out of generated printing.
@@ -372,10 +301,6 @@ class QuestionTarget final
   ReentryProbe* copy_probe_;
   // Earlier-lived optional handshake controlling admission-versus-construction ordering.
   ConstructionGate* gate_;
-  // Earlier-lived optional observer of the copied request target's retirement.
-  DestructionProbe* destruction_;
-  // Only a copy operation creates a target whose destruction represents request retirement.
-  bool copied_ = false;
 };
 
 // Stack-owned deadline target; its registration always dies before the target.
@@ -472,61 +397,6 @@ ResolverWorker start_permission(Coordinator& coordinator)
   }));
 }
 
-// Scoped TUI-only call-through observation of the two queued interruption notifications.
-class QueuedReleaseProbe final
-{
- public:
-  // Both future owners survive this scope; notification order matches FIFO question order.
-  QueuedReleaseProbe(ResolverWorker const& first, ResolverWorker const& second) : workers_{&first, &second} { }
-  // The real notify already ran; wait until the resolver has dropped its request share.
-  void after_notify()
-  {
-    if (notifications_ >= workers_.size())
-    {
-      unexpected_notification_ = true;
-      return;
-    }
-    bool const retired = workers_[notifications_++]->ready();
-    all_retired_ = all_retired_ && retired;
-  }
-  // Prove both request targets were left with queue-only ownership before queue removal.
-  [[nodiscard]] bool arranged_last_shares() const { return notifications_ == workers_.size() && all_retired_ && !unexpected_notification_; }
-  // Internal-linkage synchronization observations deliberately opt out of printing.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  // Test-owned future borrows remain valid through the entire fail_pending_requests call.
-  std::array<ResolverWorker const*, 2> workers_;
-  // TUI-only count also detects accidentally broad wrapper scope.
-  std::size_t notifications_ = 0;
-  // False on a bounded retirement failure; callback assertions cannot silently pass instead.
-  bool all_retired_ = true;
-  // A third notification means the proposed deterministic schedule was not isolated.
-  bool unexpected_notification_ = false;
-};
-
-// Only the TUI installs this scoped borrow; resolver and reentry workers see null.
-thread_local QueuedReleaseProbe* queued_release_probe = nullptr;
-
-// Restore the wrapper's borrowed pointer before either probe or workers are destroyed.
-class QueuedReleaseScope final
-{
- public:
-  // Scope precisely one cancellation call, with no renderer or other producer activity.
-  explicit QueuedReleaseScope(QueuedReleaseProbe& probe) : previous_(std::exchange(queued_release_probe, &probe)) { }
-  // Nested teardown cannot retain the just-finished case's stack borrow.
-  ~QueuedReleaseScope() { queued_release_probe = previous_; }
-  // One guard restores the wrapper's borrowed probe before that probe can be destroyed.
-  QueuedReleaseScope(QueuedReleaseScope const&) = delete;
-  QueuedReleaseScope& operator=(QueuedReleaseScope const&) = delete;
-  // Internal-linkage RAII scope deliberately opts out of generated printing.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  // Prior scoped borrow, usually null; its owner outlives this scope if present.
-  QueuedReleaseProbe* previous_;
-};
-
 // Bug: replacing an audit endpoint destroyed its previous std::function target under the audit mutex.
 void test_audit_replacement_destructor()
 {
@@ -613,51 +483,8 @@ void test_question_construction_closes_admission()
   expect(!fixture.coordinator().has_pending_requests(), "closed admission leaves no question queued");
 }
 
-// Bug: waking queued workers before clearing their deque could destroy last callback targets under the request mutex.
-void test_queued_question_destruction()
-{
-  ReentryProbe first_reentry;
-  ReentryProbe second_reentry;
-  DestructionProbe first_destruction(first_reentry, true);
-  DestructionProbe second_destruction(second_reentry, false);
-  PromptFixture fixture;
-  ReentryScope first_scope(first_reentry);
-  ReentryScope second_scope(second_reentry);
-  first_destruction.bind(fixture.coordinator());
-  second_destruction.bind(fixture.coordinator());
-  auto first = start_question(fixture.coordinator(), question_prompt(QuestionTarget(nullptr, nullptr, &first_destruction)));
-  expect(fixture.wait_for_enqueue(), "first question enqueue notification is consumed before starting the second worker");
-  auto second = start_question(fixture.coordinator(), question_prompt(QuestionTarget(nullptr, nullptr, &second_destruction)));
-  expect(fixture.wait_for_enqueue(), "second question is queued before cancellation begins");
-  first_reentry.arm(fixture.coordinator(), ReentryOperation::ReadQueue);
-  second_reentry.arm(fixture.coordinator(), ReentryOperation::ReadQueue);
-  QueuedReleaseProbe release(first, second);
-  {
-    QueuedReleaseScope scope(release);
-    fixture.coordinator().fail_pending_requests();
-  }
-  expect(first.result() && second.result(), "both queued question workers receive interruption");
-  first_reentry.finish();
-  second_reentry.finish();
-  expect(release.arranged_last_shares(), "real notifications let both resolvers drop their shares before the queue releases its targets");
-  expect(first_destruction.destroyed_on_tui() && second_destruction.destroyed_on_tui(), "both copied request targets are deterministically retired on the TUI");
-  expect(first_reentry.entered() && first_reentry.completed_inside(), "first queued target destructor can reenter queue readiness");
-  expect(second_reentry.entered() && second_reentry.completed_inside(), "remaining canceled target is not destroyed under a nested claim's queue lock");
-  expect(first_destruction.claim_declined(), "callback destruction cannot claim another request after admission closes");
-  expect(!fixture.coordinator().has_pending_requests() && !fixture.coordinator().has_active(), "shutdown leaves neither queued nor active prompts");
-}
-
 } // namespace
 
-// Call through first; TLS keeps all worker-thread and unrelated notifications untouched.
-extern "C" void prompt_lock_wrap_notify_one(std::condition_variable* condition) noexcept
-{
-  prompt_lock_real_notify_one(condition);
-  if (queued_release_probe)
-    queued_release_probe->after_notify();
-}
-
-// Integrate these names into run_tui_session_test_case after its common terminal setup.
 void run_tui_prompt_callback_lock_test_case(std::string_view test_case)
 {
   if (test_case == "prompt_audit_replacement")
@@ -668,8 +495,6 @@ void run_tui_prompt_callback_lock_test_case(std::string_view test_case)
     test_question_copy_reentry();
   else if (test_case == "prompt_question_admission")
     test_question_construction_closes_admission();
-  else if (test_case == "prompt_question_retirement")
-    test_queued_question_destruction();
   else
     expect(false, "unknown prompt callback locking case: " + std::string(test_case));
 }

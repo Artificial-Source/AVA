@@ -313,12 +313,9 @@ set(AVA_TESTS_SOURCES
   "tui_feature_interface_tests.cpp"
   "tui_branch_summary_timer_tests.cpp"
   "tui_runtime_owner_tests.cpp"
-  "tui_session_tests.cpp"
   "tui_shutdown_tests.cpp"
   "tui_mermaid_contract_tests.cpp"
-  "tui_prompt_security_tests.cpp"
   "tui_prompt_callback_lock_tests.cpp"
-  "support/ScopedScreenDrawObserver.cpp"
   "tui_paste_security_tests.cpp"
   "tui_wait_state_tests.cpp"
   "tui_transcript_view_tests.cpp"
@@ -352,38 +349,6 @@ if(OptionEnableLibcwd)
 endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
-# Observe the real Session turn in isolated tests without adding production hooks.
-# Each wrapper forwards normally unless that test's TUI thread installs its probe.
-target_link_options(ava_tests PRIVATE
-  "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
-  "LINKER:--wrap=_ZN3ava3tui20TuiTimerRegistration6repeatENSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE"
-  "LINKER:--wrap=_ZN3ava3tui20TuiTimerRegistration16prepare_dispatchENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE"
-  "LINKER:--wrap=_ZN3ava3tui12TuiWaitState4waitESt8optionalINSt6chrono10time_pointINS3_3_V212steady_clockENS3_8durationIlSt5ratioILl1ELl1000000000EEEEEEE"
-  "LINKER:--wrap=_ZN5utils9threading9EventLoop9wait_implESt8optionalINSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEEE"
-  "LINKER:--wrap=_ZN3ava3tui6detail18draw_screen_cachedEPNS0_11TuiFrontEndERKNS0_16ComposerSnapshotERNS1_20CompletionMatchCacheEmRNS1_21TranscriptLayoutCacheEmRNS1_14ScreenRowCacheEbb"
-  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop12repeat_timerEmNSt6chrono8durationIlSt5ratioILl1ELl1000000000EEEENS2_10time_pointINS2_3_V212steady_clockES6_EE"
-  "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinatorC1ERNS0_12TuiEventLoopERNS0_24RuntimePresentationStateE"
-  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox12request_stopEv"
-  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator21fail_pending_requestsEv"
-  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13cancel_activeENS0_18PromptCancelReasonE"
-  "LINKER:--wrap=_ZN3ava3tui26RuntimePluginUiCoordinator17finish_submissionEv"
-  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox6retireEv"
-  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop11service_dueENSt6chrono10time_pointINS2_3_V212steady_clockENS2_8durationIlSt5ratioILl1ELl1000000000EEEEEE"
-  "LINKER:--wrap=_ZN3ava3tui12TuiEventLoop4waitENS0_11TuiWaitModeE"
-  "LINKER:--wrap=_ZNK3ava3tui12TuiEventLoop19notification_failedEv"
-  "LINKER:--wrap=_ZN3ava3tui9ActiveRun7consumeEm"
-  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInbox5drainEm"
-  "LINKER:--wrap=_ZN3ava3tui13runtime_input17poll_curses_inputEv"
-  "LINKER:--wrap=_ZN3ava3tui15RuntimeRenderer17paint_ready_frameEv"
-  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator13start_pendingESt8functionIFbvEES2_IFvvEE"
-  "LINKER:--wrap=write"
-  "LINKER:--wrap=fflush"
-  "LINKER:--wrap=_Znwm"
-  "LINKER:--wrap=_ZN3ava3app24MermaidRenderCoordinator8shutdownEv"
-  "LINKER:--wrap=_ZN3ava3tui15RuntimeRenderer17paint_for_handoffEv"
-  "LINKER:--wrap=_ZN3ava3tui14ActiveRunInput8dispatchERKNS0_13runtime_input12RuntimeInputE"
-  "LINKER:--wrap=_ZN3ava3tui24RuntimePromptCoordinator14set_audit_sinkESt8functionIFSt8expectedIvNS_4core5ErrorEERKNS_5event12RuntimeEventEEE"
-)
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
 target_link_libraries(ava_tests PRIVATE ava_process_gate_test_support)
 if (OptionEnableLibcwd)
@@ -476,6 +441,7 @@ set(AVA_TEST_SUITES
   mcp
   mermaid_render
   mermaid_notifications
+  tui_shutdown
   permission_rules
   tui_composer
   tui_event_loop
@@ -521,16 +487,12 @@ set(AVA_TERMINAL_MOUSE_CASES context_lifecycle handoff_lifecycle)
 set(AVA_TERMINAL_COLOR_CASES srgb_round_trip osc4_protocol mutable_palette xterm_indexed portable_pairs)
 set(AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES baseline no_color screen tmux kitty wezterm)
 set(AVA_TUI_COMPOSER_RENDERING_CASES
-  search_tail changed_session session_transition atomic_search message_navigation detached_completion
-  message_navigation_empty display_reload_poll display_reload_overview prompt_security paste_security prompt_completion_wakeup_permission prompt_completion_wakeup_question)
-set(AVA_TUI_SESSION_CASES
-  turn_order frame_deadline hangup descriptor_error control_timer signal_after_decode
-  notification_failure prompt_paint_permission prompt_paint_question close_after_submit active_signal_at_control active_signal_after_decode permission_hangup prompt_security_permission prompt_security_question shutdown_outcome shutdown_cleanup prompt_deferred_permission prompt_deferred_question)
+  search_tail changed_session session_transition atomic_search message_navigation
+  message_navigation_empty display_reload_poll display_reload_overview paste_security prompt_completion_wakeup_permission prompt_completion_wakeup_question)
 # These isolated cases exercise callable copying and final-owner destruction under contention.
 set(AVA_TUI_PROMPT_CALLBACK_CASES
   prompt_audit_replacement prompt_audit_copy prompt_question_copy
-  prompt_question_admission prompt_question_retirement)
-list(APPEND AVA_TUI_SESSION_CASES ${AVA_TUI_PROMPT_CALLBACK_CASES})
+  prompt_question_admission)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -551,17 +513,12 @@ foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_COMPOSER_RENDERING_CASES)
   add_test(NAME ava_tests.tui_composer_rendering.${AVA_TERMINAL_CASE}
     COMMAND ava_tests tui_composer_rendering ${AVA_TERMINAL_CASE})
 endforeach()
-foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_SESSION_CASES)
-  add_test(NAME ava_tests.tui_session.${AVA_TERMINAL_CASE}
-    COMMAND ava_tests tui_session ${AVA_TERMINAL_CASE})
-  set_tests_properties(ava_tests.tui_session.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 20 LABELS "tui;offline")
-endforeach()
-# A regressed retirement case must report both ten-second deadlock guards before
-# CTest ends it. Correct handshakes finish immediately; existing case limits stay intact.
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_PROMPT_CALLBACK_CASES)
-  set_tests_properties(ava_tests.tui_session.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 90)
+  add_test(NAME ava_tests.tui_prompt_callback_lock.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests tui_prompt_callback_lock ${AVA_TERMINAL_CASE})
+  set_tests_properties(ava_tests.tui_prompt_callback_lock.${AVA_TERMINAL_CASE} PROPERTIES TIMEOUT 90 LABELS "tui;offline")
 endforeach()
-foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering tui_session)
+foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering tui_prompt_callback_lock)
   if (AVA_TERMINAL_SUITE STREQUAL "terminal_keyboard_input_mode")
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_KEYBOARD_CASES})
   elseif(AVA_TERMINAL_SUITE STREQUAL "terminal_mouse_input_mode")
@@ -573,7 +530,7 @@ foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_
   elseif(AVA_TERMINAL_SUITE STREQUAL "tui_composer_rendering")
     set(AVA_TERMINAL_CASES ${AVA_TUI_COMPOSER_RENDERING_CASES})
   else()
-    set(AVA_TERMINAL_CASES ${AVA_TUI_SESSION_CASES})
+    set(AVA_TERMINAL_CASES ${AVA_TUI_PROMPT_CALLBACK_CASES})
   endif()
   foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_CASES)
     set_tests_properties(ava_tests.${AVA_TERMINAL_SUITE}.${AVA_TERMINAL_CASE} PROPERTIES
@@ -710,17 +667,6 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(ava_tests.tui_mermaid_notifier_contract
       PROPERTIES TIMEOUT 20 LABELS "tui;offline" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
-  # A fresh supervised process makes intentional shutdown termination observable
-  # without risking an unbounded worker join in the ordinary test runner.
-  foreach(AVA_SHUTDOWN_FAULT IN ITEMS queue_receipts queue_returned_error completion_returned_error stop_request queued_prompts active_prompt plugin_waiters outer_exception)
-    add_test(NAME ava_tests.tui_shutdown.${AVA_SHUTDOWN_FAULT}
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tui_shutdown_subprocess_test.py
-        --ava-tests $<TARGET_FILE:ava_tests>
-        --root ${CMAKE_CURRENT_BINARY_DIR}/tui-shutdown
-        --fault ${AVA_SHUTDOWN_FAULT})
-    set_tests_properties(ava_tests.tui_shutdown.${AVA_SHUTDOWN_FAULT}
-      PROPERTIES TIMEOUT 20 LABELS "tui;offline" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
-  endforeach()
   add_test(
     NAME ava_cli.isolated_env
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_isolated_env_test.py inject

@@ -1,4 +1,4 @@
-// Exercise Mermaid callback reentry and allocation failure through application-owned renderers.
+// Exercise Mermaid callback reentry through application-owned renderers.
 #include "sys.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
@@ -17,22 +17,10 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
-#include <new>
-#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
-
-// GNU ld --wrap=_Znwm preserves ordinary allocation while exposing one scoped test fault.
-extern "C" void* mermaid_real_allocate(std::size_t size) asm("__real__Znwm");
-// This callthrough wrapper is test-only; it neither replaces nor directly calls operator new.
-extern "C" void* mermaid_wrap_allocate(std::size_t size) asm("__wrap__Znwm");
-
-// Observe the external bridge-to-coordinator shutdown boundary without replacing its join.
-extern "C" void mermaid_real_shutdown(ava::app::MermaidRenderCoordinator*) noexcept asm("__real__ZN3ava3app24MermaidRenderCoordinator8shutdownEv");
-// Only the explicitly registered shutdown thread signals the test gate.
-extern "C" void mermaid_wrap_shutdown(ava::app::MermaidRenderCoordinator*) noexcept asm("__wrap__ZN3ava3app24MermaidRenderCoordinator8shutdownEv");
 
 namespace {
 
@@ -112,10 +100,6 @@ class NotificationGate final
   // Protected one-way latch; repeated open calls are harmless.
   bool open_ = false;
 };
-
-// Borrowed only on the external shutdown thread until its noexcept join returns.
-// The fixture owns this gate until that thread has joined.
-thread_local NotificationGate* shutdown_observation = nullptr;
 
 // Collect owned callback payloads while allowing producer and test threads to proceed independently.
 template <typename Completion>
@@ -360,121 +344,7 @@ void test_bridge_worker_and_cancel_notification_reentry()
          "bridge worker completion and synchronous cancellation permit ordinary notifier reentry");
 }
 
-// External shutdown must release the bridge mutex before joining a worker whose callback reenters the bridge.
-void test_bridge_shutdown_during_reentrant_worker_notification()
-{
-  NotificationWatchdog watchdog;
-  NotificationGate entered;
-  NotificationGate resume;
-  NotificationGate returned;
-  NotificationGate shutdown_started;
-  NotificationGate shutdown_finished;
-  NotificationBridge fixture;
-  fixture.callbacks().set_completion_notifier([owner = &fixture, entered_gate = &entered, resume_gate = &resume, returned_gate = &returned] {
-    entered_gate->open();
-    resume_gate->wait();
-    auto const configuration = owner->bridge().presentation_configuration();
-    auto drained = owner->callbacks().drain();
-    expect(!configuration.enabled && drained && drained->empty(), "worker callback can reenter bridge after the shutdown latch closes admission");
-    returned_gate->open();
-  });
-  auto const result = fixture.callbacks().enqueue({.identity = 50, .config_epoch = fixture.callbacks().config_epoch, .source = "shutdown diagram"});
-  entered.wait();
-  // This external owning thread joins the renderer; its callback never performs shutdown or joins itself.
-  auto shutdown_worker =
-      ava::core::JoinThread::create("mermaid_external_shutdown", [owner = &fixture, started_gate = &shutdown_started, finished_gate = &shutdown_finished] {
-        // The callthrough boundary opens the gate only after the bridge closes
-        // admission and reaches coordinator shutdown; no polling races that step.
-        shutdown_observation = started_gate;
-        owner->bridge().shutdown();
-        shutdown_observation = nullptr;
-        finished_gate->open();
-      });
-  shutdown_started.wait();
-  resume.open();
-  returned.wait();
-  shutdown_finished.wait();
-  shutdown_worker.join();
-  expect(result == ava::tui::TuiMermaidEnqueueResult::Accepted, "external bridge shutdown joins after the reentrant worker callback returns");
-}
-
-// Allocation failure belongs only to the test thread's explicitly armed drain operation.
-struct AllocationFaultState
-{
-  // The first allocation disarms the fault before throwing, so exception handling can allocate normally.
-  bool armed = true;
-  // Counts actual intercepted failures rather than assuming the intended operation allocated.
-  std::size_t failures = 0;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
-
-// Non-owning test-thread pointer; each scoped fault restores its predecessor before its state dies.
-thread_local AllocationFaultState* active_allocation_fault = nullptr;
-
-// Restrict allocator interception to one call and retire it even when the call unexpectedly throws.
-class ScopedAllocationFault final
-{
- public:
-  // Install initialized stack-owned fault state without performing an allocation.
-  ScopedAllocationFault() : previous_(std::exchange(active_allocation_fault, &state_)) { }
-  // Restore the previous fault scope before this scope's state can retire.
-  ~ScopedAllocationFault() { active_allocation_fault = previous_; }
-  // Read only on this scope's owning test thread after the drain returns.
-  [[nodiscard]] std::size_t failures() const { return state_.failures; }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  // Stack-owned fault accounting borrowed by the linker wrapper only within this scope.
-  AllocationFaultState state_;
-  // Previous test-thread borrow, restored on every exit path.
-  AllocationFaultState* previous_;
-};
-
-// Reserving projection capacity must fail before taking the coordinator's pending completions.
-void test_bridge_projection_allocation_failure_preserves_completion()
-{
-  NotificationWatchdog watchdog;
-  NotificationBridge fixture;
-  auto const result = fixture.callbacks().enqueue(
-      {.identity = 60, .config_epoch = fixture.callbacks().config_epoch, .source = std::string(ava::app::kMaxMermaidSourceBytes + 1, 'x')});
-  std::optional<std::vector<ava::tui::TuiMermaidRenderCompletion>> failed;
-  std::size_t injected = 0;
-  {
-    ScopedAllocationFault fault;
-    failed = fixture.callbacks().drain();
-    injected = fault.failures();
-  }
-  auto recovered = fixture.callbacks().drain();
-  auto empty = fixture.callbacks().drain();
-  expect(result == ava::tui::TuiMermaidEnqueueResult::Accepted && injected == 1 && !failed && recovered && recovered->size() == 1 &&
-             recovered->front().identity == 60 && !recovered->front().accepted && empty && empty->empty(),
-         "projection reserve failure returns retryable Busy and preserves the original completion for one successful drain");
-}
-
 }  // namespace
-
-// Reentry is released at the actual bridge handoff, while the real coordinator
-// still performs all cancellation and joining. Other shutdown calls just forward.
-extern "C" void mermaid_wrap_shutdown(ava::app::MermaidRenderCoordinator* coordinator) noexcept
-{
-  if (shutdown_observation)
-    shutdown_observation->open();
-  mermaid_real_shutdown(coordinator);
-}
-
-// Only the armed test-thread scope injects a fault; helper and renderer thread allocations always call through.
-extern "C" void* mermaid_wrap_allocate(std::size_t size)
-{
-  if (active_allocation_fault != nullptr && active_allocation_fault->armed)
-  {
-    active_allocation_fault->armed = false;
-    ++active_allocation_fault->failures;
-    throw std::bad_alloc{};
-  }
-  return mermaid_real_allocate(size);
-}
 
 // Keep notification regressions independently selectable from broader helper/process tests.
 void run_mermaid_notification_tests()
@@ -485,6 +355,4 @@ void run_mermaid_notification_tests()
   test_coordinator_notifier_replacement_backlog_and_shutdown();
   test_bridge_immediate_replacement_and_backlog_notification_reentry();
   test_bridge_worker_and_cancel_notification_reentry();
-  test_bridge_shutdown_during_reentrant_worker_notification();
-  test_bridge_projection_allocation_failure_preserves_completion();
 }

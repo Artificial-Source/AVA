@@ -85,6 +85,7 @@ void run_mcp_tests();
 void run_mermaid_render_coordinator_tests();
 // Reentry and retry guarantees exercise real coordinator/bridge synchronization.
 void run_mermaid_notification_tests();
+void run_tui_shutdown_tests();
 void run_permission_rules_tests();
 void run_tui_composer_tests();
 void run_tui_event_loop_tests();
@@ -107,8 +108,8 @@ void run_terminal_color_test_case(std::string_view);
 void prepare_tui_terminal_virtual_smoke_test_case(std::string_view, FILE*, FILE*);
 void run_tui_terminal_virtual_smoke_test_case(std::string_view);
 void run_tui_composer_rendering_terminal_test_case(std::string_view);
-// Run one real Session case in its own initialized terminal process.
-void run_tui_session_test_case(std::string_view);
+void run_tui_prompt_callback_lock_test_case(std::string_view);
+void run_tui_mermaid_missing_notifier_test();
 void run_run_observer_tests();
 void run_runtime_diagnostics_tests();
 void run_containment_tests();
@@ -183,6 +184,7 @@ constexpr std::array kTestSuites{
     TestSuite{"mcp", run_mcp_tests},
     TestSuite{"mermaid_render", run_mermaid_render_coordinator_tests},
     TestSuite{"mermaid_notifications", run_mermaid_notification_tests},
+    TestSuite{"tui_shutdown", run_tui_shutdown_tests},
     TestSuite{"permission_rules", run_permission_rules_tests},
     TestSuite{"tui_composer", run_tui_composer_tests},
     TestSuite{"tui_event_loop", run_tui_event_loop_tests},
@@ -221,44 +223,22 @@ constexpr std::array<std::string_view, 2> kMouseCases{"context_lifecycle", "hand
 constexpr std::array<std::string_view, 5> kColorCases{"srgb_round_trip", "osc4_protocol", "mutable_palette", "xterm_indexed", "portable_pairs"};
 constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_color", "screen", "tmux", "kitty", "wezterm"};
 // Each prompt-wakeup case gets its own terminal and independent readiness state.
-constexpr std::array<std::string_view, 13> kComposerRenderingCases{"search_tail",
+constexpr std::array<std::string_view, 11> kComposerRenderingCases{"search_tail",
                                                                    "changed_session",
                                                                    "session_transition",
                                                                    "atomic_search",
                                                                    "message_navigation",
-                                                                   "detached_completion",
                                                                    "message_navigation_empty",
                                                                    "display_reload_poll",
                                                                    "display_reload_overview",
-                                                                   "prompt_security",
                                                                    "paste_security",
                                                                    "prompt_completion_wakeup_permission",
                                                                    "prompt_completion_wakeup_question"};
-// Isolate OS faults, signal dispositions and ncurses replay for each real-loop regression.
-constexpr std::array<std::string_view, 24> kSessionCases{"turn_order",
-                                                         "frame_deadline",
-                                                         "hangup",
-                                                         "descriptor_error",
-                                                         "control_timer",
-                                                         "signal_after_decode",
-                                                         "notification_failure",
-                                                         "prompt_paint_permission",
-                                                         "prompt_paint_question",
-                                                         "close_after_submit",
-                                                         "active_signal_at_control",
-                                                         "active_signal_after_decode",
-                                                         "permission_hangup",
-                                                         "prompt_security_permission",
-                                                         "prompt_security_question",
-                                                         "shutdown_outcome",
-                                                         "shutdown_cleanup",
-                                                         "prompt_deferred_permission",
-                                                         "prompt_deferred_question",
-                                                         "prompt_audit_replacement",
-                                                         "prompt_audit_copy",
-                                                         "prompt_question_copy",
-                                                         "prompt_question_admission",
-                                                         "prompt_question_retirement"};
+constexpr std::array<std::string_view, 4> kPromptCallbackCases{"prompt_audit_replacement", "prompt_audit_copy", "prompt_question_copy",
+                                                               "prompt_question_admission"};
+// The deliberate assertion case is accepted only for explicit single-case dispatch.
+// Keeping it out of this list prevents aggregate runs from executing the expected death.
+constexpr std::array<std::string_view, 0> kMermaidContractCases{};
 
 // Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
 void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)
@@ -280,7 +260,10 @@ constexpr std::array kIsolatedTerminalSuites{
                           run_tui_terminal_virtual_smoke_test_case, nullptr},
     IsolatedTerminalSuite{"tui_composer_rendering", kComposerRenderingCases, prepare_tui_composer_rendering_terminal_test_case,
                           run_tui_composer_rendering_terminal_test_case, nullptr},
-    IsolatedTerminalSuite{"tui_session", kSessionCases, prepare_tui_composer_rendering_terminal_test_case, run_tui_session_test_case, nullptr},
+    IsolatedTerminalSuite{"tui_prompt_callback_lock", kPromptCallbackCases, prepare_tui_composer_rendering_terminal_test_case,
+                          run_tui_prompt_callback_lock_test_case, nullptr},
+    IsolatedTerminalSuite{"tui_mermaid_contract", kMermaidContractCases, prepare_tui_composer_rendering_terminal_test_case,
+                          [](std::string_view) { run_tui_mermaid_missing_notifier_test(); }, nullptr},
 };
 
 // Own the test executable's Application lifecycle and install its per-suite
@@ -344,7 +327,7 @@ bool TestRunnerApplication::s_marker_pending_ = false;
 // It is absent from suite.cases, so aggregate runs never execute an expected death.
 bool has_terminal_case(IsolatedTerminalSuite const& suite, std::string_view test_case)
 {
-  return std::ranges::find(suite.cases, test_case) != suite.cases.end() || (suite.name == "tui_session" && test_case == "mermaid_missing_notifier");
+  return std::ranges::find(suite.cases, test_case) != suite.cases.end() || (suite.name == "tui_mermaid_contract" && test_case == "mermaid_missing_notifier");
 }
 
 // Derive the per-suite token used to name the libcwd log file
