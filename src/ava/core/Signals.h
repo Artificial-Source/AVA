@@ -44,7 +44,13 @@ class Signals final
 
   // Install the shared bit callback and unblock the mode-selected signals.
   // TUI calls this only after ncurses initialization; process orchestration owns all other calls.
+  //
+  // In CWDEBUG builds SIGINT is ignored when this process is being traced: it is then left to the debugger.
   void activate_handlers(std::initializer_list<int> signums);
+
+  // Restore the default disposition of signums and unblock them on the calling thread.
+  //
+  // In CWDEBUG builds SIGINT is ignored when this process is being traced: it is then left to the debugger.
   void default_handlers(std::initializer_list<int> signums);
 
   // Returns WasTrue if any of the signals in `signals` are pending.

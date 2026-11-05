@@ -175,14 +175,8 @@ int TuiFrontEnd::run()
   application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
 
-  // Activate signal handlers for the TUI.
-#ifdef CWDEBUG
-  // If we're running inside gdb, do not install a handler for SIGINT.
-  if (NAMESPACE_DEBUG::being_traced())
-    signals_manager.activate_handlers({SIGTERM});
-  else
-#endif
-    signals_manager.activate_handlers({SIGINT, SIGTERM});         // Signals for which we want to call Signals::signal_handler.
+  // Activate signal handlers for the TUI (SIGINT is skipped when running inside gdb).
+  signals_manager.activate_handlers({SIGINT, SIGTERM});           // Signals for which we want to call Signals::signal_handler.
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);

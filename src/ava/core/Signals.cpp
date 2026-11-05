@@ -39,6 +39,7 @@ void Signals::signal_handler(int signal_number) noexcept
 
 // Reserve AVA's process signals while construction is still single-threaded.
 // SIGPIPE remains blocked and ignored; command parsing later selects dispositions for the foreground control signals.
+// When a debugger is already attached, SIGINT is not reserved so that it stays with the debugger.
 Signals::Signals(utils::Badge<Application>) : signals_(CWDEBUG_ONLY(NAMESPACE_DEBUG::being_traced() ? used_signums_gdb :) used_signums)
 {
   DoutEntering(dc::signals, "core::Signals::Signals()");
@@ -49,7 +50,14 @@ void Signals::activate_handlers(std::initializer_list<int> signums)
   DoutEntering(dc::signals, "Signals::activate_handlers(" << signums << ")");
 
   for (int const signal_number : signums)
+  {
+#ifdef CWDEBUG
+    // When running inside gdb, SIGINT was not reserved: leave it to gdb.
+    if (signal_number == SIGINT && NAMESPACE_DEBUG::being_traced())
+      continue;
+#endif
     utils::Signal::unblock(signal_number, signal_handler);
+  }
 }
 
 void Signals::default_handlers(std::initializer_list<int> signums)
@@ -57,7 +65,14 @@ void Signals::default_handlers(std::initializer_list<int> signums)
   DoutEntering(dc::signals, "Signals::default_handlers(" << signums << ")");
 
   for (int const signal_number : signums)
+  {
+#ifdef CWDEBUG
+    // When running inside gdb, SIGINT was not reserved: leave it to gdb.
+    if (signal_number == SIGINT && NAMESPACE_DEBUG::being_traced())
+      continue;
+#endif
     signals_.default_handler(signal_number);
+  }
 }
 
 //static
