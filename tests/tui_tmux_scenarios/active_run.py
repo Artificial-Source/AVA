@@ -397,10 +397,17 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     def open_active_local_tool(command: str, pattern: str, label: str) -> str:
         send_literal(tmux_exe, active_session, command)
         send_keys(tmux_exe, active_session, "Enter")
-        screen = wait_for(tmux_exe, active_session, rf"(?s)Command /tool.*{pattern}", label)
-        if command in screen:
-            raise RuntimeError(f"{command} arguments leaked into active command-output chrome\nscreen:\n{screen}")
-        return screen
+        modal = re.compile(rf"(?s)Command /tool.*{pattern}")
+        # A capture can land while the frame is still being painted: the modal header is
+        # already visible but the composer further down still shows the submitted draft.
+        # Wait for a frame without the command; if its arguments leaked into the modal
+        # chrome they stay visible and this times out.
+        return wait_for_screen_state(
+            tmux_exe,
+            active_session,
+            lambda screen: modal.search(screen) is not None and command not in screen,
+            f"{label} without {command} arguments leaked into command-output chrome",
+        )
 
     set_active_details("compact")
     compact_active_card = open_active_local_tool("/tool write", r"write.*wrote 18 bytes", "active local tool history compact modal")
