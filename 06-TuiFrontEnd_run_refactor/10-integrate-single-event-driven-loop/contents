@@ -1,1 +1,0 @@
-Implemented sole control/timer/application/input/paint/resource-wait loop and feature-owned deadlines; final wiring, lifetime contracts, remaining limits and build evidence are recorded in 06/03/migration-ledger.md and reconciled in 06/02/architecture.md. No tests run.

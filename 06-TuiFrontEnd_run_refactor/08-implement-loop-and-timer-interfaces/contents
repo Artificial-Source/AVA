@@ -1,1 +1,0 @@
-Implemented TuiEventLoop, TuiTimer, TuiTimerRegistration, TuiWaitState, TuiWakeup and Spinner with actual interfaces, lifetime/dispatch contracts and explicit09–10 integration boundary recorded in06/03/migration-ledger.md. Added compiled timer/wake regression coverage; no tests run.

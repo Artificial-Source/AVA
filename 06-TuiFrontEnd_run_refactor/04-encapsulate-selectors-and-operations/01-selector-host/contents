@@ -1,2 +1,0 @@
-src/ava/tui/SelectorHost.h and .cpp — Private active selector/view ownership and publication operations, integrated across session/controller consumers.
-06/03/migration-ledger.md — Goal04/01 interfaces, projection exceptions, remaining feature handoffs and build evidence.
