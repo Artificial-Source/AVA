@@ -308,7 +308,12 @@ DebugTerminal::DebugTerminal(DebugTerminalConfig config) : impl_(std::make_uniqu
   // Konsole (also when given as a path) opens its window fullscreen, to show as much debug output as possible.
   std::string_view const terminal_name = std::string_view(config.terminal).substr(config.terminal.rfind('/') + 1);
   if (terminal_name == "konsole")
+  {
+    // Run konsole full-screen using a dedicate profile.
+    arguments.emplace_back("--profile");
+    arguments.emplace_back("AVA-DebugTerminal");
     arguments.emplace_back("--fullscreen");
+  }
   arguments.insert(arguments.end(), {"-e", "/bin/sh", "-c", terminal_script, "ava-debug-terminal", handshake.fifo(), config.gdb, pid_text});
   if (std::string error = spawn_detached(arguments); !error.empty())
   {
