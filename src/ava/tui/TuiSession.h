@@ -35,31 +35,61 @@ class TuiSessionActions;
 
 // TuiFrontEnd::run owns this object for one interactive session on the TUI thread.
 // The application-owned frontend and initialized terminal Context outlive it.
-// Feature owners keep their own state; this object chooses loop order and performs
-// transitions between owners. Workers receive synchronized endpoints, never this
-// object. Member order preserves borrows through shutdown and reverse destruction.
+// Feature owners keep their own state; this object performs transitions between owners.
+// Workers receive synchronized endpoints, never this object. Member order preserves
+// borrows through shutdown and reverse destruction.
+//
+// TuiFrontEnd::run owns the event loop and drives this session through its public members:
+// it calls start() once, then for every wakeup terminal_input_ready() and/or notified(),
+// followed by expire_timers() and flush(), until the application terminates the loop; and
+// finally shutdown(). For now flush() still services every mailbox and polls the terminal
+// input itself; those parts will move into dedicated event handlers.
 // Read docs/engineering/tui-architecture.md before adding a feature or timer.
 class TuiSession final
 {
  public:
   // TUI thread: construct once after terminal initialization. Members may register
-  // timers while being built, but run() alone dispatches them after construction.
+  // timers while being built, but only expire_timers() dispatches them.
   // Frontend and Context outlive the session; status text is copied during initialization.
-  TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line);
+  // Producers wake the TUI thread through copies of wakeup.
+  TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiWakeup wakeup);
   // TUI thread: stop new worker requests and join active work while all feature
-  // owners are still alive. This also covers exceptions and early run returns.
+  // owners are still alive. This also covers exceptions.
   ~TuiSession();
   // Not copyable or movable: timers and input callbacks hold member addresses.
   TuiSession(TuiSession const&) = delete;
   TuiSession& operator=(TuiSession const&) = delete;
   TuiSession(TuiSession&&) = delete;
   TuiSession& operator=(TuiSession&&) = delete;
-  // TUI thread, once per constructed session: run control/timers/updates/input/
-  // paint/wait until exit, then retire work before invoking before_shutdown.
-  // The callback is borrowed only for this call; the outer frontend guard covers
-  // early returns/exceptions. Return 130 for a signal, 1 for I/O or cleanup failure,
-  // otherwise 0.
-  [[nodiscard]] int run(std::function<bool()> const& before_shutdown);
+
+  // TUI thread, once before the first wait: paint the initial frame.
+  //
+  // A pending terminal signal or a paint failure stops the session immediately.
+  void start();
+  // TUI thread: return when the TUI thread must wake up for the next timer, or nothing when no timer is armed.
+  //
+  // A deadline in the past means that the caller should not sleep at all.
+  [[nodiscard]] std::optional<TuiEventLoop::Clock::time_point> next_timer_deadline() const noexcept;
+  // TUI thread after every wakeup: run the callbacks of all timers that are due at now.
+  void expire_timers(TuiEventLoop::Clock::time_point now);
+  // TUI thread: the terminal input fd reported ready, which may include a hangup or error.
+  //
+  // Only records hangup and error; the input itself is read by flush().
+  void terminal_input_ready(utils::threading::EventLoop::ReadyEvents ready);
+  // TUI thread: a producer notified the wakeup token of this session.
+  //
+  // Does nothing for now: flush() checks every producer mailbox.
+  void notified();
+  // TUI thread, once after all events of one wakeup were dispatched: process the pending work and paint once.
+  //
+  // This handles signals and terminal closure, consumes application updates, services presentations,
+  // decodes at most one batch of terminal input and paints a ready frame. Work that is left behind
+  // notifies the session's own wakeup, so that the next wait returns immediately.
+  void flush();
+  // TUI thread, once after the event loop terminated: retire work before invoking before_shutdown.
+  //
+  // The callback is borrowed only for this call. Return 130 for a signal, 1 for I/O or cleanup failure, otherwise 0.
+  [[nodiscard]] int shutdown(std::function<bool()> const& before_shutdown);
 
   // Owned Composer and presentation members retain user content and deliberately
   // opt out of printing; this aggregate must not traverse those values.
@@ -105,9 +135,13 @@ class TuiSession final
   // TUI thread after updates: poll at most 32 input results, including discarded
   // replies. True keeps the next wait nonblocking; closing input is drained only.
   [[nodiscard]] bool service_input_batch();
-  // TUI thread: centralize loop-stop and I/O-failure latches after a stage returns.
+  // TUI thread: centralize stop and I/O-failure latches after a stage returns.
   // Pass/Handled leave the next input or loop phase available.
   void apply_input_outcome(TuiInputOutcome outcome);
+  // TUI thread: stop all further work of this session and ask the application to shut down.
+  //
+  // The session then stays inert until TuiFrontEnd::run leaves its loop and calls shutdown().
+  void request_stop();
   // TUI thread before timers and again after decode. Automatic question resolution
   // precedes signal claiming; a claimed signal consumes any retained input key.
   TuiInputOutcome handle_signals();
@@ -155,8 +189,8 @@ class TuiSession final
   TuiSessionActions& frontend_;
   // External initialized terminal, borrowed for TUI-thread input/output until destruction.
   terminal::Context& terminal_context_;
-  // TUI-thread waiter and timer registry, constructed before every registered feature.
-  // Timer handles below die first; copied weak wakeups may outlive the loop.
+  // TUI-thread timer registry and wakeup factory, constructed before every registered feature.
+  // Timer handles below die first; copied weak wakeups may outlive the registry.
   TuiEventLoop loop_;
   // TUI-owned display data; readers borrow const views and features update them through named operations.
   RuntimePresentationState presentation_state_;
@@ -177,6 +211,11 @@ class TuiSession final
   bool cleanup_failed_ = false;
   // TUI-thread terminal-closure latch; once set, only drain buffered input and retire work.
   bool terminal_closing_ = false;
+  // TUI-thread latches for a hangup or an error reported on the terminal input fd; they never reset.
+  bool terminal_hangup_ = false;
+  bool terminal_error_ = false;
+  // TUI-thread latch set by request_stop(); once set the session does no more work until shutdown().
+  bool stopping_ = false;
   // The session's one TUI-thread editor; declared before every owner that borrows draft state.
   Composer draft_state_;
   // TUI-thread caches, viewport and frame scheduler; its timer handles retire before the loop.

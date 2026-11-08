@@ -86,8 +86,8 @@ core::Result<std::string> SessionSelector::resolve(SelectListInputResult const& 
   cancel_confirmation();
   auto const* item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = item ? item->value : std::string{};
-  return dispatch_tui_selector_authority(presentation_state_, selectors_, "opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
-                                         std::bind_front(&SessionSelectorActions::on_session_selected, &frontend_, std::move(selected_value)));
+  return selectors_.dispatch_authority("opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
+                                       std::bind_front(&SessionSelectorActions::on_session_selected, &frontend_, std::move(selected_value)));
 }
 
 std::optional<core::Result<std::string>> SessionSelector::navigate_branch(SelectListInputResult const& input)
@@ -103,8 +103,8 @@ std::optional<core::Result<std::string>> SessionSelector::navigate_branch(Select
   auto const selected_value = item->value;
   auto callback = input.action == SelectListInputAction::BranchParent ? &SessionSelectorActions::on_session_selector_branch_parent
                                                                       : &SessionSelectorActions::on_session_selector_branch_child;
-  return dispatch_tui_selector_authority(presentation_state_, selectors_, "opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
-                                         std::bind_front(callback, &frontend_, selected_value));
+  return selectors_.dispatch_authority("opening session…", std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
+                                       std::bind_front(callback, &frontend_, selected_value));
 }
 
 void SessionSelector::archive(SelectListInputResult const& input)

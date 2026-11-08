@@ -382,8 +382,10 @@ struct B5AttachedMermaidFixture
   std::shared_ptr<B5BridgeState> state = std::make_shared<B5BridgeState>();
   // Readiness descriptors belong to this fixture.
   std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors = b5_loop_pipe();
-  // Loop outlives every attached presentation owner.
-  ava::tui::TuiEventLoop loop{descriptors.first.get()};
+  // Event loop outlives every attached presentation owner.
+  tui_test_support::TuiEventLoopFixture event_loop{descriptors.first.get()};
+  // Timer registry of event_loop.
+  ava::tui::TuiEventLoop& loop = event_loop.loop();
   // Frontend owns registered session data for all following presentation objects.
   tui_test_support::TuiFrontEndFixture frontend;
   // Presentation owns the snapshot borrowed by the remaining members.
@@ -437,7 +439,7 @@ void test_attached_mermaid_completion_without_transcript_change()
   fixture.state->notify();
   expect(snapshot.transcript_generation == generation && fixture.state->drains == drains,
          "producer notification only publishes readiness and does not execute bridge work");
-  fixture.loop.wait(ava::tui::TuiWaitMode::ReadyOnly);
+  fixture.event_loop.wait(tui_test_support::TuiEventLoopFixture::Wait::ReadyOnly);
   auto const result = fixture.controller.service_if_changed();
   expect(result == ava::tui::MermaidServiceOutcome::Changed && snapshot.transcript_generation == generation + 1 && snapshot.mermaid_projection &&
              snapshot.mermaid_projection->accepted().size() == 1 && snapshot.mermaid_projection->accepted().front().text == "notified result",

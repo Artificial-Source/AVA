@@ -198,6 +198,9 @@ namespace {
 class CommonFrontEnd final : public ava::frontend::FrontEnd
 {
  public:
+  // No event processing to stop.
+  void terminate() override { }
+
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -205,6 +208,9 @@ class CallbackFrontEnd final : public ava::frontend::FrontEnd
 {
  public:
   std::function<void(ava::frontend::DataListIndex)> on_data_changed;
+
+  // No event processing to stop.
+  void terminate() override { }
 
   // Observe only extension data; FrontEnd handles canonical projection notifications without invoking this hook.
   void data_changed_impl(ava::frontend::DataListIndex index) override

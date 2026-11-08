@@ -22,6 +22,7 @@
 #include "runtime_transcript_search_internal.h"
 #include "runtime_user_turn_selection_internal.h"
 #include "runtime_views_internal.h"
+#include "ava/core/Application.h"
 
 #include <cstdio>
 #include <functional>
@@ -47,10 +48,10 @@ using Key = terminal::Key;
 
 // TUI thread: construct owners in header declaration order, then attach their
 // registrations. No callback may run until every borrowed target exists.
-TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line)
+TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiWakeup wakeup)
     : frontend_(frontend),
       terminal_context_(terminal_context),
-      loop_(::fileno(terminal_context.input_stream())),
+      loop_(std::move(wakeup)),
       presentation_state_(&frontend, initial_status_line),
       command_output_(presentation_state_),
       attachments_(presentation_state_),
@@ -697,7 +698,16 @@ void TuiSession::apply_input_outcome(TuiInputOutcome outcome)
   if (outcome == TuiInputOutcome::Failure)
     terminal_write_failed_ = true;
   if (outcome == TuiInputOutcome::Failure || outcome == TuiInputOutcome::Exit)
-    loop_.request_stop();
+    request_stop();
+}
+
+void TuiSession::request_stop()
+{
+  if (stopping_)
+    return;
+  stopping_ = true;
+  // The TUI does not end its own event loop: the application decides when to shut down.
+  core::Application::instance().request_shutdown();
 }
 
 void TuiSession::wake_for_control(TuiEventLoop::Clock::time_point)
@@ -712,15 +722,15 @@ void TuiSession::service_control()
 {
   apply_input_outcome(handle_signals());
 
-  if (loop_.notification_failed() || renderer_.render_failed())
+  if (renderer_.render_failed())
     apply_input_outcome(TuiInputOutcome::Failure);
-  if (loop_.stopped() || terminal_closing_ || (!loop_.terminal_hangup() && !loop_.terminal_error()))
+  if (stopping_ || terminal_closing_ || (!terminal_hangup_ && !terminal_error_))
     return;
 
   // Stop ordinary dispatch before draining final buffered bytes. HUP is a normal close;
   // descriptor errors are failures. Neither can remain a level-triggered wait.
   terminal_closing_ = true;
-  terminal_write_failed_ = terminal_write_failed_ || loop_.terminal_error();
+  terminal_write_failed_ = terminal_write_failed_ || terminal_error_;
   if (active_run_controller_.active())
     static_cast<void>(active_run_controller_.cancel(ActiveRunCancel::Close));
   if (branch_summary_.active())
@@ -746,7 +756,7 @@ bool TuiSession::service_application_updates()
     // A signal completion must exit; continuing would lose its claimed outcome.
     ASSERT(!completed->terminal_signal_received() || completed->break_loop());
     if (completed->break_loop())
-      loop_.request_stop();
+      request_stop();
   }
   return active_run_controller_.has_pending_updates();
 }
@@ -755,11 +765,11 @@ bool TuiSession::service_application_updates()
 // Stop immediately on failure so later features cannot hide the exit cause.
 void TuiSession::service_presentations()
 {
-  if (loop_.stopped() || terminal_closing_)
+  if (stopping_ || terminal_closing_)
     return;
   if (auto outcome = branch_summary_.service_if_due(); outcome && stop_for_branch_summary(*outcome))
   {
-    loop_.request_stop();
+    request_stop();
     return;
   }
   // Workspace discovery remains eligible during host prompts. Read frontend
@@ -788,7 +798,7 @@ void TuiSession::service_presentations()
 // turn, which services providers and timers before polling buffered input again.
 bool TuiSession::service_input_batch()
 {
-  for (std::size_t count = 0; count < kInputBatchLimit && !loop_.stopped(); ++count)
+  for (std::size_t count = 0; count < kInputBatchLimit && !stopping_; ++count)
   {
     // Process a published final result before decoding more keys. Closing an
     // unfinished run still decodes and discards input in the active handler;
@@ -803,7 +813,7 @@ bool TuiSession::service_input_batch()
       if (!prompt_coordinator_.input_drained())
         apply_input_outcome(TuiInputOutcome::Failure);
       if (terminal_closing_)
-        loop_.request_stop();
+        request_stop();
       return false;
     }
     // Discarded control replies consumed input too. Count them toward fairness,
@@ -817,63 +827,105 @@ bool TuiSession::service_input_batch()
     apply_input_outcome(control);
     if (control != TuiInputOutcome::Pass)
       continue;
-    if (terminal_closing_ || loop_.stopped())
+    if (terminal_closing_ || stopping_)
       continue;
     auto const outcome = active_run_controller_.active() ? active_run_input_.dispatch(input) : input_dispatcher_.dispatch(input);
     apply_input_outcome(outcome);
   }
   // A full batch may leave bytes in ncurses even without fd readiness. Give
   // application work and due timers another turn, then poll input without sleep.
-  return !loop_.stopped();
+  return !stopping_;
 }
 
-// The only live composition loop. Keep the six phases together: timer or
-// feature helpers must not secretly perform a second turn after painting.
-int TuiSession::run(std::function<bool()> const& before_shutdown)
+void TuiSession::start()
 {
   using Signals = core::Signals;
   if (Signals::received(terminal_signals))
-    return 130;
-  // Establish one initial frame before waiting. Later ordinary changes share
-  // the turn-end paint boundary; terminal handoffs remain synchronous.
-  if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed || !renderer_.paint_for_handoff())
-    return 1;
-
-  while (!loop_.stopped())
   {
-    service_control();
-    if (loop_.stopped())
-      break;
-    if (terminal_closing_)
-    {
-      // Final buffered input is finite. Do not launch discovery/presentation
-      // work or wait on a permanently ready HUP while draining these bytes.
-      static_cast<void>(service_input_batch());
-      continue;
-    }
-    loop_.service_due();
-    if (loop_.stopped() || terminal_closing_)
-      continue;
-    auto const application_pending = service_application_updates();
-    service_presentations();
-    auto const input_pending = !loop_.stopped() && service_input_batch();
-    if (loop_.stopped() || terminal_closing_)
-      continue;
+    terminal_signal_received_ = true;
+    request_stop();
+    return;
+  }
+  // Establish one initial frame before the first wait. Later ordinary changes share
+  // the flush paint boundary; terminal handoffs remain synchronous.
+  if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed || !renderer_.paint_for_handoff())
+    apply_input_outcome(TuiInputOutcome::Failure);
+}
 
-    // Painting checks its own deadline, including time spent decoding input.
-    // Other timers that became due get the next control-first turn.
-    if (!terminal_closing_ && !renderer_.paint_ready_frame())
-    {
-      apply_input_outcome(TuiInputOutcome::Failure);
-      break;
-    }
-    auto const runnable = terminal_closing_ || application_pending || input_pending || active_run_controller_.has_pending_updates() || loop_.has_due_work();
-    loop_.wait(runnable ? TuiWaitMode::ReadyOnly : TuiWaitMode::Block);
+std::optional<TuiEventLoop::Clock::time_point> TuiSession::next_timer_deadline() const noexcept
+{
+  // A stopping session runs no more timers; it must not keep waking the TUI thread.
+  if (stopping_)
+    return std::nullopt;
+  return loop_.next_deadline();
+}
+
+void TuiSession::expire_timers(TuiEventLoop::Clock::time_point now)
+{
+  if (stopping_)
+    return;
+  loop_.service_due(now);
+}
+
+void TuiSession::terminal_input_ready(utils::threading::EventLoop::ReadyEvents ready)
+{
+  using ReadyEvents = utils::threading::EventLoop::ReadyEvents;
+  // Readiness is transient, but terminal failure must survive until service_control
+  // observes it and starts draining the final buffered input.
+  terminal_hangup_ = terminal_hangup_ || has_event(ready, ReadyEvents::hangup);
+  terminal_error_ = terminal_error_ || has_event(ready, ReadyEvents::error);
+}
+
+void TuiSession::notified()
+{
+  // Notifications carry no payload: flush() checks every producer mailbox.
+}
+
+// Keep the phases together: timer or feature helpers must not secretly perform a second turn after painting.
+void TuiSession::flush()
+{
+  if (stopping_)
+    return;
+  service_control();
+  if (stopping_)
+    return;
+  if (terminal_closing_)
+  {
+    // Final buffered input is finite. Do not launch discovery/presentation
+    // work while draining these bytes; come back until the drain stops the session.
+    static_cast<void>(service_input_batch());
+    if (!stopping_)
+      loop_.wakeup().notify();
+    return;
+  }
+  auto const application_pending = service_application_updates();
+  service_presentations();
+  auto const input_pending = !stopping_ && service_input_batch();
+  if (stopping_)
+    return;
+  if (terminal_closing_)
+  {
+    loop_.wakeup().notify();
+    return;
   }
 
+  // Painting checks its own deadline, including time spent decoding input.
+  if (!renderer_.paint_ready_frame())
+  {
+    apply_input_outcome(TuiInputOutcome::Failure);
+    return;
+  }
+  // Work that was left behind (bounded batches, keys buffered inside ncurses that do not
+  // make the fd readable) gets another flush without sleeping.
+  if (application_pending || input_pending || active_run_controller_.has_pending_updates())
+    loop_.wakeup().notify();
+}
+
+int TuiSession::shutdown(std::function<bool()> const& before_shutdown)
+{
   // Release worker waits before joining, then retire producer transports while
   // the frontend and terminal still exist. Preserve exit causes across cleanup.
-  // Every failed loop exit, including a handoff or update failure, must report
+  // Every failed exit, including a handoff or update failure, must report
   // Io to a held prompt before ordinary shutdown can answer it as interrupted.
   if (terminal_write_failed_)
     prompt_coordinator_.fail_active_render();

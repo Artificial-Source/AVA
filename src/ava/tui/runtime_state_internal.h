@@ -256,6 +256,11 @@ class RuntimePresentationState final
   void publish_plugin_dock(std::optional<TuiPluginUiDockView> dock);
   // TUI thread: publish acknowledged plugin modal data or retire it; the synchronized coordinator still owns the request lifetime.
   void publish_plugin_modal(std::optional<TuiPluginUiModalView> modal);
+  // TUI thread: retire the published plugin dock and modal, or only those belonging to binding when one is given.
+  //
+  // Returns true if a surface was removed. Only presentation changes; the caller serializes transport
+  // validation where needed, and pending requests and their waits are not resolved here.
+  [[nodiscard]] bool clear_plugin_surface(std::optional<TuiPluginUiBinding> const& binding = std::nullopt);
   // TUI thread with a published modal: apply its validated option index while keeping the request identity
   // intact.
   void publish_plugin_selection(std::size_t selected);
@@ -412,12 +417,5 @@ class RuntimePresentationState final
 // TUI-thread display reset used when committed session identity changes.
 // Clear only session-local facts; mode/version remain process or backend display values.
 void reset_session_sidebar(SidebarSnapshot& sidebar);
-
-// Shared overview presentation helpers for popup-local display/keybinding changes
-// when a competing view opens.
-void close_startup_overview_presentation(RuntimePresentationState& presentation, SelectorHost& selectors);
-// TUI thread after local hint/display changes: rebuild active overview rows while preserving safe
-// filter/selection; close when its popup facts have retired.
-void synchronize_startup_overview_presentation(RuntimePresentationState& presentation, SelectorHost& selectors);
 
 }  // namespace ava::tui

@@ -56,7 +56,6 @@ add_library(ava_tui
   "TuiEventLoop.cpp"
   "TuiTimer.cpp"
   "TuiWakeup.cpp"
-  "TuiWaitState.cpp"
   "TuiTimerRegistration.cpp"
   "Spinner.cpp"
   "TranscriptView.cpp"

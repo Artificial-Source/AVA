@@ -89,6 +89,52 @@ void SelectorHost::close()
   presentation_.publish_selector(std::nullopt);
 }
 
+core::Result<std::string> SelectorHost::dispatch_authority(std::string pending_status, std::function<bool()> const& render,
+                                                           std::function<core::Result<std::string>()> const& callback)
+{
+  // Clear the old selector before painting pending status, so a blocking backend
+  // action cannot leave the previous choice looking interactive.
+  close();
+  presentation_.publish_status(std::move(pending_status));
+  if (!render())
+  {
+    auto error = core::Error(core::ErrorCategory::Io, "failed to paint selector authority status");
+    presentation_.publish_status(error.format());
+    return std::unexpected(std::move(error));
+  }
+  auto result = callback();
+  if (!result)
+    presentation_.publish_status(result.error().format());
+  return result;
+}
+
+void SelectorHost::close_startup_overview()
+{
+  if (kind_ != ActiveSelectList::Overview)
+    return;
+  close();
+  presentation_.clear_startup_overview();
+}
+
+void SelectorHost::synchronize_startup_overview()
+{
+  if (kind_ != ActiveSelectList::Overview)
+    return;
+  if (!presentation_.screen().startup_overview)
+  {
+    close_startup_overview();
+    return;
+  }
+  // Rebuild from the popup-local DTO while preserving safe local filter/selection identity.
+  auto const& current = view();
+  auto query = current ? current->query : std::string{};
+  auto selected = current ? current->selected_item_index : std::size_t{0};
+  auto rebuilt = overview_select_list_view(*presentation_.screen().startup_overview);
+  rebuilt.query = std::move(query);
+  rebuilt.selected_item_index = clamp_select_list_selection(rebuilt, selected);
+  replace(std::move(rebuilt));
+}
+
 void SelectorHost::update_selection(std::size_t index, std::string query)
 {
   // Selection input must target an open selector; open() supplies its initial state.

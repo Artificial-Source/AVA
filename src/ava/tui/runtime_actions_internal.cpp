@@ -164,7 +164,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   auto status = result.status.empty() ? std::string("display theme auto-reloaded") : result.status;
   {
     presentation_state_.apply_local_display_settings(std::move(result.settings));
-    synchronize_startup_overview_presentation(presentation_state_, selectors_);
+    selectors_.synchronize_startup_overview();
     presentation_state_.publish_local_status(std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;

@@ -1,47 +1,43 @@
-// Gives producers a payload-free wakeup token without borrowing a TUI owner.
+// Gives producers a payload-free wakeup token for the TUI thread's event loop.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "utils/threading/EventLoop.h"
 
 #include <memory>
 
 namespace ava::tui {
 
-class TuiEventLoop;
-class TuiWaitState;
-
-// Copyable token issued by TuiEventLoop and stored by worker/mailbox owners. It
-// owns only a weak reference; notify may run concurrently on producer threads.
-// Each successful weak_ptr lock keeps just the OS waiter alive through that call.
-// Tokens may outlive the loop and still lock while another notifier holds a shared
-// reference; once all shared references are gone, notify does nothing. Copy, move
-// and destruction follow ordinary object synchronization rules: do not replace or
-// destroy a token while another thread calls it. Token destruction never joins
-// producers or protects their other objects.
+// Copyable token that producers (worker threads, mailbox owners, and the TUI thread itself) use to
+// wake the TUI thread. It names one notification Event of the event loop that TuiFrontEnd owns.
+//
+// The token holds only a weak reference to that loop, so it can be stored in objects that outlive
+// the TUI session and even the frontend; once the loop is gone notify() does nothing. A notify()
+// that locked the loop keeps it alive until that call returns, so the last owner may then be
+// released on the producer thread. Copy, move and destruction follow ordinary object
+// synchronization rules: do not replace or destroy a token while another thread calls it.
 class TuiWakeup final
 {
  public:
   // Any thread: create an inert token for owners that have not attached to a loop.
   TuiWakeup() = default;
-  // Any thread with this token alive: first store the payload in its synchronized
-  // mailbox, then request a wakeup. Several notifications may merge into one wakeup.
-  // Empty/expired tokens do nothing; a successful lock keeps only the wait resources
-  // alive and may release their last shared reference when this call returns.
+  // TUI thread: create a token that notifies event, which must have been returned by event_loop->watch_event().
+  TuiWakeup(std::weak_ptr<utils::threading::EventLoop> event_loop, utils::threading::EventLoop::Event event) noexcept;
+
+  // Any thread: wake the TUI thread.
+  //
+  // Store the payload in its synchronized mailbox first: several notifications may merge into one
+  // wakeup and carry no payload. Empty and expired tokens do nothing.
   void notify() const noexcept;
 
-  // Printing reports only weak lifetime metadata; it never locks or prints the waiter.
+  // Printing reports only the event; it never locks or prints the loop.
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // Only the loop issues attached tokens, avoiding producer access to the waiter.
-  friend class TuiEventLoop;
-  // TUI thread while the loop's shared state is alive: store a weak reference,
-  // so retaining this token cannot keep a session alive.
-  explicit TuiWakeup(std::shared_ptr<TuiWaitState> const& state) noexcept;
-
-  // Initialized at token construction/copy and only read during notify. Weak
-  // ownership permits late calls without retaining the loop or callback targets.
-  std::weak_ptr<TuiWaitState> state_;
+  // Initialized at construction/copy and only read during notify.
+  std::weak_ptr<utils::threading::EventLoop> event_loop_;
+  // The notification Event of event_loop_ that notify() publishes.
+  utils::threading::EventLoop::Event event_{};
 };
 
 } // namespace ava::tui

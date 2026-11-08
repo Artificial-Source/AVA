@@ -1696,8 +1696,8 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
   std::vector<std::string> events;
 
   std::thread dispatch([&]() {
-    auto result = ava::tui::dispatch_tui_selector_authority(
-        presentation, selectors, "switching model…",
+    auto result = selectors.dispatch_authority(
+        "switching model…",
         [&]() {
           events.push_back("render");
           return true;
@@ -1727,8 +1727,8 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
   auto session_view = ava::tui::SelectListView{};
   session_view.title = "Select session";
   selectors.open(ava::tui::ActiveSelectList::Session, std::move(session_view));
-  auto failed = ava::tui::dispatch_tui_selector_authority(
-      presentation, selectors, "opening session…", []() { return true; },
+  auto failed = selectors.dispatch_authority(
+      "opening session…", []() { return true; },
       []() -> ava::core::Result<std::string> { return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "session unavailable")); });
   expect(!failed && !snapshot.select_list && snapshot.status.find("session unavailable") != std::string::npos && snapshot.input == original_input &&
              snapshot.input_cursor == original_cursor,

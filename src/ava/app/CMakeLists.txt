@@ -29,7 +29,6 @@ target_sources(ava_app
     "acp/session_update.cpp"
     "acp/transport.cpp"
     "acp_mode.cpp"
-    "app.cpp"
     "Application.cpp"
     "DebugTerminal.cpp"
     "browser_open.cpp"

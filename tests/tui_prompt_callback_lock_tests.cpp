@@ -342,10 +342,9 @@ class PromptFixture final
     EnqueueDeadline deadline;
     auto timeout = loop.member_timer(deadline, &EnqueueDeadline::expire);
     timeout.arm_after(kGuard);
-    loop.wait(ava::tui::TuiWaitMode::Block);
+    event_loop_.wait();
     loop.service_due();
-    return !deadline.expired() && !loop.stopped() && !loop.terminal_hangup() && !loop.terminal_error() && !loop.notification_failed() &&
-           coordinator_.has_pending_requests();
+    return !deadline.expired() && !event_loop_.terminal_hangup() && !event_loop_.terminal_error() && coordinator_.has_pending_requests();
   }
   // Internal-linkage composition owns opaque fixtures and deliberately opts out of printing.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

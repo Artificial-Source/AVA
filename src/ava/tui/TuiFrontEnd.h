@@ -10,10 +10,12 @@
 #include "keybindings.h"                // TuiKeyBindings
 #include "runtime.h"                    // TuiRuntimeOptions, TuiCatalogDelivery, TuiLocalDisplaySettingsResult
 #include "ava/frontend/FrontEnd.h"
+#include "utils/threading/EventLoop.h"
 #include "utils/threading/aithreadid.h"
 
 #include <array>
 #include <filesystem>
+#include <memory>
 
 namespace ava::tui {
 
@@ -40,11 +42,20 @@ class TuiFrontEnd : public frontend::FrontEnd,
   // Startup presentation/capabilities owned by this frontend; session hydration copies needed values.
   TuiRuntimeOptions options_;
 
+ private:
+  // The event loop of the TUI thread. Created with the frontend so that it exists before run() first waits on it
+  // and after the TUI thread left it, which terminate() relies on. Shared only so that wakeup tokens held by
+  // producers can lock it for the duration of one notification; nothing else owns it.
+  std::shared_ptr<utils::threading::EventLoop> event_loop_;
+
  protected:
   // Construct startup presentation state for one derived application frontend.
   // Construct before a session borrows this owner; terminal initialization
   // happens later in run(), so construction performs no curses work.
-  TuiFrontEnd(TuiRuntimeOptions&& options) : key_bindings_(default_key_bindings()), options_(std::move(options)) { }
+  TuiFrontEnd(TuiRuntimeOptions&& options)
+      : key_bindings_(default_key_bindings()), options_(std::move(options)), event_loop_(std::make_shared<utils::threading::EventLoop>())
+  {
+  }
 
   // Load display settings and append any recoverable startup failure to status_line.
   virtual void load_display_settings(std::string& status_line) = 0;
@@ -207,13 +218,20 @@ class TuiFrontEnd : public frontend::FrontEnd,
   // TUI thread: persist a selected rule before acknowledging it; return the persistence result, leaving validation in the backend.
   virtual core::Result<TuiRememberedPermissionRule> remember_permission_rule(permissions::PermissionPrompt const& prompt,
                                                                              permissions::PermissionAction action) const = 0;
-  // Launch the terminal UI from the startup options owned by this frontend.
-  // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
+  // Launch the terminal UI from the startup options owned by this frontend and run the TUI thread's event loop.
+  // Called on the TUI thread by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
   //
-  // TUI thread: Context initialization precedes session construction; the session
-  // and worker borrows retire before return. The outer guard invokes application
-  // shutdown even when startup or run exits early. Returns the final exit status.
+  // The caller must have checked that stdin and stdout are terminals. This function returns only after
+  // another thread called terminate(); when the TUI wants to stop (or fails, or throws) it calls
+  // core::Application::request_shutdown() and keeps waiting for that. Context initialization precedes
+  // session construction; the session and worker borrows retire before return. Returns the final exit status.
   int run();
+  // Main thread: make run() leave its event loop.
+  //
+  // Blocks until the TUI thread acknowledged the termination; after that it dispatches no more events.
+  // Must not be called from the TUI thread. Calling it before run() started is fine: run() then leaves
+  // its loop at the first wait. Calling it again returns immediately.
+  void terminate() override;
 
   // TUI thread: borrow startup presentation while this frontend lives; workers
   // receive request-local copies instead of sharing this reference.

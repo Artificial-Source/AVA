@@ -1,7 +1,6 @@
-// Implements registry-safe timer dispatch and the final wait stage of a TUI turn.
+// Implements registry-safe timer dispatch for the TUI thread.
 #include "sys.h"
 #include "TuiEventLoop.h"
-#include "TuiWaitState.h"
 
 #include <limits>
 #include <optional>
@@ -12,7 +11,7 @@
 
 namespace ava::tui {
 
-TuiEventLoop::TuiEventLoop(int input_fd) : wait_state_(std::make_shared<TuiWaitState>(input_fd))
+TuiEventLoop::TuiEventLoop(TuiWakeup wakeup) : wakeup_(std::move(wakeup))
 {
 }
 
@@ -70,7 +69,7 @@ void TuiEventLoop::service_due(Clock::time_point now)
 {
   // Do not call service_due from a timer callback; arm it for the next loop turn instead.
   ASSERT(!servicing_due_);
-  if (servicing_due_ || stopped_)
+  if (servicing_due_)
     return;
 
   servicing_due_ = true;
@@ -87,8 +86,6 @@ void TuiEventLoop::service_due(Clock::time_point now)
     }
     for (auto const& [id, generation] : due)
     {
-      if (stopped_)
-        break;
       TuiTimerRegistration::Callback callback;
       {
         // Re-find by ID and generation because an earlier callback may have
@@ -123,52 +120,17 @@ bool TuiEventLoop::has_due_work(Clock::time_point now) const noexcept
   return false;
 }
 
-void TuiEventLoop::wait(TuiWaitMode mode)
+std::optional<TuiEventLoop::Clock::time_point> TuiEventLoop::next_deadline() const noexcept
 {
-  // Do not wait in a timer callback; update feature state or request a frame, then return to TuiSession.
-  ASSERT(!servicing_due_);
-  if (servicing_due_ || stopped_ || terminal_hangup() || terminal_error() || notification_failed())
-    return;
-
+  // Only armed registrations constrain sleep.
   std::optional<Clock::time_point> deadline;
-  if (mode == TuiWaitMode::ReadyOnly)
-    // Even a runnable turn collects readiness so hangup/error and notification
-    // consumption follow the same path as a sleeping turn.
-    deadline = Clock::now();
-  else
+  for (auto const& [id, timer] : timers_)
   {
-    // Only armed registrations constrain sleep. Their callbacks run next turn,
-    // after TuiSession's control stage, rather than inside this OS wait.
-    for (auto const& [id, timer] : timers_)
-    {
-      auto const next = timer.deadline();
-      if (next && (!deadline || *next < *deadline))
-        deadline = next;
-    }
+    auto const next = timer.deadline();
+    if (next && (!deadline || *next < *deadline))
+      deadline = next;
   }
-  // wait consumes coalesced notification bits, not the producer payloads. The
-  // next turn must revisit every application mailbox regardless of wake reason.
-  wait_state_->wait(deadline);
-}
-
-TuiWakeup TuiEventLoop::wakeup() const noexcept
-{
-  return TuiWakeup(wait_state_);
-}
-
-bool TuiEventLoop::terminal_hangup() const noexcept
-{
-  return wait_state_->terminal_hangup();
-}
-
-bool TuiEventLoop::terminal_error() const noexcept
-{
-  return wait_state_->terminal_error();
-}
-
-bool TuiEventLoop::notification_failed() const noexcept
-{
-  return wait_state_->notification_failed();
+  return deadline;
 }
 
 } // namespace ava::tui

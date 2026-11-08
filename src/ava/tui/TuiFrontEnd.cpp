@@ -10,9 +10,9 @@
 #include "ava/core/Application.h"
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
-#include <iostream>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -150,47 +150,93 @@ class TerminalBackgroundDetectionGuard
 int TuiFrontEnd::run()
 {
   DoutEntering(dc::notice, "TuiFrontEnd::run()");
+  using EventLoop = utils::threading::EventLoop;
+  EventLoop& event_loop = *event_loop_;
 
-  // Install the application cleanup obligation before terminal validation or
-  // initialization can fail. Inner session/graphics scopes retire first.
-  RuntimeBeforeShutdownGuard before_shutdown(*this);
-
-  if (!terminal_is_tty())
+  try
   {
-    std::cerr << "interactive TUI requires stdin and stdout to be terminals\n";
-    return 1;
-  }
+    // Install the application cleanup obligation before initialization can fail.
+    // Inner session/graphics scopes retire first.
+    RuntimeBeforeShutdownGuard before_shutdown(*this);
 
-  core::Application& application = core::Application::instance();
-  core::Signals& signals_manager = application.signals_manager();
+    core::Application& application = core::Application::instance();
+    core::Signals& signals_manager = application.signals_manager();
 
 #ifdef CWDEBUG
-  // Uncomment this to open a new terminal with gdb when the TUI thread is started.
-  // application.attach_gdb();
+    // Uncomment this to open a new terminal with gdb when the TUI thread is started.
+    // application.attach_gdb();
 #endif
 
-  // Restore the default disposition so ncurses can install its SIGTSTP handler.
-  // This also unblocks SIGTSTP on this thread; other threads keep it blocked.
-  signals_manager.default_handlers({SIGTSTP});
-  application.initialize_terminal_context();
-  terminal::Context& terminal_context = application.terminal_context();
+    // Restore the default disposition so ncurses can install its SIGTSTP handler.
+    // This also unblocks SIGTSTP on this thread; other threads keep it blocked.
+    signals_manager.default_handlers({SIGTSTP});
+    application.initialize_terminal_context();
+    terminal::Context& terminal_context = application.terminal_context();
 
-  // Activate signal handlers for the TUI (SIGINT is skipped when running inside gdb).
-  signals_manager.activate_handlers({SIGINT, SIGTERM});           // Signals for which we want to call Signals::signal_handler.
-  signals_manager.default_handlers({SIGHUP});
+    // Activate signal handlers for the TUI (SIGINT is skipped when running inside gdb).
+    signals_manager.activate_handlers({SIGINT, SIGTERM});           // Signals for which we want to call Signals::signal_handler.
+    signals_manager.default_handlers({SIGHUP});
 
-  ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
-  // Load effective presentation before applying the cursor or probing the theme.
-  // Otherwise startup uses defaults until a later settings change or repaint.
-  std::string initial_status_line = load_key_bindings();
-  load_display_settings(initial_status_line);
-  terminal_context.apply_cursor_settings(cursor_settings());
-  // Probe the direct terminal background once after enter and before first paint.
-  // No re-probe on suspend/resume and no late theme flip after presentation starts.
-  TerminalBackgroundDetectionGuard terminal_background_detection;
-  maybe_probe_terminal_background_appearance(terminal_context);
-  TuiSession session(*this, terminal_context, initial_status_line);
-  return session.run(std::bind_front(&RuntimeBeforeShutdownGuard::invoke, &before_shutdown));
+    ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
+    // Load effective presentation before applying the cursor or probing the theme.
+    // Otherwise startup uses defaults until a later settings change or repaint.
+    std::string initial_status_line = load_key_bindings();
+    load_display_settings(initial_status_line);
+    terminal_context.apply_cursor_settings(cursor_settings());
+    // Probe the direct terminal background once after enter and before first paint.
+    // No re-probe on suspend/resume and no late theme flip after presentation starts.
+    TerminalBackgroundDetectionGuard terminal_background_detection;
+    maybe_probe_terminal_background_appearance(terminal_context);
+
+    // Register every event before the first wait: the terminal input fd, and one notification
+    // Event that all producers share for now.
+    EventLoop::Event const input_event = event_loop.watch_fd(::fileno(terminal_context.input_stream()), EventLoop::PollEvents::read);
+    TuiWakeup const wakeup(event_loop_, event_loop.watch_event());
+
+    // For now the session handles all three kinds of events.
+    TuiSession session(*this, terminal_context, initial_status_line, wakeup);
+    session.start();
+
+    // The only exit of this loop is a termination requested by the application (see terminate()).
+    for (;;)
+    {
+      if (auto const deadline = session.next_timer_deadline())
+        event_loop.wait_until(*deadline);
+      else
+        event_loop.wait();
+      EventLoop::WaitResult const& result = event_loop.result();
+      if (result.status() == EventLoop::WaitStatus::terminated)
+        break;
+      for (EventLoop::Event const event : result.events())
+      {
+        if (event == input_event)
+          session.terminal_input_ready(result.ready_events(EventLoop::index(event)));
+        else
+          session.notified();
+      }
+      // Not only after a timeout: a deadline can pass while other events are being handled.
+      session.expire_timers(TuiEventLoop::Clock::now());
+      session.flush();
+    }
+
+    return session.shutdown(std::bind_front(&RuntimeBeforeShutdownGuard::invoke, &before_shutdown));
+  }
+  catch (...)
+  {
+    // The main thread blocks in terminate() until this thread acknowledges the termination.
+    // Hence a TUI thread that leaves early must ask for the shutdown and keep waiting until then.
+    core::Application::instance().request_shutdown();
+    do
+      event_loop.wait();
+    while (event_loop.result().status() != EventLoop::WaitStatus::terminated);
+    throw;
+  }
+}
+
+void TuiFrontEnd::terminate()
+{
+  DoutEntering(dc::notice, "TuiFrontEnd::terminate()");
+  event_loop_->terminate();
 }
 
 // TUI thread between dispatch steps: replace the map in place so existing const

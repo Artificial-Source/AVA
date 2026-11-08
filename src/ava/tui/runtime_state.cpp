@@ -264,32 +264,6 @@ void RuntimePresentationState::initialize_startup_overview(TuiFrontEnd const& fr
   refresh_local_overview_hints(snapshot_, frontend);
 }
 
-void close_startup_overview_presentation(RuntimePresentationState& presentation, SelectorHost& selectors)
-{
-  if (selectors.kind() != ActiveSelectList::Overview)
-    return;
-  selectors.close();
-  presentation.clear_startup_overview();
-}
-
-void synchronize_startup_overview_presentation(RuntimePresentationState& presentation, SelectorHost& selectors)
-{
-  if (selectors.kind() != ActiveSelectList::Overview)
-    return;
-  if (!presentation.screen().startup_overview)
-  {
-    close_startup_overview_presentation(presentation, selectors);
-    return;
-  }
-  // Rebuild from the popup-local DTO while preserving safe local filter/selection identity.
-  auto query = selectors.view() ? selectors.view()->query : std::string{};
-  auto selected = selectors.view() ? selectors.view()->selected_item_index : std::size_t{0};
-  auto view = overview_select_list_view(*presentation.screen().startup_overview);
-  view.query = std::move(query);
-  view.selected_item_index = clamp_select_list_selection(view, selected);
-  selectors.replace(std::move(view));
-}
-
 void RuntimePresentationState::reset_session_projection(bool close_overview)
 {
   snapshot_.transcript.clear();
@@ -423,6 +397,22 @@ void RuntimePresentationState::publish_plugin_modal(std::optional<TuiPluginUiMod
 {
   snapshot_.plugin_ui_modal = std::move(modal);
 }
+
+bool RuntimePresentationState::clear_plugin_surface(std::optional<TuiPluginUiBinding> const& binding)
+{
+  bool changed = false;
+  if (!binding || (snapshot_.plugin_ui_dock && snapshot_.plugin_ui_dock->binding == *binding))
+  {
+    changed = changed || snapshot_.plugin_ui_dock.has_value();
+    publish_plugin_dock(std::nullopt);
+  }
+  if (!binding || (snapshot_.plugin_ui_modal && snapshot_.plugin_ui_modal->binding == *binding))
+  {
+    changed = changed || snapshot_.plugin_ui_modal.has_value();
+    publish_plugin_modal(std::nullopt);
+  }
+  return changed;
+}
 void RuntimePresentationState::publish_plugin_selection(std::size_t selected)
 {
   // Publish a modal before selecting one of its validated options.
@@ -496,7 +486,7 @@ void RuntimePresentationState::publish_display_preview(runtime_views::DisplayPre
 }
 void RuntimePresentationState::reapply_display_preview(runtime_views::DisplayPreviewTransaction& preview)
 {
-  runtime_views::reapply_settings_preview_after_display_reload(preview, snapshot_);
+  preview.reapply_after_display_reload(snapshot_);
 }
 void RuntimePresentationState::publish_project_trust(std::optional<ProjectTrustSnapshot> trust)
 {

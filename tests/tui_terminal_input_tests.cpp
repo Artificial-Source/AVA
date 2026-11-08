@@ -1,5 +1,6 @@
 // Exercises terminal decoding, startup replay and real PTY input without changing terminal ownership.
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "support/tui_test_support.h"
@@ -1844,18 +1845,19 @@ ava::tui::runtime_input::InputPollResult wait_for_decoded_input(std::chrono::mil
   if (input.kind == runtime_input::InputPollKind::Input)
     return input;
   auto& terminal_context = ava::core::Application::instance().terminal_context();
-  TuiEventLoop loop(::fileno(terminal_context.input_stream()));
+  tui_test_support::TuiEventLoopFixture event_loop(::fileno(terminal_context.input_stream()));
+  TuiEventLoop& loop = event_loop.loop();
   InputReadDeadline expired;
   auto timer = loop.member_timer(expired, &InputReadDeadline::expire);
   timer.arm_at(deadline);
-  while (!expired.expired() && !loop.terminal_hangup() && !loop.terminal_error() && !loop.notification_failed())
+  while (!expired.expired() && !event_loop.terminal_hangup() && !event_loop.terminal_error())
   {
     loop.service_due();
     if (expired.expired())
       break;
     if (input.kind == runtime_input::InputPollKind::Empty)
-      loop.wait(TuiWaitMode::Block);
-    if (loop.terminal_hangup() || loop.terminal_error() || loop.notification_failed())
+      event_loop.wait();
+    if (event_loop.terminal_hangup() || event_loop.terminal_error())
       break;
     input = runtime_input::poll_curses_input();
     if (input.kind == runtime_input::InputPollKind::Input)

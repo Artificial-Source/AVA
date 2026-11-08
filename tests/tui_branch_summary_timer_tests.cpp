@@ -11,19 +11,14 @@
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/terminal/Context.h"
 #include "ava/core/Application.h"
-#include "ava/core/UniqueFd.h"
 
-#include <array>
-#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
-#include <unistd.h>
 
 namespace {
 
@@ -69,15 +64,14 @@ struct SummaryBackendFixture
 };
 
 // Own offline hooks and real TUI owners on one thread. Reverse destruction retires
-// summary and renderer timers before the loop, pipe descriptors and hook captures.
+// summary and renderer timers before the loop and hook captures.
 class SummaryTimerFixture final
 {
  public:
   // Establish borrowed dependencies before registering callbacks; the common
   // runner owns the initialized process terminal for this fixture's lifetime.
   SummaryTimerFixture()
-      : descriptors_(open_pipe()),
-        loop_(descriptors_.first.get()),
+      : loop_(ava::tui::TuiWakeup{}),
         presentation_(frontend_.frontend(), {}),
         renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
@@ -128,21 +122,10 @@ class SummaryTimerFixture final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Own a valid readiness source through loop destruction; no pipe traffic is needed.
-  static std::pair<ava::core::UniqueFd, ava::core::UniqueFd> open_pipe()
-  {
-    std::array<int, 2> descriptors{-1, -1};
-    if (::pipe(descriptors.data()) != 0)
-      throw std::system_error(errno, std::generic_category(), "create summary timer fixture pipe");
-    return {ava::core::UniqueFd(descriptors[0]), ava::core::UniqueFd(descriptors[1])};
-  }
-
   // Keep controlled publications and counters alive until frontend hooks are destroyed.
   SummaryBackendFixture backend_;
   // Own the registered offline frontend until every TUI borrower retires.
   tui_test_support::TuiFrontEndFixture frontend_;
-  // Keep the loop's input descriptor and its peer valid for the loop's whole lifetime.
-  std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors_;
   // Outlive every timer registration, including the renderer's frame callbacks.
   ava::tui::TuiEventLoop loop_;
   // Own the screen projection read by selector and frame assertions.

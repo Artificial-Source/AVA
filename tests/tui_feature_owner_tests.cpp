@@ -12,18 +12,14 @@
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/core/Application.h"
-#include "ava/core/UniqueFd.h"
 
 #include <array>
-#include <cerrno>
 #include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <variant>
-#include <unistd.h>
 
 namespace {
 
@@ -42,8 +38,7 @@ class FeatureOwnerFixture final
   // Construct every borrowed dependency before attaching renderer and summary
   // timers. All methods and returned references are used on this test thread.
   FeatureOwnerFixture()
-      : descriptors_(open_pipe()),
-        loop_(descriptors_.first.get()),
+      : loop_(ava::tui::TuiWakeup{}),
         presentation_(frontend_.frontend(), {}),
         renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
@@ -72,20 +67,8 @@ class FeatureOwnerFixture final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // Allocate an epoll-compatible descriptor without relying on the terminal's
-  // regular input file. Both ends stay open until after loop destruction.
-  static std::pair<ava::core::UniqueFd, ava::core::UniqueFd> open_pipe()
-  {
-    std::array<int, 2> descriptors{-1, -1};
-    if (::pipe(descriptors.data()) != 0)
-      throw std::system_error(errno, std::generic_category(), "create feature owner event loop pipe");
-    return {ava::core::UniqueFd(descriptors[0]), ava::core::UniqueFd(descriptors[1])};
-  }
-
   // Own registered offline backend data until all dependent owners are gone.
   tui_test_support::TuiFrontEndFixture frontend_;
-  // Keep both readiness endpoints alive for the TUI-thread loop's lifetime.
-  std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors_;
   // Own timer registrations after dependencies attach and before they retire.
   ava::tui::TuiEventLoop loop_;
   // Own the projection; feature owners publish only through named operations.

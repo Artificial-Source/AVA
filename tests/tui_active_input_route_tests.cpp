@@ -1,5 +1,6 @@
 // Protect active-turn binding precedence through the real dispatcher and production owners.
 #include "sys.h"
+#include "tests/support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "tests/support/tui_test_support.h"
@@ -235,7 +236,8 @@ void run_tui_active_input_route_tests()
   auto& terminal_context = ava::core::Application::instance().terminal_context();
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
   auto descriptors = make_active_input_pipe();
-  ava::tui::TuiEventLoop loop(descriptors.first.get());
+  tui_test_support::TuiEventLoopFixture event_loop(descriptors.first.get());
+  ava::tui::TuiEventLoop& loop = event_loop.loop();
   std::vector<std::string> follow_ups;
   std::promise<void> finish_run;
   auto run_release = finish_run.get_future().share();

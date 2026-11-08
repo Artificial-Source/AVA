@@ -1,5 +1,6 @@
 // Exercise TUI owner interactions and rendered prompt, selector and transcript behavior.
 #include "sys.h"
+#include "support/TuiEventLoopFixture.h"
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
@@ -77,31 +78,8 @@ namespace {
 
 // The ordinary composer suite uses a regular input file for ncurses. A real
 // pipe supplies the event loop's readiness descriptor without reading that file.
-class EventLoopFixture final
-{
- public:
-  // Test thread: open descriptors before the loop begins borrowing the read end.
-  EventLoopFixture() : descriptors_(open_pipe()), loop_(descriptors_.first.get()) { }
-  // Test thread: use the real scheduler while this fixture owns its OS input.
-  [[nodiscard]] ava::tui::TuiEventLoop& loop() { return loop_; }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  // Create owned readiness descriptors, failing before a partially usable fixture escapes.
-  static std::pair<ava::core::UniqueFd, ava::core::UniqueFd> open_pipe()
-  {
-    std::array<int, 2> descriptors{-1, -1};
-    if (::pipe(descriptors.data()) != 0)
-      throw std::system_error(errno, std::generic_category(), "create active fixture event loop pipe");
-    return {ava::core::UniqueFd(descriptors[0]), ava::core::UniqueFd(descriptors[1])};
-  }
-
-  // Test-thread OS resources; declaration order keeps them alive through loop destruction.
-  std::pair<ava::core::UniqueFd, ava::core::UniqueFd> descriptors_;
-  // Test-thread scheduler borrowed by feature owners; they retire before this fixture.
-  ava::tui::TuiEventLoop loop_;
-};
+using EventLoopFixture = tui_test_support::TuiEventLoopFixture;
+using LoopWait = EventLoopFixture::Wait;
 
 // Stack-owned timeout target for a bounded event-loop wait on the test thread.
 // Declare its timer afterward so the registration retires before this target.
@@ -115,30 +93,31 @@ struct LoopWaitDeadline
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// A stopped or failed loop cannot dispatch the fallback timer. Treat that as
-// failure immediately rather than spinning on wait(), which would return at once.
-bool loop_wait_failed(ava::tui::TuiEventLoop const& loop)
+// A failed input descriptor stays ready forever. Treat that as failure
+// immediately rather than spinning on wait(), which would return at once.
+bool loop_wait_failed(EventLoopFixture const& event_loop)
 {
-  return loop.stopped() || loop.terminal_hangup() || loop.terminal_error() || loop.notification_failed();
+  return event_loop.terminal_hangup() || event_loop.terminal_error();
 }
 
 // Wait for worker publication without claiming the request. The caller retains
 // ownership of the next input event and decides when to display the prompt.
-bool wait_for_pending_prompt(ava::tui::RuntimePromptCoordinator& coordinator, ava::tui::TuiEventLoop& loop)
+bool wait_for_pending_prompt(ava::tui::RuntimePromptCoordinator& coordinator, EventLoopFixture& event_loop)
 {
+  auto& loop = event_loop.loop();
   LoopWaitDeadline deadline;
   auto timeout = loop.member_timer(deadline, &LoopWaitDeadline::expire);
   timeout.arm_at(ava::tests::now_plus_seconds(2));
   // Publication unlocks the queue before notifying. Recheck after every wake;
   // consuming a wake does not remove the pending request or claim its input.
-  while (!coordinator.has_pending_requests() && !deadline.expired && !loop_wait_failed(loop))
+  while (!coordinator.has_pending_requests() && !deadline.expired && !loop_wait_failed(event_loop))
   {
     loop.service_due();
-    if (coordinator.has_pending_requests() || deadline.expired || loop_wait_failed(loop))
+    if (coordinator.has_pending_requests() || deadline.expired || loop_wait_failed(event_loop))
       break;
-    loop.wait(ava::tui::TuiWaitMode::Block);
+    event_loop.wait(LoopWait::Block);
   }
-  return coordinator.has_pending_requests() && !loop_wait_failed(loop);
+  return coordinator.has_pending_requests() && !loop_wait_failed(event_loop);
 }
 
 // Call only after releasing the worker's gates and canceling its request owners.
@@ -156,12 +135,13 @@ Value join_released_worker(std::future<Value>& worker, char const* label)
 
 // Normal submissions retire in the same complete() call that consumes their
 // published result. Real notifications/timers drive retries instead of a spin.
-std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, ava::tui::TuiEventLoop& loop)
+std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, EventLoopFixture& event_loop)
 {
+  auto& loop = event_loop.loop();
   LoopWaitDeadline deadline;
   auto timeout = loop.member_timer(deadline, &LoopWaitDeadline::expire);
   timeout.arm_at(ava::tests::now_plus_seconds(2));
-  while (!deadline.expired && !loop_wait_failed(loop))
+  while (!deadline.expired && !loop_wait_failed(event_loop))
   {
     loop.service_due();
     if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
@@ -174,12 +154,12 @@ std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui:
       expect(!active_run.active(), "completed submission retires its operation before returning the outcome");
       return outcome;
     }
-    if (deadline.expired || loop_wait_failed(loop))
+    if (deadline.expired || loop_wait_failed(event_loop))
       break;
     // A bounded consume may leave a real inbox backlog. Keep that work runnable;
     // otherwise wait for its producer or the next timer, including the fallback.
     bool const pending = active_run.has_pending_updates() || loop.has_due_work();
-    loop.wait(pending ? ava::tui::TuiWaitMode::ReadyOnly : ava::tui::TuiWaitMode::Block);
+    event_loop.wait(pending ? LoopWait::ReadyOnly : LoopWait::Block);
   }
   active_run.shutdown();
   expect(false, "active fixture submission completes through bounded consume/complete servicing");
@@ -315,13 +295,13 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   LoopWaitDeadline deadline;
   auto timeout = event_loop.loop().member_timer(deadline, &LoopWaitDeadline::expire);
   timeout.arm_at(ava::tests::now_plus_seconds(2));
-  event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
+  event_loop.wait(LoopWait::Block);
   event_loop.loop().service_due();
   timeout.cancel();
   auto const flushed = renderer.paint_ready_frame();
   auto const after_flush = controller.diagnostics();
   auto const scheduled_render_passed =
-      scheduled && !deadline.expired && !loop_wait_failed(event_loop.loop()) && flushed && !renderer.render_failed() &&
+      scheduled && !deadline.expired && !loop_wait_failed(event_loop) && flushed && !renderer.render_failed() &&
       renderer.prepared_transcript_layout().layout_build_count == full_layout_builds && renderer.prepared_transcript_layout().width == 141 &&
       renderer.transcript().has_deferred_update() && after_flush.authoritative_mutation_item_render_count == after.authoritative_mutation_item_render_count &&
       after_flush.projection_build_count == after.projection_build_count && after_flush.layout_position_visit_count == after.layout_position_visit_count &&
@@ -720,7 +700,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   if (!ava::tests::require(submitted.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && active_run.active(),
                            "start the old-session active submission"))
     return false;
-  auto const outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const outcome = complete_active_run_for_test(active_run, event_loop);
   if (!outcome)
     return false;
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
@@ -742,7 +722,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
     return false;
   draft_state.replace_draft("retained draft", 14);
   // Do not consume here: retained input must perform the claim itself.
-  bool const prompt_published = wait_for_pending_prompt(prompt_coordinator, event_loop.loop());
+  bool const prompt_published = wait_for_pending_prompt(prompt_coordinator, event_loop);
   if (!prompt_published)
   {
     active_run.shutdown();
@@ -755,7 +735,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   retained_key.text = "x";
   bool const retained_handled = active_input.dispatch(retained_key) == ava::tui::TuiInputOutcome::Handled;
   bool const retained_draft_unchanged = draft_state.draft().text == "retained draft" && draft_state.draft().cursor == 14;
-  auto const prompt_outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const prompt_outcome = complete_active_run_for_test(active_run, event_loop);
   bool const retained_input_discarded = prompt_outcome && !prompt_outcome->break_loop() && !prompt_outcome->terminal_write_failed() && retained_handled &&
                                         retained_draft_unchanged && retained_prompt_answered;
   expect(retained_input_discarded, "ordinary retained input keeps the second prompt check and discards the event when that check claims a prompt");
@@ -764,7 +744,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   frontend.seed_committed_todos({{.id = "quit-hidden", .content = "QUIT MUST NOT REFRESH", .status = ava::agent::TodoStatus::Pending}});
   if (!ava::tests::require(active_run.start("/exit"), "start a subsequent quit submission on the same active owner"))
     return false;
-  auto const quit_outcome = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const quit_outcome = complete_active_run_for_test(active_run, event_loop);
   expect(quit_outcome && quit_outcome->break_loop() && !quit_outcome->terminal_write_failed() && presentation.sidebar().todos.size() == 1 &&
              presentation.sidebar().todos.front().id == "new-todo",
          "quit completion performs no catalog or committed todo pull");
@@ -886,7 +866,7 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       // Close admission before this future is destroyed. A late resolver must
       // receive cancellation rather than enqueue a new wait during unwinding.
       auto cancel_prompt = at_scope_end([coordinator = &prompt_coordinator] { coordinator->shutdown(); });
-      expect(wait_for_pending_prompt(prompt_coordinator, event_loop.loop()), "host prompt is published before servicing");
+      expect(wait_for_pending_prompt(prompt_coordinator, event_loop), "host prompt is published before servicing");
       static_cast<void>(active_run.consume());
       bool const active = prompt_coordinator.has_active();
       // A prompt freezes both animation and event projection until it retires.
@@ -984,7 +964,7 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
   loop.service_due(setup_deadline + std::chrono::seconds(1));
   if (!ava::tests::require(renderer.paint_for_handoff(), "clear setup frame before measuring notifications"))
     return false;
-  loop.wait(ava::tui::TuiWaitMode::ReadyOnly);
+  event_loop.wait(LoopWait::ReadyOnly);
   LoopWaitDeadline fallback;
   auto timeout = loop.member_timer(fallback, &LoopWaitDeadline::expire);
   timeout.arm_at(setup_deadline);
@@ -1006,10 +986,10 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
   auto cancel_prompt = at_scope_end([owner = &prompts] { owner->shutdown(); });
   // Queue visibility alone is insufficient: a worker can be paused before notify.
   // This unconditional wait consumes the sole host-enqueue notification first.
-  loop.wait(ava::tui::TuiWaitMode::Block);
+  event_loop.wait(LoopWait::Block);
   loop.service_due();
   timeout.cancel();
-  if (!ava::tests::require(!fallback.expired && !loop_wait_failed(loop) && prompts.has_pending_requests(),
+  if (!ava::tests::require(!fallback.expired && !loop_wait_failed(event_loop) && prompts.has_pending_requests(),
                            "host enqueue wakes setup before any timer and leaves its request pending"))
     return false;
   static_cast<void>(active_run.consume());
@@ -1036,7 +1016,7 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
     return false;
   // The enqueue observer runs after notify. Drain it now, while the host prompt
   // still prevents consume from polling the plugin or restarting the spinner.
-  loop.wait(ava::tui::TuiWaitMode::ReadyOnly);
+  event_loop.wait(LoopWait::ReadyOnly);
   static_cast<void>(active_run.consume());
   if (!ava::tests::require(prompts.has_active() && !presentation.screen().plugin_ui_modal && !active_run.has_pending_updates(),
                            "host prompt holds plugin presentation without other runnable work"))
@@ -1052,10 +1032,10 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
     return false;
   // Do not manually consume, notify, or finish the provider here. Only prompt
   // completion should wake this wait; falling through to the watchdog is failure.
-  loop.wait(ava::tui::TuiWaitMode::Block);
+  event_loop.wait(LoopWait::Block);
   loop.service_due();
   timeout.cancel();
-  bool const woke = !fallback.expired && !loop_wait_failed(loop);
+  bool const woke = !fallback.expired && !loop_wait_failed(event_loop);
   expect(woke, "answering a host prompt wakes the loop before the fallback timer");
   static_cast<void>(active_run.consume());
   bool const displayed = presentation.screen().plugin_ui_modal && presentation.screen().plugin_ui_modal->request_id == "wake-deferred-modal";
@@ -1112,7 +1092,7 @@ bool test_attached_prompt_render_failure_returns_io()
           return !result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to render question prompt";
         });
     auto cancel_prompt = at_scope_end([owner = &coordinator] { owner->shutdown(); });
-    expect(wait_for_pending_prompt(coordinator, event_loop.loop()), "paint-failure prompt is published before servicing");
+    expect(wait_for_pending_prompt(coordinator, event_loop), "paint-failure prompt is published before servicing");
     auto const started = coordinator.start_pending();
     bool const projected = permission ? snapshot.permission_prompt.has_value() : snapshot.question_prompt.has_value();
     // Exercise the end-of-batch failure notification directly: this does not inject an actual terminal write failure.
@@ -1160,7 +1140,7 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
           return answer.has_value();
         });
     auto cancel_prompt = at_scope_end([owner = &coordinator] { owner->shutdown(); });
-    expect(wait_for_pending_prompt(coordinator, event_loop.loop()), "automatic question is published before servicing");
+    expect(wait_for_pending_prompt(coordinator, event_loop), "automatic question is published before servicing");
     bool caught = false;
     try
     {
@@ -1261,7 +1241,7 @@ bool test_atomic_search_input_prompt_precedence()
       dispatch_returned = true;
     }
     changed.notify_all();
-    bool const published = wait_for_pending_prompt(coordinator, event_loop.loop());
+    bool const published = wait_for_pending_prompt(coordinator, event_loop);
     bool queued_attempt_dispatched = false;
     auto const queued = coordinator.dispatch_search_input_with_prompt_precedence(
         [&]() {
@@ -1278,13 +1258,13 @@ bool test_atomic_search_input_prompt_precedence()
     LoopWaitDeadline deadline;
     auto timeout = event_loop.loop().member_timer(deadline, &LoopWaitDeadline::expire);
     timeout.arm_at(ava::tests::now_plus_seconds(1));
-    while (coordinator.has_active() && !deadline.expired && !loop_wait_failed(event_loop.loop()))
+    while (coordinator.has_active() && !deadline.expired && !loop_wait_failed(event_loop))
     {
       event_loop.loop().service_due();
       static_cast<void>(coordinator.service());
-      if (!coordinator.has_active() || deadline.expired || loop_wait_failed(event_loop.loop()))
+      if (!coordinator.has_active() || deadline.expired || loop_wait_failed(event_loop))
         break;
-      event_loop.loop().wait(ava::tui::TuiWaitMode::Block);
+      event_loop.wait(LoopWait::Block);
     }
     timeout.cancel();
     if (coordinator.has_active())
@@ -1331,7 +1311,7 @@ bool test_atomic_search_input_prompt_precedence()
     owner->fail_pending_requests();
     static_cast<void>(owner->cancel_active(ava::tui::PromptCancelReason::RunStop));
   });
-  bool const permission_published = wait_for_pending_prompt(coordinator, event_loop.loop());
+  bool const permission_published = wait_for_pending_prompt(coordinator, event_loop);
   auto const started = permission_published ? coordinator.start_pending() : ava::tui::PromptServiceOutcome::None;
   auto const escape =
       ava::tui::runtime_input::RuntimeInput{.event = {.key = ava::tui::terminal::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
@@ -1864,7 +1844,6 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 
   using ava::tui::runtime_views::DisplayPresentationBaseline;
   using ava::tui::runtime_views::DisplayPreviewTransaction;
-  using ava::tui::runtime_views::reapply_settings_preview_after_display_reload;
   using ava::tui::runtime_views::settings_preview_overlay_for_action;
 
   DisplayPreviewTransaction preview;
@@ -2262,12 +2241,12 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   presentation.initialize_startup_overview(*frontend.frontend(), frontend.frontend()->read_startup_overview());
 
   auto const models = submit_controller.submit(std::string("/reload models"));
-  auto const models_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const models_completion = complete_active_run_for_test(active_run, event_loop);
   bool const models_ok = continued(models) && models_completion && !models_completion->break_loop() && !models_completion->terminal_write_failed() &&
                          backend_submissions == std::vector<std::string>{"/reload models"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
 
   auto const malformed = submit_controller.submit(std::string("/reload no-such"));
-  auto const malformed_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const malformed_completion = complete_active_run_for_test(active_run, event_loop);
   bool const malformed_ok =
       continued(malformed) && malformed_completion && !malformed_completion->break_loop() && !malformed_completion->terminal_write_failed() &&
       backend_submissions == std::vector<std::string>{"/reload models", "/reload no-such"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
@@ -2299,7 +2278,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
                               local_help_updated && overview_hint_updated;
 
   auto const help = submit_controller.submit(std::string("/help"));
-  auto const help_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const help_completion = complete_active_run_for_test(active_run, event_loop);
   bool const backend_help_uses_request_copy = continued(help) && help_completion && !help_completion->break_loop() &&
                                               !help_completion->terminal_write_failed() && backend_submissions.size() == 3 &&
                                               backend_submissions.back() == "/help" && submitted_request_mode_keys.back() == "Alt+Y";
@@ -2309,7 +2288,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
                        catalog_delivery_reads == 4 && presentation.screen().status == "keybindings reloaded";
 
   auto const trust = submit_controller.submit(std::string("/trust"));
-  auto const trust_completion = complete_active_run_for_test(active_run, event_loop.loop());
+  auto const trust_completion = complete_active_run_for_test(active_run, event_loop);
   bool const trust_catalog_refreshed = continued(trust) && trust_completion && !trust_completion->break_loop() && !trust_completion->terminal_write_failed() &&
                                        trust_action_committed && catalog_delivery_reads == 5 &&
                                        std::ranges::any_of(presentation.screen().slash_commands, [](auto const& item) { return item.command == "/help"; });
@@ -2489,25 +2468,17 @@ void run_tui_composer_rendering_tests_part_1()
     using Clock = ava::tui::WheelBurstGovernor::Clock;
     auto const started_at = Clock::time_point{};
     ava::tui::WheelBurstGovernor governor;
-    auto const first_up = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at);
-    auto const same_direction_at_16 =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
-    auto const same_direction_at_39 =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
-    auto const same_direction_at_40 =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
-    auto const reverse_immediate =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
-    auto const same_reverse_within_window =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(56));
-    auto const same_reverse_at_interval =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(80));
-    auto const keyboard = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::ArrowDown, started_at + std::chrono::milliseconds(81));
-    auto const accepted_after_non_wheel =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(81));
+    auto const first_up = governor.accept_input(ava::tui::terminal::Key::MouseWheelUp, started_at);
+    auto const same_direction_at_16 = governor.accept_input(ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
+    auto const same_direction_at_39 = governor.accept_input(ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
+    auto const same_direction_at_40 = governor.accept_input(ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
+    auto const reverse_immediate = governor.accept_input(ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
+    auto const same_reverse_within_window = governor.accept_input(ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(56));
+    auto const same_reverse_at_interval = governor.accept_input(ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(80));
+    auto const keyboard = governor.accept_input(ava::tui::terminal::Key::ArrowDown, started_at + std::chrono::milliseconds(81));
+    auto const accepted_after_non_wheel = governor.accept_input(ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(81));
     governor.reset();
-    auto const accepted_after_explicit_reset =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(81));
+    auto const accepted_after_explicit_reset = governor.accept_input(ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(81));
     expect(
         ava::tui::kTranscriptWheelScrollRows == 3 && first_up && !same_direction_at_16 && !same_direction_at_39 && same_direction_at_40 && reverse_immediate &&
             !same_reverse_within_window && same_reverse_at_interval && keyboard && accepted_after_non_wheel && accepted_after_explicit_reset,
@@ -5088,7 +5059,7 @@ void run_tui_composer_rendering_tests_part_4()
              "ordinary backend refreshes preserve an open popup-local overview and its query identity");
 
       // Competing authority / explicit close.
-      ava::tui::close_startup_overview_presentation(presentation, active);
+      active.close_startup_overview();
       expect(active.kind() == ava::tui::ActiveSelectList::None && !presentation.screen().select_list,
              "prompt/competing authority closes ActiveSelectList::Overview and clears the select-list");
 

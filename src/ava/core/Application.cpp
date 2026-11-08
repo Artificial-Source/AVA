@@ -84,6 +84,22 @@ Application::~Application() noexcept
 #endif
 }
 
+void Application::request_shutdown()
+{
+  DoutEntering(dc::notice, "core::Application::request_shutdown()");
+  {
+    std::lock_guard lock(shutdown_mutex_);
+    shutdown_requested_ = true;
+  }
+  shutdown_cv_.notify_all();
+}
+
+void Application::wait_for_shutdown_request()
+{
+  std::unique_lock lock(shutdown_mutex_);
+  shutdown_cv_.wait(lock, [this] { return shutdown_requested_; });
+}
+
 #ifdef CWDEBUG
 void Application::attach_gdb()
 {

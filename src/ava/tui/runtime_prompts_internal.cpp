@@ -668,7 +668,7 @@ PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedProm
     // Overview closes even when the new request resolves automatically. Other
     // competing selectors retain their later visible-prompt closing policy.
     if (selectors_)
-      close_startup_overview_presentation(presentation_, *selectors_);
+      selectors_->close_startup_overview();
     if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&active_request_))
     {
       if (auto result = start_permission_prompt((*permission)->prompt()))
@@ -773,7 +773,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
       wheel_suppression_deadline_.reset();
       wheel_expiry_timer_.cancel();
     }
-    if (!runtime_wheel_input_accepted(wheel_governor_, key))
+    if (!wheel_governor_.accept_input(key))
       return PromptServiceOutcome::Active;
     if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_))
       return handle_permission_input(input);

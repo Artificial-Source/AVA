@@ -104,7 +104,7 @@ void run_tui_mermaid_missing_notifier_test()
   tui_test_support::TuiFrontEndFixture frontend;
   frontend.hooks().mermaid_bridge = [] { return ava::tui::TuiMermaidRenderBridge{}; };
   {
-    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+    ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "", ava::tui::TuiWakeup{});
   }
   marker("R11_EMPTY_BRIDGE_OK\n");
 
@@ -115,7 +115,7 @@ void run_tui_mermaid_missing_notifier_test()
     return bridge;
   };
   marker("R11_MISSING_NOTIFIER_ATTACH\n");
-  ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "");
+  ava::tui::TuiSession session(*frontend.frontend(), ava::core::Application::instance().terminal_context(), "", ava::tui::TuiWakeup{});
   marker("R11_MISSING_NOTIFIER_RETURNED\n");
   expect(false, "attaching a nonempty Mermaid bridge without a completion notifier must assert");
 }

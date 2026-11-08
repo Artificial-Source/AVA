@@ -145,15 +145,16 @@ struct DisplayPreviewTransaction
   void apply_theme_overlay() const;
   // Remove the temporary theme without changing the retained baseline or candidate.
   void clear_theme_overlay() const;
+  // After an applied external display reload: rebase on the settings now in snapshot and reapply the candidate onto it.
+  //
+  // Always replaces the applied-settings baseline from the hydrated snapshot. A staged candidate is refreshed
+  // when its action token still resolves against app-delivered options; otherwise the last-known-good overlay
+  // is kept. Finally applies the image overlay onto snapshot. Never infers applied state from value equality.
+  void reapply_after_display_reload(ComposerSnapshot& snapshot);
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// After an applied external display reload: always replace the applied-settings baseline from
-// the hydrated snapshot, refresh a staged candidate when the action token still resolves
-// against app-delivered options, otherwise keep last-known-good overlay bytes, then apply
-// the image overlay onto snapshot. Never infers applied state from value equality.
-void reapply_settings_preview_after_display_reload(DisplayPreviewTransaction& preview, ComposerSnapshot& snapshot);
 // After Display rows are rebuilt (for example on applied reload), restore selection by exact
 // hidden action value rather than a stale numeric index. Prefer the pre-rebuild selected
 // actionable value; if absent, prefer the staged overlay action when that row still exists;

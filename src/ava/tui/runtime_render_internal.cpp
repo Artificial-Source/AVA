@@ -41,14 +41,14 @@ void WheelBurstGovernor::reset()
   last_accepted_direction_.reset();
 }
 
-bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, terminal::Key key, WheelBurstGovernor::Clock::time_point now)
+bool WheelBurstGovernor::accept_input(terminal::Key key, Clock::time_point now)
 {
   using Key = terminal::Key;
   if (key == Key::MouseWheelUp)
-    return governor.accept(WheelDirection::Up, now);
+    return accept(WheelDirection::Up, now);
   if (key == Key::MouseWheelDown)
-    return governor.accept(WheelDirection::Down, now);
-  governor.reset();
+    return accept(WheelDirection::Down, now);
+  reset();
   return true;
 }
 
@@ -253,7 +253,7 @@ void RuntimeRenderer::reset_wheel_input()
 }
 bool RuntimeRenderer::accept_wheel_input(terminal::Key key, WheelBurstGovernor::Clock::time_point now)
 {
-  return runtime_wheel_input_accepted(wheel_governor_, key, now);
+  return wheel_governor_.accept_input(key, now);
 }
 std::size_t RuntimeRenderer::prepare_transcript_layout()
 {

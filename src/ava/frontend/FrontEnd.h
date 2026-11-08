@@ -48,6 +48,12 @@ class FrontEnd
  public:
   virtual ~FrontEnd() = default;
 
+  // Main thread, during application shutdown: stop the frontend's event processing.
+  //
+  // Blocks until the frontend thread acknowledged that it no longer dispatches events.
+  // Must not be called from the frontend's own thread.
+  virtual void terminate() = 0;
+
   // Register a Data (derived) object.
   DataListIndex register_data(Data const* data);
 

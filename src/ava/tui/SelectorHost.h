@@ -5,6 +5,10 @@
 #include "SelectorDispatchResult.h"
 #include "runtime_state_internal.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/result.h"
+
+#include <functional>
+#include <string>
 
 namespace ava::tui {
 
@@ -55,6 +59,23 @@ class SelectorHost final
   // TUI thread: retire the published view and kind. Feature-specific preview cleanup
   // belongs to the caller; close alone does not notify a previous feature owner.
   void close();
+  // TUI thread: close the selector and show pending_status, then call render and, if that succeeded, callback.
+  //
+  // render must perform the handoff paint, not merely request a frame, because callback may block on a
+  // synchronous model/session action. A failed render is published and returned as an I/O error without
+  // calling callback. Otherwise the result of callback is returned and any error is published; the caller
+  // applies success. Both callables are borrowed only for this call.
+  [[nodiscard]] core::Result<std::string> dispatch_authority(std::string pending_status, std::function<bool()> const& render,
+                                                             std::function<core::Result<std::string>()> const& callback);
+  // TUI thread: close an open startup overview selector and clear the overview from presentation.
+  //
+  // Does nothing when another kind of selector (or none) is open; used when a competing view opens.
+  void close_startup_overview();
+  // TUI thread after local hint/display changes: rebuild the rows of an open startup overview.
+  //
+  // Preserves the filter query and the selected row (clamped to the new rows). Closes the overview instead
+  // when presentation no longer holds overview facts. Does nothing when no overview selector is open.
+  void synchronize_startup_overview();
   // TUI thread: publish selection/query for an open view without copying its row vector.
   void update_selection(std::size_t index, std::string query);
   // TUI thread: set the open selector's subtitle; closed views ignore this feedback.

@@ -53,6 +53,10 @@ class WheelBurstGovernor final
   // TUI thread: drop same-direction events inside the interval without extending it; accept a reversal
   // immediately and retain its direction/time as the new baseline.
   [[nodiscard]] bool accept(WheelDirection direction, Clock::time_point now = Clock::now());
+  // TUI thread: throttle wheel key input at time now as accept() does; any other key resets the burst history.
+  //
+  // Returns true when key should be processed: always for non-wheel keys.
+  [[nodiscard]] bool accept_input(terminal::Key key, Clock::time_point now = Clock::now());
   // TUI thread: discard burst history after non-wheel input or session transition so the next wheel is
   // accepted.
   void reset();
@@ -65,11 +69,6 @@ class WheelBurstGovernor final
   // TUI-thread direction paired with last_accepted_at_; an opposite report is accepted immediately.
   std::optional<WheelDirection> last_accepted_direction_ = std::nullopt;
 };
-
-// TUI thread: throttle wheel keys through the borrowed governor; any other key resets burst history and passes
-// through.
-[[nodiscard]] bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, terminal::Key key,
-                                                WheelBurstGovernor::Clock::time_point now = WheelBurstGovernor::Clock::now());
 
 // TUI-thread invalidation strength; Full supersedes Footer when requests coalesce.
 enum class FrameRenderKind

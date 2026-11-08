@@ -34,7 +34,7 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  int status = ava::app::run(argc, argv, *application_process_scope);
+  int status = application.run(argc, argv, *application_process_scope);
 
   supervisor->stop_accepting();
   auto const cleanup = supervisor->shutdown(std::chrono::steady_clock::now() + std::chrono::seconds(2));

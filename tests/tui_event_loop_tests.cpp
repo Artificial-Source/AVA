@@ -1,5 +1,6 @@
 // Exercise OS readiness and timer ownership without a terminal decoder or provider.
 #include "sys.h"
+#include "tests/support/TuiEventLoopFixture.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/tui/Spinner.h"
@@ -24,7 +25,7 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 using ava::tui::TuiEventLoop;
 using ava::tui::TuiTimer;
-using ava::tui::TuiWaitMode;
+using Fixture = tui_test_support::TuiEventLoopFixture;
 
 // Test-thread RAII pipe for readiness and hangup cases; the loop borrows its read end.
 class EventLoopPipe final
@@ -195,7 +196,7 @@ void test_timer_deadline_replacement_and_late_repeat()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer test input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  TuiEventLoop loop{ava::tui::TuiWakeup{}};
   TimerRecorder one_shot;
   TimerRecorder repeating;
   auto timer = loop.member_timer(one_shot, &TimerRecorder::tick);
@@ -232,7 +233,7 @@ void test_timer_mutation_during_dispatch()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer mutation input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  TuiEventLoop loop{ava::tui::TuiWakeup{}};
   auto due = Clock::time_point{} + 10ms;
   for (auto action : {PeerTimerAction::Cancel, PeerTimerAction::Rearm, PeerTimerAction::Destroy})
   {
@@ -261,7 +262,7 @@ void test_timer_move_and_destruction()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer ownership input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  TuiEventLoop loop{ava::tui::TuiWakeup{}};
   TimerRecorder source_target;
   TimerRecorder displaced_target;
   auto source = loop.member_timer(source_target, &TimerRecorder::tick);
@@ -293,7 +294,7 @@ void test_spinner_preserves_phase_and_skips_missed_ticks()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create spinner test input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  TuiEventLoop loop{ava::tui::TuiWakeup{}};
   SpinnerFrames frames;
   ava::tui::Spinner spinner(loop, std::bind_front(&SpinnerFrames::publish, &frames));
   auto const before_start = Clock::now();
@@ -316,7 +317,8 @@ void test_notification_before_wait_and_simultaneous_input()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create notification test input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  Fixture event_loop(pipe.input());
+  TuiEventLoop& loop = event_loop.loop();
   TimerRecorder fallback;
   auto deadline = loop.member_timer(fallback, &TimerRecorder::tick);
   auto wake = loop.wakeup();
@@ -328,31 +330,31 @@ void test_notification_before_wait_and_simultaneous_input()
   wake.notify();
   copied_wake.notify();
   wake.notify();
-  loop.wait(TuiWaitMode::Block);
+  event_loop.wait();
   loop.service_due();
-  if (!ava::tests::require(fallback.ticks().empty() && !loop.notification_failed(),
+  if (!ava::tests::require(fallback.ticks().empty() && event_loop.notified(),
                            "notifications published before wait wake it without reaching the fallback deadline"))
     return;
 
   // No input is readable. If the first wait left duplicate wake hints behind,
   // this wait would return before the armed deadline becomes due.
-  loop.wait(TuiWaitMode::Block);
+  event_loop.wait();
   loop.service_due();
-  if (!ava::tests::require(fallback.ticks().size() == 1, "repeated notifications coalesce and are consumed by one wait"))
+  if (!ava::tests::require(fallback.ticks().size() == 1 && !event_loop.notified(), "repeated notifications coalesce and are consumed by one wait"))
     return;
 
   if (!ava::tests::require(pipe.publish(), "publish a final byte alongside a fresh notification"))
     return;
   deadline.arm_at(ava::tests::now_plus_seconds(2));
   copied_wake.notify();
-  loop.wait(TuiWaitMode::Block);
+  event_loop.wait();
   loop.service_due();
-  if (!ava::tests::require(fallback.ticks().size() == 1 && pipe.consume(),
+  if (!ava::tests::require(fallback.ticks().size() == 1 && event_loop.notified() && pipe.consume(),
                            "simultaneous input and a fresh wake return together without consuming the input byte"))
     return;
-  loop.wait(TuiWaitMode::Block);
+  event_loop.wait();
   loop.service_due();
-  expect(fallback.ticks().size() == 2 && !loop.notification_failed(), "simultaneous fd readiness does not leave its notification pending for another wait");
+  expect(fallback.ticks().size() == 2 && !event_loop.notified(), "simultaneous fd readiness does not leave its notification pending for another wait");
 }
 
 // Protect the final readable bytes when hangup and input arrive together.
@@ -361,33 +363,46 @@ void test_hangup_preserves_final_input()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create hangup test input pipe"))
     return;
-  TuiEventLoop loop(pipe.input());
+  Fixture event_loop(pipe.input());
   if (!ava::tests::require(pipe.publish(), "publish input before terminal hangup"))
     return;
   pipe.close_writer();
-  loop.wait(TuiWaitMode::ReadyOnly);
-  expect(loop.terminal_hangup() && !loop.terminal_error() && pipe.consume(), "terminal hangup preserves the final readable byte");
-  loop.wait(TuiWaitMode::ReadyOnly);
-  expect(loop.terminal_hangup() && !loop.terminal_error(), "terminal hangup stays observable after final input is drained");
+  event_loop.wait(Fixture::Wait::ReadyOnly);
+  expect(event_loop.terminal_hangup() && !event_loop.terminal_error() && pipe.consume(), "terminal hangup preserves the final readable byte");
+  event_loop.wait(Fixture::Wait::ReadyOnly);
+  expect(event_loop.terminal_hangup() && !event_loop.terminal_error(), "terminal hangup stays observable after final input is drained");
 }
 
-// Protect local stop observation and safe notification through an expired weak wake handle.
-void test_local_stop_and_retired_wakeup()
+// Protect the earliest-deadline query that TuiFrontEnd::run uses to choose between wait and wait_until.
+void test_next_deadline()
+{
+  TuiEventLoop loop{ava::tui::TuiWakeup{}};
+  TimerRecorder first;
+  TimerRecorder second;
+  auto early = loop.member_timer(first, &TimerRecorder::tick);
+  auto late = loop.member_timer(second, &TimerRecorder::tick);
+  auto const start = Clock::time_point{} + 1s;
+  expect(!loop.next_deadline(), "a registry without armed timers has no deadline");
+  late.arm_at(start + 20ms);
+  early.arm_at(start + 10ms);
+  expect(loop.next_deadline() == start + 10ms, "the earliest armed deadline wins");
+  early.cancel();
+  expect(loop.next_deadline() == start + 20ms, "a canceled timer no longer constrains the wait");
+  loop.service_due(start + 20ms);
+  expect(!loop.next_deadline() && second.ticks().size() == 1, "a dispatched one-shot timer no longer constrains the wait");
+}
+
+// Protect safe notification through an expired weak wake handle.
+void test_retired_wakeup()
 {
   EventLoopPipe pipe;
-  if (!ava::tests::require(pipe.valid(), "create stop test input pipe"))
+  if (!ava::tests::require(pipe.valid(), "create retired wakeup test input pipe"))
     return;
   ava::tui::TuiWakeup retired_wake;
   retired_wake.notify();
   {
-    TuiEventLoop loop(pipe.input());
-    retired_wake = loop.wakeup();
-    TimerRecorder fallback;
-    auto deadline = loop.member_timer(fallback, &TimerRecorder::tick);
-    deadline.arm_at(ava::tests::now_plus_seconds(2));
-    loop.request_stop();
-    loop.wait(TuiWaitMode::Block);
-    expect(loop.stopped() && !loop.has_due_work(), "local stop returns from wait without waiting for a timer or utils termination acknowledgement");
+    Fixture event_loop(pipe.input());
+    retired_wake = event_loop.loop().wakeup();
   }
   // Expired capabilities must remain safe to call without retaining a loop or
   // touching a destroyed session. The wake API deliberately exposes no mailbox.
@@ -401,19 +416,17 @@ void test_local_stop_and_retired_wakeup()
 // Public owner contracts also cover inbox changes used by the event loop.
 // Run the direct inbox and dispatcher contracts from their separate test file.
 void run_tui_runtime_owner_tests();
-// Direct OS waiter contracts own and retire their descriptors within each case.
-void run_tui_wait_state_tests();
 
 // Run scheduler, readiness and owner regressions without decoding terminal input.
 void run_tui_event_loop_tests()
 {
   run_tui_runtime_owner_tests();
-  run_tui_wait_state_tests();
   test_timer_deadline_replacement_and_late_repeat();
   test_timer_mutation_during_dispatch();
   test_timer_move_and_destruction();
   test_spinner_preserves_phase_and_skips_missed_ticks();
   test_notification_before_wait_and_simultaneous_input();
   test_hangup_preserves_final_input();
-  test_local_stop_and_retired_wakeup();
+  test_next_deadline();
+  test_retired_wakeup();
 }

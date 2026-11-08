@@ -8,10 +8,10 @@ still apply to every change.
 
 ## Start here
 
-Read [TuiSession.h](../../src/ava/tui/TuiSession.h) for ownership, then
-`TuiSession::run` in [TuiSession.cpp](../../src/ava/tui/TuiSession.cpp) for the loop.
-Read [TuiEventLoop.h](../../src/ava/tui/TuiEventLoop.h) next for waiting and timer
-lifetimes.
+Read `TuiFrontEnd::run` in [TuiFrontEnd.cpp](../../src/ava/tui/TuiFrontEnd.cpp) for the
+event loop, then [TuiSession.h](../../src/ava/tui/TuiSession.h) for ownership and
+`TuiSession::flush` in [TuiSession.cpp](../../src/ava/tui/TuiSession.cpp) for the work done per wakeup.
+Read [TuiEventLoop.h](../../src/ava/tui/TuiEventLoop.h) next for timer lifetimes.
 These files coordinate work. Keep feature algorithms in the owners listed below.
 
 For a submitted message, follow `RuntimeSubmitController::submit`,
@@ -81,8 +81,9 @@ owner prepares a frame.
 
 | Owner | Responsibility and owned state |
 | --- | --- |
-| `TuiSession` | Composition, loop order, control decisions and transitions between owners. |
-| `TuiEventLoop` | Timer registrations and a shared `TuiWaitState` for OS waiting. It does not own feature state or decode keys. |
+| `TuiFrontEnd` | Owns the TUI thread's `utils::threading::EventLoop`. `run()` is the only code that waits on it and dispatches its events; `terminate()` ends it. |
+| `TuiSession` | Composition, the order of work per wakeup, control decisions and transitions between owners. |
+| `TuiEventLoop` | Timer registrations and the wakeup tokens that producers use. It does not wait, own feature state or decode keys. |
 | `RuntimePresentationState` | The screen and sidebar projections. Readers get const views; features publish through named operations that preserve bounds and generations. |
 | `Composer` | Draft, cursor, selection, editing history, completion choices and Escape state. |
 | `RuntimeRenderer` | Frame scheduling, completion/layout caches and `TranscriptView`. It prepares layout around viewport changes. |
@@ -112,7 +113,12 @@ flowchart TD
   Inbox -->|drain on TUI thread| State
 ```
 
-Normal exit cancels the control timer, shuts down the active run, stops
+The TUI never ends its own event loop. When it wants to exit (a quit key, a signal,
+terminal closure or a failure) it stops its own work and calls
+`core::Application::request_shutdown()`. The main thread waits for that request in
+`app::Application::wait_for_shutdown`, then calls `TuiFrontEnd::terminate()`, which
+returns once the TUI thread left its loop, and joins the TUI thread.
+Normal exit then cancels the control timer, shuts down the active run, stops
 Mermaid/plugin/prompt requests and invokes the frontend shutdown hook while
 the terminal is still available. The session destructor also covers early
 returns and exceptions. Active-run cleanup releases waiting prompts and plugin
@@ -121,7 +127,9 @@ deadlock. If any release step throws, shutdown logs only the failed stage, recor
 the failure and terminates instead of joining a worker that may never return.
 Failures after the join produce a nonzero session outcome. The frontend's outer
 shutdown guard covers exits that never reach
-the session's normal exit path.
+the session's normal exit path. An exception on the TUI thread still requests
+the shutdown and waits for the termination before it propagates, because
+`terminate()` blocks until the TUI thread acknowledges it.
 
 Selector input returns an owned `SelectorDispatchResult` variant. Each
 alternative carries only its needed fields; a parent summary always carries the
@@ -160,44 +168,53 @@ spelling needs its own generator support; ordinary `std::string` still prints.
 The [debug privacy tests](../../tests/debug_pointer_security_tests.cpp) protect
 this distinction. A debug marker alone does not sanitize content.
 
-## One turn of the loop
+## One wakeup of the loop
 
-The normal order in `TuiSession::run` is:
+`TuiFrontEnd::run` registers the terminal input descriptor and one notification
+event, then repeats:
 
-1. **Control.** Observe signals, terminal closure, descriptor errors and recorded
-   rendering or notification failures. Cancellation may release a waiting worker.
-2. **Due timers.** Dispatch the registrations whose deadlines were due at the
-   start of this pass. Timer callbacks update their feature or request a frame.
-3. **Application updates.** Consume up to 256 active-run events, handle completion,
-   and update feature presentation. An open host prompt holds provider events,
-   Mermaid completions and display-settings reloads until the prompt retires.
-   Their pending work stays queued. Workspace discovery still runs here while a
-   host prompt is open; it requests a frame only when its view changes. A failed
-   frame request still stops the loop.
-4. **Input.** Poll up to 32 input results. A discarded control reply consumed input
-   and counts toward that budget; it does not mean the input buffer is empty.
-   Check signals again after decoding before dispatching a retained key.
-5. **Paint.** Paint a ready frame. The renderer checks the clock here, so a frame
-   deadline crossed during input decoding can be honored in this turn.
-6. **Wait.** Use `ReadyOnly` when another turn has runnable work, including a full
-   input batch. Otherwise use `Block` until input, a producer notification or the
-   earliest timer deadline. Waiting does not read terminal input or run callbacks.
+1. **Wait.** Sleep until terminal input is ready, a producer notifies, or the
+   earliest armed timer deadline (`TuiSession::next_timer_deadline`) passes.
+   The only way out of the loop is the `terminated` status set by `terminate()`.
+2. **Dispatch.** Pass input readiness, including hangup and error, to
+   `TuiSession::terminal_input_ready` and notifications to `TuiSession::notified`.
+3. **Due timers.** `TuiSession::expire_timers` dispatches the registrations whose
+   deadlines are due. Timer callbacks update their feature or request a frame.
+4. **Flush.** `TuiSession::flush` does the remaining work, for now still by
+   checking every mailbox:
+   1. **Control.** Observe signals, terminal closure, descriptor errors and recorded
+      rendering failures. Cancellation may release a waiting worker.
+   2. **Application updates.** Consume up to 256 active-run events, handle completion,
+      and update feature presentation. An open host prompt holds provider events,
+      Mermaid completions and display-settings reloads until the prompt retires.
+      Their pending work stays queued. Workspace discovery still runs here while a
+      host prompt is open; it requests a frame only when its view changes. A failed
+      frame request still stops the session.
+   3. **Input.** Poll up to 32 input results. A discarded control reply consumed input
+      and counts toward that budget; it does not mean the input buffer is empty.
+      Check signals again after decoding before dispatching a retained key.
+   4. **Paint.** Paint a ready frame. The renderer checks the clock here, so a frame
+      deadline crossed during input decoding can be honored in this wakeup.
+   5. **Left-over work.** When work remains (a full input batch, keys buffered inside
+      ncurses that do not make the descriptor readable, or a bounded event backlog),
+      notify the session's own wakeup so that the next wait returns immediately.
 
 There is no second timer/application pass after painting. A timer that becomes
-due during input or paint gets a new turn beginning with control. Scheduled
-frames normally use a 16 ms interval from the previous completed paint;
+due during input or paint is dispatched after the next wait, which then does not sleep.
+Scheduled frames normally use a 16 ms interval from the previous completed paint;
 explicit urgent redraws and terminal handoffs have their own immediate paths.
+Once the session stopped it does no more work; it waits for the termination.
 
 Two exceptions are deliberate. After hangup or descriptor error, the session
-stops admission and drains the finite buffered input without dispatching it,
-painting or waiting on the permanently ready descriptor. After a worker
+stops admission and drains the finite buffered input without dispatching it
+or painting. After a worker
 publishes completion, `complete()` joins it and freezes further publication,
 then drains the finite final backlog in chunks of at most 256 events and settles
 in that same call. A large final backlog can therefore lengthen that turn.
 
 The control timer is a plain wake-up every 100 ms. Its callback does not claim
 signals or perform cancellation. This is a nominal observation cadence, not a
-100 ms response guarantee: synchronous callbacks and long turns can delay the
+100 ms response guarantee: synchronous callbacks and long flushes can delay the
 next control stage. The underlying waiter retries interrupted system calls.
 Escape decoding has a separate default of 100 ms in `config.h`; ncurses uses
 `ESCDELAY` when configured. Neither mechanism promises a 50 ms Escape response.
@@ -221,10 +238,9 @@ ncurses or mutate the screen. Application-owned Mermaid workers publish render
 completions; branch-summary work also remains application-owned.
 
 A producer publishes its payload **before** calling `TuiWakeup::notify`.
-Notifications carry no payload and may coalesce. A failed notification records
-a failure for control to observe; recording that flag does not itself wake an
-already blocked waiter. The control timer gives it another observation opportunity. The TUI must re-examine the
-mailboxes each turn rather than treat a notification count as an event count.
+Notifications carry no payload and may coalesce. For now all producers share one
+notification event, so the TUI re-examines every mailbox after each wakeup rather
+than treat a notification count as an event count.
 `ActiveRunInbox` protects its queue, captured request context and final result
 with one mutex. Its `RuntimeEventQueue` member is only FIFO storage and has no
 independent lock. FIFO means first in, first out: draining preserves publication
@@ -421,7 +437,7 @@ The isolated `ava_tests.tui_session.*` cases drive the real session with native
 buffered input, worker queues and test-only call-through linker wrappers. They
 check turn order, budgets, closure, signals and scoped I/O failures. The tmux
 scenarios check whole terminal interactions. A scheduler unit test alone
-does not prove the ordering in `TuiSession::run`, and compiling does not prove
+does not prove the ordering in `TuiSession::flush`, and compiling does not prove
 cancellation or lifetime behavior.
 
 Record the build and behavioral checks run for each change. When changing an

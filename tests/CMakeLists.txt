@@ -317,7 +317,6 @@ set(AVA_TESTS_SOURCES
   "tui_mermaid_contract_tests.cpp"
   "tui_prompt_callback_lock_tests.cpp"
   "tui_paste_security_tests.cpp"
-  "tui_wait_state_tests.cpp"
   "tui_transcript_view_tests.cpp"
   "tui_keybinding_tests.cpp"
   "tui_markdown_tests.cpp"

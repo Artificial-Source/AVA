@@ -1381,7 +1381,8 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
     return;
   ava::core::UniqueFd input(descriptors[0]);
   ava::core::UniqueFd output(descriptors[1]);
-  ava::tui::TuiEventLoop loop(input.get());
+  tui_test_support::TuiEventLoopFixture event_loop(input.get());
+  ava::tui::TuiEventLoop& loop = event_loop.loop();
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();

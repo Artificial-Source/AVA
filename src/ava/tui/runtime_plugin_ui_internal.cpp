@@ -336,25 +336,6 @@ class RuntimePluginUiCoordinatorState final
   TuiWakeup wakeup_;
 };
 
-namespace {
-// TUI thread: remove only the matching published surfaces. The caller serializes
-// transport validation where needed; this helper neither resolves nor owns waits.
-bool clear_plugin_surface(RuntimePresentationState& presentation_, std::optional<TuiPluginUiBinding> const& binding = std::nullopt)
-{
-  bool changed = false;
-  if (!binding || (presentation_.screen().plugin_ui_dock && presentation_.screen().plugin_ui_dock->binding == *binding))
-  {
-    changed = changed || presentation_.screen().plugin_ui_dock.has_value();
-    presentation_.publish_plugin_dock(std::nullopt);
-  }
-  if (!binding || (presentation_.screen().plugin_ui_modal && presentation_.screen().plugin_ui_modal->binding == *binding))
-  {
-    changed = changed || presentation_.screen().plugin_ui_modal.has_value();
-    presentation_.publish_plugin_modal(std::nullopt);
-  }
-  return changed;
-}
-} // namespace
 
 std::optional<std::uint64_t> RuntimePluginUiCoordinatorState::begin(TuiPluginUiBinding binding, std::chrono::steady_clock::time_point deadline)
 {
@@ -508,7 +489,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
   {
     std::lock_guard lock(mutex_);
     if (std::exchange(clear_pending_, false))
-      result.changed = clear_plugin_surface(presentation_) || result.changed;
+      result.changed = presentation_.clear_plugin_surface() || result.changed;
     result.deadline_expired = std::exchange(expiry_report_pending_, false);
     records.swap(queue_);
     after_queue_swap = std::exchange(after_queue_swap_for_test_, {});
@@ -569,7 +550,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
       if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
       {
         cancel_locked();
-        result.changed = clear_plugin_surface(presentation_, request.binding) || result.changed;
+        result.changed = presentation_.clear_plugin_surface(request.binding) || result.changed;
         complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
         continue;
       }
@@ -606,7 +587,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinatorState::poll(RuntimePresentationS
     if (!plugin_ui_host_chrome_fits(request.binding, request.kind, geometry.width, geometry.max_lines))
     {
       cancel_locked();
-      result.changed = clear_plugin_surface(presentation_, request.binding) || result.changed;
+      result.changed = presentation_.clear_plugin_surface(request.binding) || result.changed;
       complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
       continue;
     }
@@ -886,7 +867,7 @@ void RuntimePluginUiCoordinator::finish_submission()
 {
   deadline_timer_.cancel();
   state_->finish();
-  static_cast<void>(clear_plugin_surface(presentation_));
+  static_cast<void>(presentation_.clear_plugin_surface());
 }
 
 void RuntimePluginUiCoordinator::shutdown()
@@ -894,7 +875,7 @@ void RuntimePluginUiCoordinator::shutdown()
   deadline_timer_.cancel();
   state_->shutdown();
   runtime_token_.reset();
-  static_cast<void>(clear_plugin_surface(presentation_));
+  static_cast<void>(presentation_.clear_plugin_surface());
 }
 
 void RuntimePluginUiCoordinator::set_after_enqueue_for_test(std::function<void()> hook)

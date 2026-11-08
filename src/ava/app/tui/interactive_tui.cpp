@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/app/Application.h"
 #include "ava/app/onboarding.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/GitBranch.h"
@@ -6,6 +7,7 @@
 #include "ava/app/tui/TuiFrontEnd.h"
 #include "ava/app/tui/command_palette_views.h"
 #include "ava/app/tui/interactive_tui_internal.h"
+#include "ava/tui/terminal.h"
 #include "ava/core/version.h"
 
 #include <future>
@@ -28,6 +30,14 @@ int run_tui(InteractiveState state)
     initial_transcript.push_back(tui::TranscriptItem{.label = "setup", .text = std::move(*onboarding)});
   static_cast<void>(runtime::refresh_git_branch(unlocked_session));
 
+  // The TUI thread only ends when the application shuts down; do not start it when it can't work.
+  if (!tui::terminal_is_tty())
+  {
+    //FIXME: print the program name before this.
+    std::cerr << "interactive TUI requires stdin and stdout to be (a) terminal(s).\n";
+    return 1;
+  }
+
   int result;
   try
   {
@@ -47,8 +57,8 @@ int run_tui(InteractiveState state)
     });
     auto tui_result = tui_task.get_future();
     std::jthread tui_thread(std::move(tui_task));
-    // Since now the main thread is going to sleep until `tui_thread` finished, we might as well have used the main thread as "TUI thread";
-    // But I feel that this way it is more clear where the TUI thread begins and ends.
+    // Wait until Application::request_shutdown is called.
+    Application::instance().wait_for_shutdown(frontend);
     tui_thread.join();
     result = tui_result.get();
   }

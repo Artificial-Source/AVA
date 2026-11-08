@@ -799,21 +799,21 @@ void DisplayPreviewTransaction::clear_theme_overlay() const
   clear_tui_theme_preview();
 }
 
-void reapply_settings_preview_after_display_reload(DisplayPreviewTransaction& preview, ComposerSnapshot& snapshot)
+void DisplayPreviewTransaction::reapply_after_display_reload(ComposerSnapshot& snapshot)
 {
   // Restore the baseline from newly applied screen settings; equality with a preview does not prove it was saved.
-  auto const staged_token = preview.overlay ? std::optional<std::string>{preview.overlay->action_token} : std::nullopt;
-  preview.rebase(DisplayPresentationBaseline{.show_images = snapshot.show_images, .image_width_cells = snapshot.image_width_cells, .cursor = snapshot.cursor});
+  auto const staged_token = overlay ? std::optional<std::string>{overlay->action_token} : std::nullopt;
+  rebase(DisplayPresentationBaseline{.show_images = snapshot.show_images, .image_width_cells = snapshot.image_width_cells, .cursor = snapshot.cursor});
   if (staged_token)
   {
     // Refresh against app-delivered options when the token still resolves. If a previously valid
     // custom theme became invalid, keep the last-known-good overlay rather than adopting missing/invalid bytes.
     if (auto refreshed = settings_preview_overlay_for_action(*staged_token, snapshot))
-      preview.update(std::move(*refreshed));
+      update(std::move(*refreshed));
     else
-      preview.apply_theme_overlay();
+      apply_theme_overlay();
   }
-  preview.apply_image_overlay(snapshot);
+  apply_image_overlay(snapshot);
 }
 
 std::size_t reselect_settings_display_row_after_rebuild(SelectListView const& view, std::string_view selected_action_value,

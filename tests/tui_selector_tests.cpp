@@ -25,7 +25,6 @@
 #include "ava/config/model_config.h"
 #include "ava/session/session_store.h"
 #include "ava/session/session_tree.h"
-#include "ava/core/UniqueFd.h"
 #include "ava/core/error.h"
 
 #include <algorithm>
@@ -39,7 +38,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <sys/eventfd.h>
 
 // Run selector filtering, input and typed-dispatch regressions under the shared terminal fixture.
 void run_tui_selector_tests()
@@ -1199,10 +1197,9 @@ void run_tui_selector_tests()
            "width highlight replaces the staged image presentation fields without persistence");
 
     // External reload rebases authoritative baseline, then reapplies the still-valid staged token.
-    using ava::tui::runtime_views::reapply_settings_preview_after_display_reload;
     overlay_snapshot.show_images = false;
     overlay_snapshot.image_width_cells = 40;
-    reapply_settings_preview_after_display_reload(preview, overlay_snapshot);
+    preview.reapply_after_display_reload(overlay_snapshot);
     expect(!overlay_snapshot.show_images && overlay_snapshot.image_width_cells == 80 && preview.authoritative.image_width_cells == 40 &&
                preview.authoritative.show_images == false,
            "external reload during preview rebases authority then reapplies the staged overlay");
@@ -1227,7 +1224,7 @@ void run_tui_selector_tests()
       // Simulate applied reload hydrating authoritative false (same as current overlaid presentation).
       equal_snapshot.show_images = false;
       equal_snapshot.image_width_cells = 60;
-      reapply_settings_preview_after_display_reload(equal_values_preview, equal_snapshot);
+      equal_values_preview.reapply_after_display_reload(equal_snapshot);
       expect(equal_values_preview.authoritative.show_images == false && equal_values_preview.active() && !equal_snapshot.show_images,
              "applied reload rebases even when post-hydration presentation equals the active overlay");
       equal_values_preview.cancel();
@@ -1254,7 +1251,7 @@ void run_tui_selector_tests()
               ava::tui::TuiThemePalette{
                   .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
           .revision = "test-custom-theme-v2"});
-      reapply_settings_preview_after_display_reload(preview, overlay_snapshot);
+      preview.reapply_after_display_reload(overlay_snapshot);
       // set_tui_theme_preview appends a generation suffix to the active revision; overlay keeps the app revision.
       expect(preview.active() && preview.overlay && preview.overlay->theme && preview.overlay->theme->revision == "test-custom-theme-v2" &&
                  ava::tui::active_tui_theme().revision.find("test-custom-theme-v2") == 0 && ava::tui::active_tui_theme().palette &&
@@ -1268,7 +1265,7 @@ void run_tui_selector_tests()
       auto const last_good_composer = preview.overlay->theme->palette->composer_bg;
       overlay_snapshot.custom_themes.clear(); // invalid file dropped from app catalog
       overlay_snapshot.custom_themes.push_back(ava::tui::ThemeOptionItem{.name = "broken", .detail = "/tmp/ava/broken.json"});
-      reapply_settings_preview_after_display_reload(preview, overlay_snapshot);
+      preview.reapply_after_display_reload(overlay_snapshot);
       expect(preview.active() && preview.overlay && preview.overlay->theme && preview.overlay->theme->name == "sunrise" &&
                  preview.overlay->theme->revision == last_good_revision && preview.overlay->theme->palette &&
                  preview.overlay->theme->palette->composer_bg == last_good_composer && ava::tui::active_tui_theme().name == "sunrise" &&
@@ -1899,12 +1896,8 @@ void run_tui_selector_tests()
   controller_presentation.publish_transcript({{.label = "assistant", .text = "parent transcript"}});
   auto const parent_generation = controller_snapshot.transcript_generation;
   controller_presentation.publish_dimensions(40, 8);
-  // Discovery runs through the production timer registry, with a real pollable
-  // descriptor kept alive until all registrations and the loop are destroyed.
-  ava::core::UniqueFd discovery_fd(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK));
-  if (!ava::tests::require(discovery_fd.get() >= 0, "workspace discovery has a pollable descriptor"))
-    return;
-  ava::tui::TuiEventLoop discovery_loop(discovery_fd.get());
+  // Discovery runs through the production timer registry; nothing waits, so it needs no wakeup.
+  ava::tui::TuiEventLoop discovery_loop{ava::tui::TuiWakeup{}};
   ava::tui::RuntimeRenderer workspace_renderer(discovery_loop, controller_frontend.frontend(), controller_presentation, controller_composer);
   ava::tui::SelectorHost selectors(controller_presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
