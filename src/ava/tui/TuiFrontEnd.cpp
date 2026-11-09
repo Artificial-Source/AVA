@@ -177,19 +177,31 @@ app::ExitCode TuiFrontEnd::run()
     signals_manager.activate_handlers({SIGINT, SIGTERM});           // Signals for which we want to call Signals::signal_handler.
     signals_manager.default_handlers({SIGHUP});
 
+    // Kitty images that were placed by the composer stay visible in the terminal until they are explicitly deleted.
+    // Delete them when leaving this scope, whether normally or by exception.
+    // Construct this guard before the TuiSession below, so that the images are only deleted after the session that draws them is gone.
     ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
-    // Load effective presentation before applying the cursor or probing the theme.
-    // Otherwise startup uses defaults until a later settings change or repaint.
+
+    // Read the user's key bindings and display settings from their configuration files.
+    // Failing to load either is not fatal: the defaults remain in effect and the error
+    // message is collected in initial_status_line, which is passed to the TuiSession below.
+    //
+    // Do this first because applying the cursor settings and deciding whether to
+    // probe the terminal background, below, both depend on the loaded display settings.
     std::string initial_status_line = load_key_bindings();
     load_display_settings(initial_status_line);
     terminal_context.apply_cursor_settings(cursor_settings());
-    // Probe the direct terminal background once after enter and before first paint.
-    // No re-probe on suspend/resume and no late theme flip after presentation starts.
+
+    // If the theme is set to automatic, ask the terminal for its background color so that the theme can match it.
+    // The query is not sent when running inside tmux.
+    //
+    // This happens only once, after the terminal was initialized and before anything is drawn.
+    // There is no new query after a suspend/resume and a reply that arrives too late is ignored,
+    // so that the automatically selected theme cannot change once it is on screen.
     TerminalBackgroundDetectionGuard terminal_background_detection;
     maybe_probe_terminal_background_appearance(terminal_context);
 
-    // Register every event before the first wait: the terminal input fd, and one notification
-    // Event that all producers share for now.
+    // Register every event before the first wait: the terminal input fd, and one notification Event that all producers share for now.
     EventLoop::Event const input_event = event_loop.watch_fd(::fileno(terminal_context.input_stream()), EventLoop::PollEvents::read);
     TuiWakeup const wakeup(event_loop_, event_loop.watch_event());
 
