@@ -146,6 +146,14 @@ class TerminalBackgroundDetectionGuard
 
 }  // namespace
 
+void TuiFrontEnd::set_tui_session(TuiSession* session)
+{
+  // For now all three handlers forward to the session.
+  terminal_input_handler_.set_tui_session(session);
+  notification_handler_.set_tui_session(session);
+  timeout_handler_.set_tui_session(session);
+}
+
 // Enter the private composer implementation after the application has registered frontend data.
 app::ExitCode TuiFrontEnd::run()
 {
@@ -202,32 +210,53 @@ app::ExitCode TuiFrontEnd::run()
     maybe_probe_terminal_background_appearance(terminal_context);
 
     // Register every event before the first wait: the terminal input fd, and one notification Event that all producers share for now.
-    EventLoop::Event const input_event = event_loop.watch_fd(::fileno(terminal_context.input_stream()), EventLoop::PollEvents::read);
-    TuiWakeup const wakeup(event_loop_, event_loop.watch_event());
+    [[maybe_unused]] EventLoop::Event const input_event = event_loop.watch_fd(::fileno(terminal_context.input_stream()), EventLoop::PollEvents::read);
+    EventLoop::Event const notify_event = event_loop.watch_event();
 
-    // For now the session handles all three kinds of events.
+    Dout(dc::tuievents, "Terminal input event has index " << EventLoop::index(input_event));
+    Dout(dc::tuievents, "Notify event has index " << EventLoop::index(notify_event));
+
+    //FIXME: TuiWakeup and TuiSession is *old* code that needs to be replaced.
+    TuiWakeup const wakeup(event_loop_, notify_event);
     TuiSession session(*this, terminal_context, initial_status_line, wakeup);
+    set_tui_session(&session);
     session.start();
 
     // The only exit of this loop is a termination requested by the application (see terminate()).
     for (;;)
     {
-      if (auto const deadline = session.next_timer_deadline())
+      // Wait for the next Event.
+      if (auto const deadline = timeout_handler_.next_deadline())
         event_loop.wait_until(*deadline);
       else
         event_loop.wait();
-      EventLoop::WaitResult const& result = event_loop.result();
-      if (result.status() == EventLoop::WaitStatus::terminated)
-        break;
-      for (EventLoop::Event const event : result.events())
+
+      // Get the WaitResult.
+      EventLoop::WaitResult const& wait_result = event_loop.result();
+      EventLoop::EventMask events = wait_result.events();
+      if (events.any())
       {
-        if (event == input_event)
-          session.terminal_input_ready(result.ready_events(EventLoop::index(event)));
-        else
-          session.notified();
+        for (auto event : events)
+        {
+          EventLoop::Index index = EventLoop::index(event);
+          //FooBar& foobar = my_array[index];
+          if (event_loop.is_fd_event(event))
+          {
+            int const fd = wait_result.fd(index);
+            EventLoop::ReadyEvents const ready_events = wait_result.ready_events(index);
+            terminal_input_handler_.input_ready(fd, ready_events);
+          }
+          else
+            notification_handler_.notified();
+        }
       }
+      else if (wait_result.status() == EventLoop::WaitStatus::terminated)
+        break;
+
       // Not only after a timeout: a deadline can pass while other events are being handled.
-      session.expire_timers(TuiEventLoop::Clock::now());
+      timeout_handler_.expire(TuiEventLoop::Clock::now());
+
+      // FIXME: This is a hack to keep the testsuite working while functionality of the old TuiSession is still being used.
       session.flush();
     }
 

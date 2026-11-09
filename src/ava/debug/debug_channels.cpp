@@ -22,5 +22,6 @@ Channel session("SESSION");
 Channel tools("TOOLS");
 Channel tui("TUI");
 Channel terminal("TERMINAL");
+Channel tuievents("TUIEVENTS");
 NAMESPACE_DEBUG_CHANNELS_END
 #endif

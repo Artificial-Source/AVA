@@ -9,6 +9,9 @@
 #include "composer.h"                   // StartupOverviewSnapshot
 #include "keybindings.h"                // TuiKeyBindings
 #include "runtime.h"                    // TuiRuntimeOptions, TuiCatalogDelivery, TuiLocalDisplaySettingsResult
+#include "TuiTerminalInputHandler.h"
+#include "TuiNotificationHandler.h"
+#include "TuiTimeoutHandler.h"
 #include "ava/frontend/FrontEnd.h"
 #include "ava/app/ExitCode.h"
 #include "utils/threading/EventLoop.h"
@@ -43,6 +46,21 @@ class TuiFrontEnd : public frontend::FrontEnd,
   // Startup presentation/capabilities owned by this frontend; session hydration copies needed values.
   TuiRuntimeOptions options_;
 
+  // One handler per kind of event that the tui-thread wakes up on.
+  TuiTerminalInputHandler terminal_input_handler_;
+  TuiNotificationHandler notification_handler_;
+  TuiTimeoutHandler timeout_handler_;
+
+ private:
+  //FIXME: setting a TuiSession* is a hack. This function should be removed.
+  void set_tui_session(TuiSession* session);
+
+ public:
+  // The `const` interface of these handlers mean "thread-safe", not necessarily const.
+  TuiTerminalInputHandler const& terminal_input_handler() const { return terminal_input_handler_; }
+  TuiNotificationHandler const& notification_handler() const { return notification_handler_; }
+  TuiTimeoutHandler const& timeout_handler() const { return timeout_handler_; }
+
  private:
   // The event loop of the TUI thread. Created with the frontend so that it exists before run() first waits on it
   // and after the TUI thread left it, which terminate() relies on. Shared only so that wakeup tokens held by
@@ -62,6 +80,10 @@ class TuiFrontEnd : public frontend::FrontEnd,
   virtual void load_display_settings(std::string& status_line) = 0;
   // Return the effective cursor settings from application-owned display state.
   virtual ava::tui::terminal::CursorSettings cursor_settings() const = 0;
+
+  //===========================================================================
+  // Old code starts here.
+
   // Return the application configuration path used for keybind loading.
   virtual std::filesystem::path keybinds_json_path() const = 0;
 

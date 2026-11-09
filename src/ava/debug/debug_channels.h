@@ -24,6 +24,7 @@ extern Channel session;
 extern Channel tools;
 extern Channel tui;
 extern Channel terminal;
+extern Channel tuievents;
 } // namespace LIBCWD_DEBUG_CHANNELS::dc
 
 #endif

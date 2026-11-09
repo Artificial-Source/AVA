@@ -40,11 +40,12 @@ class TuiSessionActions;
 // Workers receive synchronized endpoints, never this object. Member order preserves
 // borrows through shutdown and reverse destruction.
 //
-// TuiFrontEnd::run owns the event loop and drives this session through its public members:
+// TuiFrontEnd::run owns the event loop and drives this session through its public members,
+// partly via the handlers TuiTerminalInputHandler, TuiNotificationHandler and TuiTimeoutHandler:
 // it calls start() once, then for every wakeup terminal_input_ready() and/or notified(),
 // followed by expire_timers() and flush(), until the application terminates the loop; and
 // finally shutdown(). For now flush() still services every mailbox and polls the terminal
-// input itself; those parts will move into dedicated event handlers.
+// input itself; those parts will move into the handlers.
 // Read docs/engineering/tui-architecture.md before adding a feature or timer.
 class TuiSession final
 {

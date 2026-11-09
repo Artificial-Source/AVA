@@ -174,11 +174,13 @@ this distinction. A debug marker alone does not sanitize content.
 event, then repeats:
 
 1. **Wait.** Sleep until terminal input is ready, a producer notifies, or the
-   earliest armed timer deadline (`TuiSession::next_timer_deadline`) passes.
+   earliest armed timer deadline (`TuiTimeoutHandler::next_deadline`) passes.
    The only way out of the loop is the `terminated` status set by `terminate()`.
 2. **Dispatch.** Pass input readiness, including hangup and error, to
-   `TuiSession::terminal_input_ready` and notifications to `TuiSession::notified`.
-3. **Due timers.** `TuiSession::expire_timers` dispatches the registrations whose
+   `TuiTerminalInputHandler::input_ready` and notifications to
+   `TuiNotificationHandler::notified`. For now these handlers and
+   `TuiTimeoutHandler` only forward to `TuiSession`.
+3. **Due timers.** `TuiTimeoutHandler::expire` dispatches the registrations whose
    deadlines are due. Timer callbacks update their feature or request a frame.
 4. **Flush.** `TuiSession::flush` does the remaining work, for now still by
    checking every mailbox:
