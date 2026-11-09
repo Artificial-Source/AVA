@@ -15,6 +15,7 @@
 #include "ava/provider/catalog.h"
 #include "ava/provider/registry.h"
 #include "ava/core/error.h"
+#include "utils/AIAlert.h"
 
 #include <cerrno>
 #include <concepts>
@@ -267,7 +268,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_print_prompt(runtime::session
   return result;
 }
 
-int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err)
+void run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err)
 {
   ModeSignalLatch signal_latch;
   bool const sanitize_stdout = ::isatty(STDOUT_FILENO) == 1;
@@ -277,10 +278,7 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
     probe.parallel_read_search_tools = options.parallel_read_search_tools;
     probe.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
     if (auto valid = validate_run_options(probe); !valid)
-    {
-      err << terminal_output_text(valid.error().format(), sanitize_stderr) << '\n';
-      return 2;
-    }
+      THROW_EXIT_CODE(usage, "[ERRMSG]", AIArgs("[ERRMSG]", terminal_output_text(valid.error().format(), sanitize_stderr)));
   }
   std::optional<std::string> stdin_prompt;
   if (options.read_stdin)
@@ -289,31 +287,23 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
     {
       auto read = read_signal_aware_stdin(signal_latch);
       if (!read)
-      {
-        err << terminal_output_text(read.error().format(), sanitize_stderr) << '\n';
-        return 1;
-      }
+        THROW_EXIT_CODE(terminal_io_failed, "[ERRMSG]", AIArgs("[ERRMSG]", terminal_output_text(read.error().format(), sanitize_stderr)));
       stdin_prompt = std::move(*read);
     }
     else
       stdin_prompt = read_all(in);
     if (signal_latch.poll())
-      return 130;
+      THROW_EXIT_CODE(interrupted, "interrupted by a signal");
   }
 
   auto prompt = merge_print_prompt(PrintPromptInputs{.explicit_prompt = options.explicit_prompt, .stdin_prompt = std::move(stdin_prompt)});
   if (!prompt)
-  {
-    err << terminal_output_text(prompt.error().format(), sanitize_stderr) << '\n';
-    return 2;
-  }
+    THROW_EXIT_CODE(usage, "[ERRMSG]", AIArgs("[ERRMSG]", terminal_output_text(prompt.error().format(), sanitize_stderr)));
 
   auto unlocked_session_result = runtime::Session::open(options.open_context, options.lifecycle_request);
   if (!unlocked_session_result)
-  {
-    err << terminal_output_text(unlocked_session_result.error().format(), sanitize_stderr) << '\n';
-    return 1;
-  }
+    THROW_EXIT_CODE(session_unavailable, "[ERRMSG]",
+                 AIArgs("[ERRMSG]", terminal_output_text(unlocked_session_result.error().format(), sanitize_stderr)));
   runtime::session_ts& unlocked_session(*unlocked_session_result);
 
   CRITICAL_AREA_BEGIN_W(session);
@@ -322,10 +312,7 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   if (!options.transport_override)
   {
     if (!session_w->session_process_scope())
-    {
-      err << "print mode process authority is unavailable\n";
-      return 1;
-    }
+      THROW_EXIT_CODE(environment_unavailable, "print mode process authority is unavailable");
     default_transport = std::make_unique<ava::http::CurlCliTransport>(*session_w->session_process_scope());
   }
   ava::http::Transport& transport = options.transport_override ? options.transport_override->get() : *default_transport;
@@ -336,10 +323,7 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   auto const provider_id = session_w->model_selection_r()->model.provider_id;
   auto default_provider = catalog->create(provider_id);
   if (!default_provider)
-  {
-    err << terminal_output_text(default_provider.error().format(), sanitize_stderr) << '\n';
-    return 1;
-  }
+    THROW_EXIT_CODE(configuration_invalid, "[ERRMSG]", AIArgs("[ERRMSG]", terminal_output_text(default_provider.error().format(), sanitize_stderr)));
   ava::provider::Provider const& provider =
       options.provider_override ? options.provider_override->get() : static_cast<ava::provider::Provider const&>(**default_provider);
   runtime::RunOptions runtime_options;
@@ -352,16 +336,11 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
     if (!prepared)
     {
       if (prepared.error().message().find("requires auth for provider") != std::string::npos)
-      {
-        err << "print mode requires auth for provider `" << terminal_output_text(provider_id, sanitize_stderr)
-            << "`. Configure a credential in " << terminal_output_text(session_w->paths().auth_file.string(), sanitize_stderr)
-            << " or the provider API key environment variable\n";
-      }
-      else
-      {
-        err << terminal_output_text(prepared.error().format(), sanitize_stderr) << '\n';
-      }
-      return 1;
+        THROW_EXIT_CODE(credentials_unavailable,
+                     "print mode requires auth for provider `[PROVIDER]`: configure a credential in [AUTH_FILE] or the provider API key environment variable",
+                     AIArgs("[PROVIDER]", terminal_output_text(provider_id, sanitize_stderr))(
+                         "[AUTH_FILE]", terminal_output_text(session_w->paths().auth_file.string(), sanitize_stderr)));
+      THROW_EXIT_CODE(credentials_unavailable, "[ERRMSG]", AIArgs("[ERRMSG]", terminal_output_text(prepared.error().format(), sanitize_stderr)));
     }
     runtime_options = std::move(*prepared);
   }
@@ -377,7 +356,11 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
                                         .sanitize_terminal_output = sanitize_stdout,
                                         .sanitize_terminal_diagnostics = sanitize_stderr};
   auto result = run_print_prompt(unlocked_session, *prompt, provider, transport, run_options, out, err);
-  return signal_latch.signaled() ? 130 : (result ? 0 : 1);
+  if (signal_latch.signaled())
+    THROW_EXIT_CODE(interrupted, "interrupted by a signal");
+  // run_print_prompt already reported the cause of a failed run: as diagnostic on err, or as an error event on out.
+  if (!result)
+    THROW_EXIT_CODE(run_failed, "print mode run failed");
 }
 
 }  // namespace ava::app

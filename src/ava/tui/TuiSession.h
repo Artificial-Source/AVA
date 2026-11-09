@@ -29,6 +29,7 @@
 #include "runtime_views_internal.h"
 #include "session_grants.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/app/ExitCode.h"
 
 namespace ava::tui {
 class TuiSessionActions;
@@ -88,8 +89,9 @@ class TuiSession final
   void flush();
   // TUI thread, once after the event loop terminated: retire work before invoking before_shutdown.
   //
-  // The callback is borrowed only for this call. Return 130 for a signal, 1 for I/O or cleanup failure, otherwise 0.
-  [[nodiscard]] int shutdown(std::function<bool()> const& before_shutdown);
+  // The callback is borrowed only for this call. Returns ExitCode::interrupted after a signal,
+  // ExitCode::terminal_io_failed or ExitCode::cleanup_incomplete after such a failure, otherwise ExitCode::success.
+  [[nodiscard]] app::ExitCode shutdown(std::function<bool()> const& before_shutdown);
 
   // Owned Composer and presentation members retain user content and deliberately
   // opt out of printing; this aggregate must not traverse those values.
@@ -205,7 +207,7 @@ class TuiSession final
   RuntimePluginUiCoordinator plugin_ui_;
   // TUI-thread failure latch set by rendering, descriptor, notification or shutdown failure; retained until run returns.
   bool terminal_write_failed_ = false;
-  // TUI-thread latch for a claimed signal that requests exit, preserving status 130 through cleanup.
+  // TUI-thread latch for a claimed signal that requests exit, preserving ExitCode::interrupted through cleanup.
   bool terminal_signal_received_ = false;
   // TUI-thread cleanup failure copied from completed or stopped runs; survives their reset.
   bool cleanup_failed_ = false;

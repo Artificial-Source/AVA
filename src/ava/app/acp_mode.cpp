@@ -21,21 +21,21 @@
 
 namespace ava::app {
 
-int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const& application_process_scope,
-                 std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics)
+ExitCode run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const& application_process_scope,
+                      std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics)
 {
   auto transport = acp::make_fd_record_transport(STDIN_FILENO, STDOUT_FILENO);
   if (!transport)
   {
     error_output << "ACP startup failed: transport unavailable\n";
-    return 1;
+    return ExitCode::terminal_io_failed;
   }
 
   auto launch_root = ava::core::launch_workspace_root();
   if (!launch_root)
   {
     error_output << "ACP startup failed: launch workspace is unavailable\n";
-    return 1;
+    return ExitCode::environment_unavailable;
   }
   acp::AgentServiceOptions service_options;
   service_options.agent_version = std::string(ava::core::version::kFullVersion);
@@ -46,14 +46,14 @@ int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const&
   if (!provider_catalog)
   {
     error_output << "ACP startup failed: " << provider_catalog.error().format() << '\n';
-    return 1;
+    return ExitCode::configuration_invalid;
   }
   service_options.open_context.provider_catalog = std::move(*provider_catalog);
   auto pinned_options = acp::pin_agent_service_model(std::move(service_options));
   if (!pinned_options)
   {
     error_output << "ACP startup failed: " << pinned_options.error().format() << '\n';
-    return 1;
+    return ExitCode::configuration_invalid;
   }
   acp::AgentService service(std::move(*pinned_options));
   acp::JsonRpcPeer peer(
@@ -100,13 +100,13 @@ int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const&
   service.unbind_update_sender();
   service.shutdown();
   if (signal_latch.signaled())
-    return 130;
+    return ExitCode::interrupted;
   if (!result)
   {
     error_output << "ACP connection closed after a transport or service failure\n";
-    return 1;
+    return ExitCode::run_failed;
   }
-  return 0;
+  return ExitCode::success;
 }
 
 }  // namespace ava::app

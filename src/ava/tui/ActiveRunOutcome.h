@@ -51,7 +51,7 @@ class ActiveRunOutcome final
   [[nodiscard]] bool terminal_write_failed() const { return terminal_write_failed_; }
   // Distinguish actual signal termination from ordinary descriptor closure.
   [[nodiscard]] bool terminal_signal_received() const { return terminal_signal_received_; }
-  // Session keeps this after per-run state is destroyed; signals still select 130.
+  // Session keeps this after per-run state is destroyed; signals still select ExitCode::interrupted.
   [[nodiscard]] bool cleanup_failed() const { return cleanup_failed_; }
   // Only control flags are retained; no submitted or backend content is printable here.
   AVA_DEBUG_PRINT_MEMBERS_ON

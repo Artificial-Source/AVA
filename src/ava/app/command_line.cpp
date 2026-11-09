@@ -11,14 +11,9 @@
 namespace ava::app {
 namespace {
 
-ImmediateInvocation error(int status, std::string text)
+ImmediateInvocation error(ExitCode status, std::string text)
 {
-  return {.kind = ImmediateOutputKind::Text, .status = status, .stderr_output = true, .text = std::move(text)};
-}
-
-ImmediateInvocation program_error(std::string_view program, int status, std::string_view text)
-{
-  return error(status, std::string(program) + ": " + std::string(text) + '\n');
+  return {.kind = ImmediateOutputKind::Text, .status = status, .text = std::move(text)};
 }
 
 bool is_cli_option(std::string_view arg)
@@ -117,7 +112,7 @@ CommandLineInvocation parse_connect(int argc, char const* const* argv, int index
   ConnectInvocation command{.provider = std::move(provider), .source = ConnectCredentialSource::None, .credential_type = std::nullopt, .env_var = std::nullopt};
   auto set_source = [&](ConnectCredentialSource source, ConnectCredentialType type) -> std::optional<ImmediateInvocation> {
     if (command.source != ConnectCredentialSource::None)
-      return program_error(argv[0], 2, "connect accepts only one credential source");
+      return error(ExitCode::usage, "connect accepts only one credential source");
     command.source = source;
     command.credential_type = type;
     return std::nullopt;
@@ -139,21 +134,21 @@ CommandLineInvocation parse_connect(int argc, char const* const* argv, int index
     {
       failed = set_source(ConnectCredentialSource::Env, ConnectCredentialType::ApiKey);
       if (!failed && index + 1 >= argc)
-        return program_error(argv[0], 2, "--api-key-env requires an environment variable name");
+        return error(ExitCode::usage, "--api-key-env requires an environment variable name");
       if (!failed)
         command.env_var = std::string(argv[++index]);
     }
     else
-      return program_error(argv[0], 2, "unknown connect option");
+      return error(ExitCode::usage, "unknown connect option");
     if (failed)
       return std::move(*failed);
   }
 
   if ((command.source == ConnectCredentialSource::BrowserOAuth || command.source == ConnectCredentialSource::HeadlessOAuth) &&
       (!command.provider || *command.provider != "openai"))
-    return program_error(argv[0], 2, "OpenAI OAuth flags require provider `openai`");
+    return error(ExitCode::usage, "OpenAI OAuth flags require provider `openai`");
   if ((command.source == ConnectCredentialSource::Stdin || command.source == ConnectCredentialSource::Env) && !command.provider)
-    return program_error(argv[0], 2, "connect requires a provider with headless credential sources");
+    return error(ExitCode::usage, "connect requires a provider with headless credential sources");
   return command;
 }
 
@@ -177,13 +172,13 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       return DoctorInvocation{};
     if (argc == 3 && std::string_view(argv[2]) == "--json")
       return DoctorInvocation{.json = true};
-    return error(2, "Usage: " + std::string(argv[0]) + " doctor [--json]\n");
+    return error(ExitCode::usage, "usage: " + std::string(argv[0]) + " doctor [--json]");
   }
   if (argc >= 2 && std::string_view(argv[1]) == "support")
   {
     if (argc == 3 && std::string_view(argv[2]) == "export")
       return SupportExportInvocation{};
-    return error(2, "Usage: " + std::string(argv[0]) + " support export\n");
+    return error(ExitCode::usage, "usage: " + std::string(argv[0]) + " support export");
   }
 
   int acp_flags = 0;
@@ -196,11 +191,11 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
   if (acp_flags > 0)
   {
     if (acp_flags != 1 || trace_flags > 1 || argc != 2 + trace_flags)
-      return program_error(argv[0], 2, "--acp is a standalone mode and accepts only one optional --trace flag");
+      return error(ExitCode::usage, "--acp is a standalone mode and accepts only one optional --trace flag");
     return AcpInvocation{.trace = trace_flags == 1};
   }
   if (trace_flags > 1)
-    return program_error(argv[0], 2, "--trace may be specified only once");
+    return error(ExitCode::usage, "--trace may be specified only once");
 
   RuntimeInvocation command;
   bool print_mode = false;
@@ -212,7 +207,7 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
   std::vector<std::string> file_arguments;
 
   auto reject_parallel_outside_runtime = [&]() -> ImmediateInvocation {
-    return program_error(argv[0], 2, "--parallel-read-search-tools is only supported with --print or --rpc");
+    return error(ExitCode::usage, "--parallel-read-search-tools is only supported with --print or --rpc");
   };
 
   for (int index = 1; index < argc; ++index)
@@ -232,7 +227,7 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       if (parallel_tools_flag_seen || parallel_max_workers_flag_seen)
         return reject_parallel_outside_runtime();
       if (index + 1 >= argc || std::string_view(argv[++index]) != "login")
-        return program_error(argv[0], 2, "auth requires login");
+        return error(ExitCode::usage, "auth requires login");
       std::optional<std::string> provider;
       if (index + 1 < argc && !std::string_view(argv[index + 1]).starts_with("--"))
         provider = argv[++index];
@@ -242,16 +237,16 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     {
       if (parallel_tools_flag_seen || parallel_max_workers_flag_seen)
         return reject_parallel_outside_runtime();
-      return ImmediateInvocation{.kind = ImmediateOutputKind::PackageDeferred, .status = 0, .stderr_output = false, .text = {}};
+      return ImmediateInvocation{.kind = ImmediateOutputKind::PackageDeferred, .status = ExitCode::success, .text = {}};
     }
     if (arg == "--help" || arg == "-h")
-      return ImmediateInvocation{.kind = ImmediateOutputKind::Help, .status = 0, .stderr_output = false, .text = {}};
+      return ImmediateInvocation{.kind = ImmediateOutputKind::Help, .status = ExitCode::success, .text = {}};
     if (arg == "--version")
-      return ImmediateInvocation{.kind = ImmediateOutputKind::Version, .status = 0, .stderr_output = false, .text = {}};
+      return ImmediateInvocation{.kind = ImmediateOutputKind::Version, .status = ExitCode::success, .text = {}};
     if (arg == "--mode")
     {
       if (index + 1 >= argc)
-        return program_error(argv[0], 2, "--mode requires build, plan, text, json, or rpc");
+        return error(ExitCode::usage, "--mode requires build, plan, text, json, or rpc");
       std::string_view const requested(argv[++index]);
       if (requested == "text" || requested == "json")
       {
@@ -264,15 +259,15 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       else if (auto parsed = ava::agent::parse_mode(requested))
         command.mode = *parsed;
       else
-        return program_error(argv[0], 2, "--mode requires build, plan, text, json, or rpc");
+        return error(ExitCode::usage, "--mode requires build, plan, text, json, or rpc");
       continue;
     }
     if (arg == "--agent")
     {
       if (command.requested_primary_agent)
-        return error(2, "--agent may be specified only once\n");
+        return error(ExitCode::usage, "--agent may be specified only once");
       if (index + 1 >= argc || is_cli_option(argv[index + 1]))
-        return error(2, "--agent requires one agent name\n");
+        return error(ExitCode::usage, "--agent requires one agent name");
       command.requested_primary_agent = argv[++index];
       continue;
     }
@@ -297,32 +292,32 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     if (arg == "--output")
     {
       if (index + 1 >= argc)
-        return program_error(argv[0], 2, "--output requires json, text, or rpc");
+        return error(ExitCode::usage, "--output requires json, text, or rpc");
       std::string_view const output(argv[++index]);
       if (output == "json" || output == "text")
         command.print_output_format = output == "json" ? PrintOutputFormat::Json : PrintOutputFormat::Text;
       else if (output == "rpc")
         rpc_mode = true;
       else
-        return program_error(argv[0], 2, "--output requires json, text, or rpc");
+        return error(ExitCode::usage, "--output requires json, text, or rpc");
       print_output_flag_seen = true;
       continue;
     }
     if (arg == "--allow" || arg == "--allow-tool")
     {
       if (index + 1 >= argc || is_cli_option(argv[index + 1]))
-        return program_error(argv[0], 2, arg == "--allow" ? "--allow requires read-only" : "--allow-tool requires a comma-separated tool list");
+        return error(ExitCode::usage, arg == "--allow" ? "--allow requires read-only" : "--allow-tool requires a comma-separated tool list");
       auto added = arg == "--allow" ? add_headless_allow_policy(command.headless_permission_policy, argv[++index])
                                     : add_headless_allowed_tools(command.headless_permission_policy, argv[++index]);
       if (!added)
-        return program_error(argv[0], 2, added.error().format());
+        return error(ExitCode::usage, added.error().format());
       print_permission_flag_seen = true;
       continue;
     }
     if (arg == "--tools" || arg == "-t" || arg == "--exclude-tools" || arg == "-xt")
     {
       if (index + 1 >= argc || is_cli_option(argv[index + 1]))
-        return program_error(argv[0], 2, std::string(arg) + " requires a comma-separated tool list");
+        return error(ExitCode::usage, std::string(arg) + " requires a comma-separated tool list");
       auto& target = (arg == "--tools" || arg == "-t") ? command.tool_visibility.included_tools : command.tool_visibility.excluded_tools;
       append_tool_visibility_names(target, argv[++index]);
       continue;
@@ -341,7 +336,7 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     if (arg == "--parallel-read-search-tools")
     {
       if (parallel_tools_flag_seen)
-        return program_error(argv[0], 2, "--parallel-read-search-tools may be specified only once");
+        return error(ExitCode::usage, "--parallel-read-search-tools may be specified only once");
       parallel_tools_flag_seen = true;
       command.parallel_read_search_tools = true;
       continue;
@@ -349,25 +344,25 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     if (arg == "--parallel-read-search-max-workers")
     {
       if (index + 1 >= argc || is_cli_option(argv[index + 1]))
-        return program_error(argv[0], 2, "--parallel-read-search-max-workers requires an integer from 1 to 4");
+        return error(ExitCode::usage, "--parallel-read-search-max-workers requires an integer from 1 to 4");
       auto const parsed = parse_parallel_read_search_max_workers(argv[index + 1]);
       if (!parsed)
-        return program_error(argv[0], 2, "--parallel-read-search-max-workers requires an integer from 1 to 4");
+        return error(ExitCode::usage, "--parallel-read-search-max-workers requires an integer from 1 to 4");
       if (parallel_max_workers_flag_seen)
       {
         if (*parsed != command.parallel_read_search_max_workers)
-          return program_error(argv[0], 2, "--parallel-read-search-max-workers has conflicting values");
-        return program_error(argv[0], 2, "--parallel-read-search-max-workers may be specified only once");
+          return error(ExitCode::usage, "--parallel-read-search-max-workers has conflicting values");
+        return error(ExitCode::usage, "--parallel-read-search-max-workers may be specified only once");
       }
       parallel_max_workers_flag_seen = true;
       command.parallel_read_search_max_workers = *parsed;
       ++index;
       continue;
     }
-    auto require_value = [&](std::string_view message) -> std::optional<ImmediateInvocation> {
+    auto require_value = [&](std::string message) -> std::optional<ImmediateInvocation> {
       if (index + 1 < argc)
         return std::nullopt;
-      return program_error(argv[0], 2, message);
+      return error(ExitCode::usage, message);
     };
     if (arg == "--session" || arg == "--session-id")
     {
@@ -393,7 +388,7 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     if (arg == "--session-dir" || arg == "--cwd")
     {
       if (index + 1 >= argc || (arg == "--cwd" && is_cli_option(argv[index + 1])))
-        return program_error(argv[0], 2, arg == "--cwd" ? "--cwd requires a path" : "--session-dir requires a directory");
+        return error(ExitCode::usage, arg == "--cwd" ? "--cwd requires a path" : "--session-dir requires a directory");
       if (arg == "--cwd")
         command.requested_current_dir = argv[++index];
       else
@@ -413,8 +408,8 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       if (index + 1 >= argc || (arg == "--thinking" && is_cli_option(argv[index + 1])))
       {
         if (arg == "--thinking")
-          return program_error(argv[0], 2, "--thinking requires a reasoning level (off or a level supported by the active model)");
-        return program_error(argv[0], 2, arg == "--system-prompt" ? "--system-prompt requires text" : "--append-system-prompt requires text");
+          return error(ExitCode::usage, "--thinking requires a reasoning level (off or a level supported by the active model)");
+        return error(ExitCode::usage, arg == "--system-prompt" ? "--system-prompt requires text" : "--append-system-prompt requires text");
       }
       if (arg == "--thinking")
         command.initial_reasoning_level = argv[++index];
@@ -434,26 +429,27 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       append_prompt_argument(command.print_prompt, arg);
     }
     else
-      return program_error(argv[0], 2, "unknown argument: " + std::string(arg));
+      return error(ExitCode::usage, "unknown argument: " + std::string(arg));
   }
 
   if (print_mode && rpc_mode)
-    return program_error(argv[0], 2, "use either --print or --rpc, not both");
+    return error(ExitCode::usage, "use either --print or --rpc, not both");
   if (!print_mode && !rpc_mode && print_output_flag_seen)
-    return program_error(argv[0], 2, "--json and --output text/json are only supported with --print; use --rpc or --output rpc for RPC");
+    return error(ExitCode::usage, "--json and --output text/json are only supported with --print; use --rpc or --output rpc for RPC");
   if (!print_mode && !rpc_mode && print_permission_flag_seen)
-    return program_error(argv[0], 2, "--allow and --allow-tool are only supported with --print or --rpc");
+    return error(ExitCode::usage, "--allow and --allow-tool are only supported with --print or --rpc");
   if (parallel_max_workers_flag_seen && !parallel_tools_flag_seen)
-    return program_error(argv[0], 2, "--parallel-read-search-max-workers requires --parallel-read-search-tools");
+    return error(ExitCode::usage, "--parallel-read-search-max-workers requires --parallel-read-search-tools");
   if (!print_mode && !rpc_mode && (parallel_tools_flag_seen || parallel_max_workers_flag_seen))
     return reject_parallel_outside_runtime();
   int const persisted_modes = (command.requested_session_id ? 1 : 0) + (command.continue_last_session ? 1 : 0) + (command.fork_session_id ? 1 : 0);
   if (persisted_modes > 1)
-    return program_error(argv[0], 2, "use only one of --session/--session-id, --continue/--resume, or --fork");
+    return error(ExitCode::usage, "use only one of --session/--session-id, --continue/--resume, or --fork");
   if (command.sessionless && persisted_modes > 0)
-    return program_error(argv[0], 2, "use either --no-session or session resume options, not both");
+    return error(ExitCode::usage, "use either --no-session or session resume options, not both");
   if (!print_mode && !rpc_mode && (!stdin_is_tty() || !stdout_is_tty()))
-    return program_error(argv[0], 2, "interactive TUI requires a terminal on both stdin and stdout; use --print or --rpc for non-interactive runs");
+    return error(ExitCode::usage,
+                         "interactive TUI requires a terminal on both stdin and stdout; use --print or --rpc for non-interactive runs");
 
   prepend_file_arguments_to_prompt(command.print_prompt, file_arguments);
   command.frontend = print_mode ? RuntimeFrontend::Print : rpc_mode ? RuntimeFrontend::Rpc : RuntimeFrontend::Interactive;

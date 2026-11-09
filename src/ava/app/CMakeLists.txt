@@ -1,4 +1,5 @@
 add_library(ava_app_common
+  "ExitCode.h"
   "terminal_text.cpp"
 )
 

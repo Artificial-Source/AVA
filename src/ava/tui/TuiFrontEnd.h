@@ -10,6 +10,7 @@
 #include "keybindings.h"                // TuiKeyBindings
 #include "runtime.h"                    // TuiRuntimeOptions, TuiCatalogDelivery, TuiLocalDisplaySettingsResult
 #include "ava/frontend/FrontEnd.h"
+#include "ava/app/ExitCode.h"
 #include "utils/threading/EventLoop.h"
 #include "utils/threading/aithreadid.h"
 
@@ -224,8 +225,8 @@ class TuiFrontEnd : public frontend::FrontEnd,
   // The caller must have checked that stdin and stdout are terminals. This function returns only after
   // another thread called terminate(); when the TUI wants to stop (or fails, or throws) it calls
   // core::Application::request_shutdown() and keeps waiting for that. Context initialization precedes
-  // session construction; the session and worker borrows retire before return. Returns the final exit status.
-  int run();
+  // session construction; the session and worker borrows retire before return. Returns the exit code for main.
+  app::ExitCode run();
   // Main thread: make run() leave its event loop.
   //
   // Blocks until the TUI thread acknowledged the termination; after that it dispatches no more events.

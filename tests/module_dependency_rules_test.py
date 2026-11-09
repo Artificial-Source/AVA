@@ -83,7 +83,7 @@ ALLOWED = {
     "frontend": frozenset({"agent", "app", "config", "session"}),
     "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "frontend", "permissions", "session"}),
 }
-APP_COMMON_PATHS = frozenset({"app/terminal_text.cpp", "app/terminal_text.h"})
+APP_COMMON_PATHS = frozenset({"app/ExitCode.h", "app/terminal_text.cpp", "app/terminal_text.h"})
 SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp", ".cxx"})
 IGNORED_TREE_NAMES = frozenset({"build", "generated", "reference", "tests", "vendor"})
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")')
@@ -116,10 +116,14 @@ def include_target(source: Path, including_path: Path, literal: str) -> str | No
         return None
 
     # A relative include can otherwise bypass the canonical ava/<module>/ form.
-    # Resolve it lexically against the including file and classify it whenever it
-    # still names production code below src/ava.
+    # Like the compiler, look for it next to the including file first and classify it
+    # whenever that file exists and is production code below src/ava. If it does not
+    # exist there, the compiler finds it through the include paths instead (for example
+    # utils/AIAlert.h at the repository root), so it is not a relative module edge.
     candidate = Path(*including_path.parent.parts, *PurePosixPath(literal).parts)
     normalized = Path(candidate.parent, candidate.name).resolve(strict=False)
+    if not normalized.is_file():
+        return None
     try:
         relative = normalized.relative_to((source / "src" / "ava").resolve())
     except ValueError:
@@ -253,11 +257,17 @@ def check(source: Path, policy: Path) -> list[str]:
 
 
 class ModuleDependencyRulesSelfTest(unittest.TestCase):
-    def run_check(self, source_text: str, exceptions: list[dict], module: str = "config", source_name: str = "fixture.cpp") -> list[str]:
+    # Check a temporary tree with one source file, plus empty existing_files (paths relative to the tree root) for relative includes to find.
+    def run_check(self, source_text: str, exceptions: list[dict], module: str = "config", source_name: str = "fixture.cpp",
+                  existing_files: tuple[str, ...] = ()) -> list[str]:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            for existing_file in existing_files:
+                path = root / existing_file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
             source = root / "src" / "ava" / module / source_name
-            source.parent.mkdir(parents=True)
+            source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text(source_text, encoding="utf-8")
             policy = root / "policy.json"
             policy.write_text(json.dumps({"exceptions": exceptions}), encoding="utf-8")
@@ -337,13 +347,22 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
 
     def test_relative_includes_cannot_escape_app_common_rules(self) -> None:
         self.assertEqual(
-            self.run_check('#include "../app/terminal_text.h"\n', [], module="agent"),
+            self.run_check('#include "../app/terminal_text.h"\n', [], module="agent", existing_files=("src/ava/app/terminal_text.h",)),
             ["src/ava/agent/fixture.cpp:1: implementation agent -> app_common (../app/terminal_text.h)"],
         )
         self.assertEqual(
-            self.run_check('#include "../tui/composer.h"\n', [], module="app", source_name="terminal_text.cpp"),
+            self.run_check('#include "../tui/composer.h"\n', [], module="app", source_name="terminal_text.cpp", existing_files=("src/ava/tui/composer.h",)),
             ["src/ava/app/terminal_text.cpp:1: implementation app_common -> tui (../tui/composer.h)"],
         )
+        # A downward relative include from an app_common file still reaches app code.
+        self.assertEqual(
+            self.run_check('#include "rpc/input.h"\n', [], module="app", source_name="terminal_text.cpp", existing_files=("src/ava/app/rpc/input.h",)),
+            ["src/ava/app/terminal_text.cpp:1: implementation app_common -> app (rpc/input.h)"],
+        )
+
+    def test_include_path_headers_are_not_relative_module_edges(self) -> None:
+        # utils/AIAlert.h does not exist next to src/ava/app/ExitCode.h; the compiler finds it at the repository root.
+        self.assertEqual(self.run_check('#include "utils/AIAlert.h"\n', [], module="app", source_name="ExitCode.h"), [])
 
     def test_only_app_tui_seam_may_include_tui(self) -> None:
         self.assertEqual(self.run_check('#include "ava/tui/composer.h"\n', [], module="app", source_name="tui/fixture.cpp"), [])
@@ -408,7 +427,7 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
 
     def test_relative_forbidden_edge(self) -> None:
         self.assertEqual(
-            self.run_check('#include "../provider/provider.h"\n', []),
+            self.run_check('#include "../provider/provider.h"\n', [], existing_files=("src/ava/provider/provider.h",)),
             ["src/ava/config/fixture.cpp:1: implementation config -> provider (../provider/provider.h)"],
         )
 

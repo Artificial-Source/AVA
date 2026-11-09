@@ -22,6 +22,7 @@
 #include "ava/provider/registry.h"
 #include "ava/core/base64.h"
 #include "ava/core/thread.h"
+#include "utils/AIAlert.h"
 
 #include <atomic>
 #include <cerrno>
@@ -1065,7 +1066,7 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
   return run_rpc_loop(unlocked_session, open_context, provider, transport, transport, std::move(runtime_options), in, out, rpc::RpcInputWake{});
 }
 
-int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err, rpc::RpcInputWake wake)
+void run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out, rpc::RpcInputWake wake)
 {
   ModeSignalLatch signal_latch;
   {
@@ -1073,17 +1074,11 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
     probe.parallel_read_search_tools = options.parallel_read_search_tools;
     probe.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
     if (auto valid = validate_run_options(probe); !valid)
-    {
-      err << valid.error().format() << '\n';
-      return 2;
-    }
+      THROW_EXIT_CODE(usage, "[ERRMSG]", AIArgs("[ERRMSG]", valid.error().format()));
   }
   auto unlocked_session_result = runtime::Session::open(options.open_context, options.lifecycle_request);
   if (!unlocked_session_result)
-  {
-    err << unlocked_session_result.error().format() << '\n';
-    return 1;
-  }
+    THROW_EXIT_CODE(session_unavailable, "[ERRMSG]", AIArgs("[ERRMSG]", unlocked_session_result.error().format()));
   runtime::session_ts& unlocked_session = *unlocked_session_result;
 
   runtime::RunOptions runtime_options;
@@ -1103,10 +1098,7 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
     auto catalog = options.open_context.provider_catalog ? options.open_context.provider_catalog : ava::provider::ProviderCatalog::build_builtins_only();
     auto provider_result = catalog->create(session_r->model_selection_r()->model.provider_id);
     if (!provider_result)
-    {
-      err << provider_result.error().format() << '\n';
-      return 1;
-    }
+      THROW_EXIT_CODE(configuration_invalid, "[ERRMSG]", AIArgs("[ERRMSG]", provider_result.error().format()));
     provider = std::move(*provider_result);
   }
 
@@ -1115,20 +1107,14 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
     return session_r->session_process_scope();
   }();
   if (!session_process_scope)
-  {
-    err << "RPC process authority is unavailable\n";
-    return 1;
-  }
+    THROW_EXIT_CODE(environment_unavailable, "RPC process authority is unavailable");
   ava::http::CurlCliTransport transport(*session_process_scope);
   ava::core::VoidResult result;
   if (&in == &std::cin)
   {
     auto input = rpc::make_posix_rpc_line_reader(STDIN_FILENO);
     if (!input)
-    {
-      err << input.error().format() << '\n';
-      return 1;
-    }
+      THROW_EXIT_CODE(terminal_io_failed, "[ERRMSG]", AIArgs("[ERRMSG]", input.error().format()));
     result =
         run_rpc_loop_impl(unlocked_session, options.open_context, *provider, transport, transport, std::move(runtime_options), **input, out, &signal_latch);
   }
@@ -1137,18 +1123,14 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
     result = run_rpc_loop(unlocked_session, options.open_context, *provider, transport, transport, std::move(runtime_options), in, out, std::move(wake));
   }
   if (signal_latch.signaled())
-    return 130;
+    THROW_EXIT_CODE(interrupted, "interrupted by a signal");
   if (!result)
-  {
-    err << result.error().format() << '\n';
-    return 1;
-  }
-  return 0;
+    THROW_EXIT_CODE(run_failed, "[ERRMSG]", AIArgs("[ERRMSG]", result.error().format()));
 }
 
-int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err)
+void run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out)
 {
-  return run_rpc_mode(options, in, out, err, rpc::RpcInputWake{});
+  run_rpc_mode(options, in, out, rpc::RpcInputWake{});
 }
 
 }  // namespace ava::app

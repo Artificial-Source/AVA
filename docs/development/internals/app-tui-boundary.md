@@ -20,11 +20,12 @@ Default keybindings and canonical action labels are projected into neutral
 `CommandHotkey` records by `app/tui/command_hotkeys.*`.
 The shared help formatter consumes those records rather than importing TUI keybinding types.
 
-Terminal-text sanitization lives in `app/terminal_text.*`, owned by the
+Terminal-text sanitization lives in `app/terminal_text.*` and the `main` exit codes
+in the header-only `app/ExitCode.h`, both owned by the
 `AVA::app_common` target. Both app and TUI link this small core-dependent target;
 the TUI does not link the application orchestration target, avoiding a target cycle.
 The source dependency guard rejects direct TUI includes outside `app/tui/`
-and restricts TUI access to app headers to the shared frontend and terminal-text contracts.
+and restricts TUI access to app headers to the shared frontend, terminal-text and exit-code contracts.
 
 Canonical command policy and dispatch remain in `app/commands.cpp`.
 TUI command family classification, keybinding edits, and display-setting

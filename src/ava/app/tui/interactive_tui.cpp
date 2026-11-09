@@ -17,8 +17,8 @@
 
 namespace ava::app::interactive_internal {
 
-// Compose application-owned startup data, run one frontend, and translate construction/runtime errors to process status.
-int run_tui(InteractiveState state)
+// Compose application-owned startup data, run one frontend, and translate construction/runtime errors to an exit code.
+ExitCode run_tui(InteractiveState state)
 {
   auto& unlocked_session = state.unlocked_session;
   auto const initial_title_coordinator = runtime::session_ts::rat(unlocked_session)->session_title_coordinator();
@@ -35,10 +35,10 @@ int run_tui(InteractiveState state)
   {
     //FIXME: print the program name before this.
     std::cerr << "interactive TUI requires stdin and stdout to be (a) terminal(s).\n";
-    return 1;
+    return ExitCode::environment_unavailable;
   }
 
-  int result;
+  ExitCode result;
   try
   {
     TuiFrontEnd frontend(unlocked_session, std::move(initial_application_catalog), initial_title_catalog_cursor,
@@ -50,8 +50,8 @@ int run_tui(InteractiveState state)
                                                 .workspace_catalog_generation = initial_catalog_snapshot.workspace_catalog_generation});
     frontend.register_frontend_data(unlocked_session);
     // Run the frontend on its own thread, keeping it alive until that thread joins.
-    // Transfer both the exit status and any exception back to this thread.
-    std::packaged_task<int()> tui_task([&frontend]{
+    // Transfer both the exit code and any exception back to this thread.
+    std::packaged_task<ExitCode()> tui_task([&frontend] {
       Debug(init_thread("tui_thread"));
       return frontend.run();
     });
@@ -65,7 +65,7 @@ int run_tui(InteractiveState state)
   catch (core::Error const& error)
   {
     std::cerr << error.format() << std::endl;
-    result = 1;
+    result = ExitCode::internal_error;
   }
   std::cout << std::flush;
   return result;

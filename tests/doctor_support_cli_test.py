@@ -324,7 +324,7 @@ def test_usage_and_required_failure(ava: Path, root: Path) -> None:
         completed = run(ava, list(args), env, workspace)
         assert completed.returncode == 2, (args, completed.returncode, completed.stdout, completed.stderr)
         assert completed.stdout == ""
-        assert completed.stderr.startswith(f"Usage: {ava} ")
+        assert completed.stderr.startswith(f"{ava}: usage: {ava} ")
 
     outside_cwd = run(ava, ["--cwd", f"{workspace}-sibling", "--rpc"], env, workspace)
     assert outside_cwd.returncode == 2

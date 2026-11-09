@@ -16,6 +16,7 @@
 #include "ava/core/error.h"
 #include "ava/core/result.h"
 #include "ava/core/thread.h"
+#include "utils/AIAlert.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -30,6 +31,7 @@
 #include <streambuf>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -497,15 +499,24 @@ void test_app_rpc_mode_forwards_nonstdin_wake()
   std::istream in(&input_buffer);
   std::ostringstream out;
   out.setstate(std::ios::badbit);
-  std::ostringstream err;
   bool wake_called = false;
   input_buffer.push("{\"id\":\"protocol\",\"type\":\"get_protocol\"}\n");
-  auto const status = ava::app::run_rpc_mode(options, in, out, err, [&] noexcept {
-    wake_called = true;
-    input_buffer.close();
-  });
+  std::error_code code;
+  std::ostringstream err;
+  try
+  {
+    ava::app::run_rpc_mode(options, in, out, [&] noexcept {
+      wake_called = true;
+      input_buffer.close();
+    });
+  }
+  catch (ava::app::AIAlert::ExitCode const& error)
+  {
+    code = error.getCode();
+    err << error;
+  }
 
-  expect(status == 1 && wake_called && err.str().find("failed to write RPC JSONL record") != std::string::npos,
+  expect(code == ava::app::ExitCode::run_failed && wake_called && err.str().find("failed to write RPC JSONL record") != std::string::npos,
          "run_rpc_mode forwards an explicit wake callback for a non-std::cin stream on output failure");
 }
 

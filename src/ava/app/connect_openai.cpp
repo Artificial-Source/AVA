@@ -10,6 +10,7 @@
 #include "ava/config/provider_profiles.h"
 #include "ava/provider/catalog.h"
 #include "ava/core/result.h"
+#include "utils/AIAlert.h"
 
 #include <algorithm>
 #include <cctype>
@@ -67,18 +68,30 @@ enum class ConnectInputReadiness
   Failed,
 };
 
-// Wait until production stdin can be read without blocking, while polling the
-// shared process signal bits. Injected streams are already finite test inputs
-// and can be read directly.
-ConnectInputReadiness wait_for_connect_input(std::istream& in)
+// The stream buffer of std::cin at program start, which reads file descriptor STDIN_FILENO.
+//
+// Tests replace the stream buffer of std::cin with one that holds their input.
+std::streambuf* const stdin_descriptor_streambuf = std::cin.rdbuf();
+
+// Return true when std::cin currently reads STDIN_FILENO.
+//
+// Only then does polling STDIN_FILENO tell whether reading std::cin can block.
+bool cin_reads_stdin_descriptor()
 {
-  if (&in != &std::cin)
-    return ConnectInputReadiness::Ready;
+  return std::cin.rdbuf() == stdin_descriptor_streambuf;
+}
+
+// Wait until std::cin can be read without blocking, while polling the shared process signal bits.
+//
+// A replacement stream buffer (see cin_reads_stdin_descriptor) is not backed by STDIN_FILENO
+// and is read directly once no signal is pending.
+ConnectInputReadiness wait_for_connect_input()
+{
   while (true)
   {
     if (terminal_mode_cancelled_by_signal())
       return ConnectInputReadiness::Cancelled;
-    if (in.rdbuf() != nullptr && in.rdbuf()->in_avail() > 0)
+    if (!cin_reads_stdin_descriptor() || std::cin.rdbuf()->in_avail() > 0)
       return ConnectInputReadiness::Ready;
     pollfd descriptor{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
     int const ready = ::poll(&descriptor, 1, 50);
@@ -296,8 +309,9 @@ std::vector<ConnectProviderMenuItem> filtered_provider_menu_items(std::string_vi
   return filtered;
 }
 
-void render_provider_menu(std::ostream& out, std::string_view query, std::size_t selected_index)
+void render_provider_menu(std::string_view query, std::size_t selected_index)
 {
+  std::ostream& out = std::cout;
   auto const filtered = filtered_provider_menu_items(query);
   out << "\x1b[2J\x1b[H";
   out << "Add credential\n\n";
@@ -319,11 +333,11 @@ void render_provider_menu(std::ostream& out, std::string_view query, std::size_t
   out << "\n↑/↓ to select • Enter: confirm • Type: search • Esc: cancel\n" << std::flush;
 }
 
-bool menu_input_pending(std::istream& in, bool stdin_is_tty)
+bool menu_input_pending(bool stdin_is_tty)
 {
-  if (in.rdbuf() != nullptr && in.rdbuf()->in_avail() > 0)
+  if (std::cin.rdbuf() != nullptr && std::cin.rdbuf()->in_avail() > 0)
     return true;
-  if (!stdin_is_tty)
+  if (!stdin_is_tty || !cin_reads_stdin_descriptor())
     return false;
   pollfd descriptor{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
   int ready = 0;
@@ -335,21 +349,22 @@ bool menu_input_pending(std::istream& in, bool stdin_is_tty)
   return ready > 0 && (descriptor.revents & POLLIN) != 0;
 }
 
-void consume_escape_sequence_tail(std::istream& in, bool stdin_is_tty)
+void consume_escape_sequence_tail(bool stdin_is_tty)
 {
-  while (menu_input_pending(in, stdin_is_tty))
+  while (menu_input_pending(stdin_is_tty))
   {
     char ignored = 0;
-    if (!in.get(ignored))
+    if (!std::cin.get(ignored))
       return;
     if (ignored >= '@' && ignored <= '~')
       return;
   }
 }
 
-ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty)
+ava::core::Result<MenuInput> read_menu_input(bool stdin_is_tty)
 {
-  auto const readiness = wait_for_connect_input(in);
+  std::istream& in = std::cin;
+  auto const readiness = wait_for_connect_input();
   if (readiness == ConnectInputReadiness::Cancelled)
     return MenuInput{.kind = MenuInputKind::Escape, .text = {}};
   if (readiness == ConnectInputReadiness::Failed)
@@ -369,7 +384,7 @@ ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty
     return MenuInput{.kind = MenuInputKind::Backspace, .text = {}};
   if (ch == '\x1b')
   {
-    if (menu_input_pending(in, stdin_is_tty))
+    if (menu_input_pending(stdin_is_tty))
     {
       char prefix = 0;
       if (!in.get(prefix))
@@ -379,7 +394,7 @@ ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty
         static_cast<void>(in.unget());
         return MenuInput{.kind = MenuInputKind::Escape, .text = {}};
       }
-      if (!menu_input_pending(in, stdin_is_tty))
+      if (!menu_input_pending(stdin_is_tty))
       {
         return MenuInput{.kind = MenuInputKind::Escape, .text = {}};
       }
@@ -392,7 +407,7 @@ ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty
           return MenuInput{.kind = MenuInputKind::Down, .text = {}};
         if (code >= '@' && code <= '~')
           return MenuInput{.kind = MenuInputKind::Other, .text = {}};
-        consume_escape_sequence_tail(in, stdin_is_tty);
+        consume_escape_sequence_tail(stdin_is_tty);
         return MenuInput{.kind = MenuInputKind::Other, .text = {}};
       }
     }
@@ -405,7 +420,7 @@ ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty
   return MenuInput{.kind = MenuInputKind::Other, .text = {}};
 }
 
-ava::core::Result<std::string> select_provider_from_menu(std::istream& in, std::ostream& out, bool stdin_is_tty)
+ava::core::Result<std::string> select_provider_from_menu(bool stdin_is_tty)
 {
   std::string query;
   std::size_t selected_index = 0;
@@ -415,8 +430,8 @@ ava::core::Result<std::string> select_provider_from_menu(std::istream& in, std::
     auto filtered = filtered_provider_menu_items(query);
     if (!filtered.empty())
       selected_index = std::min(selected_index, filtered.size() - 1);
-    render_provider_menu(out, query, selected_index);
-    auto input = read_menu_input(in, stdin_is_tty);
+    render_provider_menu(query, selected_index);
+    auto input = read_menu_input(stdin_is_tty);
     if (!input)
       return std::unexpected(std::move(input.error()));
     switch (input->kind)
@@ -511,44 +526,36 @@ bool is_valid_connect_provider_id(std::string_view provider_id)
   });
 }
 
-ava::core::Result<std::string> read_prompt_line(std::istream& in, std::ostream& out, std::string_view prompt, bool secret, bool stdin_is_tty)
+ava::core::Result<std::string> read_prompt_line(std::string_view prompt, bool secret, bool stdin_is_tty)
 {
   if (terminal_mode_cancelled_by_signal())
     return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "connect prompt cancelled"));
-  out << prompt << std::flush;
+  std::cout << prompt << std::flush;
   std::string line;
   {
     ScopedTerminalEcho const echo_guard(secret && stdin_is_tty);
-    if (&in != &std::cin)
+    while (true)
     {
-      if (!std::getline(in, line))
-        return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
-    }
-    else
-    {
-      while (true)
+      auto const readiness = wait_for_connect_input();
+      if (readiness == ConnectInputReadiness::Cancelled)
+        return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "connect prompt cancelled"));
+      if (readiness == ConnectInputReadiness::Failed)
+        return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to wait for connect prompt input"));
+      char character = 0;
+      if (!std::cin.get(character))
       {
-        auto const readiness = wait_for_connect_input(in);
-        if (readiness == ConnectInputReadiness::Cancelled)
-          return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "connect prompt cancelled"));
-        if (readiness == ConnectInputReadiness::Failed)
-          return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to wait for connect prompt input"));
-        char character = 0;
-        if (!in.get(character))
-        {
-          if (in.eof() && !line.empty())
-            break;
-          return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
-        }
-        if (character == '\n')
+        if (std::cin.eof() && !line.empty())
           break;
-        if (character != '\r')
-          line.push_back(character);
+        return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
       }
+      if (character == '\n')
+        break;
+      if (character != '\r')
+        line.push_back(character);
     }
   }
   if (secret && stdin_is_tty)
-    out << '\n';
+    std::cout << '\n';
   line = trim_stdin_secret(std::move(line));
   if (line.size() > max_connect_secret_bytes)
   {
@@ -577,8 +584,9 @@ ava::core::VoidResult store_connect_secret(ava::config::XdgPaths const& paths, s
                                                                                        .source = "connect"});
 }
 
-ava::core::Result<std::string> read_connect_secret(ConnectProviderCredentialOptions const& options, std::istream& in)
+ava::core::Result<std::string> read_connect_secret(ConnectProviderCredentialOptions const& options)
 {
+  std::istream& in = std::cin;
   if (options.env_var)
   {
     if (!is_valid_env_var_name(*options.env_var))
@@ -602,7 +610,7 @@ ava::core::Result<std::string> read_connect_secret(ConnectProviderCredentialOpti
   std::string secret;
   while (true)
   {
-    auto const readiness = wait_for_connect_input(in);
+    auto const readiness = wait_for_connect_input();
     if (readiness == ConnectInputReadiness::Cancelled)
       return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "credential input cancelled"));
     if (readiness == ConnectInputReadiness::Failed)
@@ -673,161 +681,132 @@ ava::core::Result<ava::config::OpenAICredential> wait_for_openai_device_oauth(av
   return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "timed out waiting for OpenAI device OAuth"));
 }
 
-int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream& out, std::ostream& err,
-                               std::optional<ava::process::ProcessScopeV1> process_scope)
+// Throw the ExitCode for a failed connect step whose error is error.
+//
+// A failure caused by a signal is reported as interrupted, regardless of error.
+[[noreturn]] void throw_connect_failure(ExitCode code, ava::core::Error const& error)
+{
+  if (terminal_mode_cancelled_by_signal())
+    THROW_EXIT_CODE(interrupted, "interrupted by a signal");
+  THROW_EXIT_CODE_V(code, "[ERRMSG]", AIArgs("[ERRMSG]", sanitize_terminal_text(error.format())));
+}
+
+// Throw the interrupted ExitCode if a signal arrived during the connect invocation.
+void throw_if_interrupted()
+{
+  if (terminal_mode_cancelled_by_signal())
+    THROW_EXIT_CODE(interrupted, "interrupted by a signal");
+}
+
+void run_connect_openai_browser(ava::config::XdgPaths const& paths, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
   ScopedConnectSignalInvocation const signal_invocation;
   if (!process_scope)
-  {
-    err << "OpenAI OAuth process authority is unavailable\n";
-    return 1;
-  }
+    THROW_EXIT_CODE(environment_unavailable, "OpenAI OAuth process authority is unavailable");
   auto session = ava::config::make_openai_oauth_session();
   if (!session)
-  {
-    err << sanitize_terminal_text(session.error().format()) << '\n';
-    return 1;
-  }
-  out << "Open this URL to connect AVA to OpenAI:\n\n" << session->authorization_url << "\n\n";
+    THROW_EXIT_CODE(environment_unavailable, "[ERRMSG]", AIArgs("[ERRMSG]", sanitize_terminal_text(session.error().format())));
+  std::cout << "Open this URL to connect AVA to OpenAI:\n\n" << session->authorization_url << "\n\n";
   if (open_url_in_browser(session->authorization_url))
   {
-    out << "Opened your browser.\n";
+    std::cout << "Opened your browser.\n";
   }
   else
   {
-    out << "Could not open your browser automatically.\n";
+    std::cout << "Could not open your browser automatically.\n";
   }
-  out << "Waiting for browser callback on http://localhost:1455/auth/callback ...\n";
+  std::cout << "Waiting for browser callback on http://localhost:1455/auth/callback ...\n";
 
   ava::http::CurlCliTransport transport(*process_scope);
   auto credential = complete_openai_browser_oauth(*session, transport, unix_time_seconds(), [] { return terminal_mode_cancelled_by_signal(); });
   if (!credential)
-  {
-    if (terminal_mode_cancelled_by_signal())
-      return 130;
-    err << sanitize_terminal_text(credential.error().format()) << '\n';
-    return 1;
-  }
-  if (terminal_mode_cancelled_by_signal())
-    return 130;
+    throw_connect_failure(ExitCode::credentials_unavailable, credential.error());
+  throw_if_interrupted();
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
-  {
-    err << sanitize_terminal_text(stored.error().format()) << '\n';
-    return 1;
-  }
-  out << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
-  return 0;
+    throw_connect_failure(ExitCode::credentials_unavailable, stored.error());
+  std::cout << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
 }
 
-int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream& out, std::ostream& err,
-                                std::optional<ava::process::ProcessScopeV1> process_scope)
+void run_connect_openai_headless(ava::config::XdgPaths const& paths, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
   ScopedConnectSignalInvocation const signal_invocation;
   if (!process_scope)
-  {
-    err << "OpenAI OAuth process authority is unavailable\n";
-    return 1;
-  }
+    THROW_EXIT_CODE(environment_unavailable, "OpenAI OAuth process authority is unavailable");
   ava::http::CurlCliTransport transport(*process_scope);
   auto authorization = ava::config::start_openai_oauth_device_authorization(transport);
   if (!authorization)
-  {
-    err << sanitize_terminal_text(authorization.error().format()) << '\n';
-    return 1;
-  }
-  out << "Open this URL on any device:\n\n" << authorization->verification_url << "\n\n";
-  out << "Enter this code: " << sanitize_terminal_text(authorization->user_code) << "\n\n";
-  out << "Waiting for OpenAI authorization ...\n";
+    THROW_EXIT_CODE(credentials_unavailable, "[ERRMSG]", AIArgs("[ERRMSG]", sanitize_terminal_text(authorization.error().format())));
+  std::cout << "Open this URL on any device:\n\n" << authorization->verification_url << "\n\n";
+  std::cout << "Enter this code: " << sanitize_terminal_text(authorization->user_code) << "\n\n";
+  std::cout << "Waiting for OpenAI authorization ...\n";
 
   auto credential = wait_for_openai_device_oauth(*authorization, transport, unix_time_seconds(), [] { return terminal_mode_cancelled_by_signal(); });
   if (!credential)
-  {
-    if (terminal_mode_cancelled_by_signal())
-      return 130;
-    err << sanitize_terminal_text(credential.error().format()) << '\n';
-    return 1;
-  }
-  if (terminal_mode_cancelled_by_signal())
-    return 130;
+    throw_connect_failure(ExitCode::credentials_unavailable, credential.error());
+  throw_if_interrupted();
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
-  {
-    err << sanitize_terminal_text(stored.error().format()) << '\n';
-    return 1;
-  }
-  out << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
-  return 0;
+    throw_connect_failure(ExitCode::credentials_unavailable, stored.error());
+  std::cout << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
 }
 
-int run_connect_openai(ava::config::XdgPaths const& paths, std::optional<ava::process::ProcessScopeV1> process_scope)
+void run_connect_openai(ava::config::XdgPaths const& paths, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
   ScopedConnectSignalInvocation const signal_invocation;
-  return run_connect_openai_browser(paths, std::cout, std::cerr, std::move(process_scope));
+  run_connect_openai_browser(paths, std::move(process_scope));
 }
 
-int run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options, std::istream& in, std::ostream& out,
-                              std::ostream& err, std::optional<ava::process::ProcessScopeV1> process_scope)
+void run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options,
+                               std::optional<ava::process::ProcessScopeV1> process_scope)
 {
   ScopedConnectSignalInvocation const signal_invocation;
   if (options.credential_type)
   {
-    return run_connect_provider_wizard(
+    run_connect_provider_wizard(
         paths,
         ConnectProviderWizardOptions{.provider_id = std::string("openai"), .credential_type = options.credential_type, .stdin_is_tty = options.stdin_is_tty},
-        in, out, err, process_scope);
+        process_scope);
+    return;
   }
 
   if (!options.stdin_is_tty)
-  {
-    err << "interactive OpenAI login requires a terminal; use --browser-oauth, --headless-oauth, --api-key-stdin, "
-           "or --api-key-env\n";
-    return 2;
-  }
+    THROW_EXIT_CODE(usage, "interactive OpenAI login requires a terminal; use --browser-oauth, --headless-oauth, --api-key-stdin, or --api-key-env");
 
-  out << "OpenAI login method:\n";
-  out << "  1. " << openai_connect_method_label(OpenAIConnectMethod::BrowserOAuth) << '\n';
-  out << "  2. " << openai_connect_method_label(OpenAIConnectMethod::HeadlessOAuth) << '\n';
-  out << "  3. " << openai_connect_method_label(OpenAIConnectMethod::ApiKey) << '\n';
-  auto method_text = read_prompt_line(in, out, "Select method [1-3]: ", false, options.stdin_is_tty);
+  std::cout << "OpenAI login method:\n";
+  std::cout << "  1. " << openai_connect_method_label(OpenAIConnectMethod::BrowserOAuth) << '\n';
+  std::cout << "  2. " << openai_connect_method_label(OpenAIConnectMethod::HeadlessOAuth) << '\n';
+  std::cout << "  3. " << openai_connect_method_label(OpenAIConnectMethod::ApiKey) << '\n';
+  auto method_text = read_prompt_line("Select method [1-3]: ", false, options.stdin_is_tty);
   if (!method_text)
-  {
-    if (terminal_mode_cancelled_by_signal())
-      return 130;
-    err << sanitize_terminal_text(method_text.error().format()) << '\n';
-    return 1;
-  }
+    throw_connect_failure(ExitCode::credentials_unavailable, method_text.error());
   auto method = parse_openai_connect_method(*method_text);
   if (!method)
-  {
-    err << "OpenAI login method must be 1, 2, or 3\n";
-    return 2;
-  }
+    THROW_EXIT_CODE(usage, "OpenAI login method must be 1, 2, or 3");
   switch (*method)
   {
     case OpenAIConnectMethod::BrowserOAuth:
-      return run_connect_openai_browser(paths, out, err, process_scope);
+      run_connect_openai_browser(paths, process_scope);
+      return;
     case OpenAIConnectMethod::HeadlessOAuth:
-      return run_connect_openai_headless(paths, out, err, process_scope);
+      run_connect_openai_headless(paths, process_scope);
+      return;
     case OpenAIConnectMethod::ApiKey:
-      return run_connect_provider_wizard(
+      run_connect_provider_wizard(
           paths,
           ConnectProviderWizardOptions{
               .provider_id = std::string("openai"), .credential_type = ConnectCredentialType::ApiKey, .stdin_is_tty = options.stdin_is_tty},
-          in, out, err, process_scope);
+          process_scope);
+      return;
   }
-  return 2;
 }
 
-int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options, std::istream& in, std::ostream& out,
-                                std::ostream& err, std::optional<ava::process::ProcessScopeV1> process_scope)
+void run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options,
+                                 std::optional<ava::process::ProcessScopeV1> process_scope)
 {
   ScopedConnectSignalInvocation const signal_invocation;
   if (!options.stdin_is_tty)
-  {
-    err << "interactive provider login requires a terminal; use --api-key-stdin or --api-key-env\n";
-    return 2;
-  }
+    THROW_EXIT_CODE(usage, "interactive provider login requires a terminal; use --api-key-stdin or --api-key-env");
 
   std::string provider_id;
   if (options.provider_id)
@@ -836,44 +815,30 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
   }
   else
   {
-    auto provider = select_provider_from_menu(in, out, options.stdin_is_tty);
+    auto provider = select_provider_from_menu(options.stdin_is_tty);
     if (!provider)
-    {
-      if (terminal_mode_cancelled_by_signal())
-        return 130;
-      err << sanitize_terminal_text(provider.error().format()) << '\n';
-      return 1;
-    }
+      throw_connect_failure(ExitCode::credentials_unavailable, provider.error());
     provider_id = *provider;
   }
 
   if (!is_valid_connect_provider_id(provider_id))
-  {
-    err << "provider id must contain only letters, numbers, '-' or '_'\n";
-    return 2;
-  }
+    THROW_EXIT_CODE(usage, "provider id must contain only letters, numbers, '-' or '_'");
   {
     auto catalog = ava::provider::ProviderCatalog::build(paths);
     if (!catalog)
-    {
-      err << sanitize_terminal_text(catalog.error().format()) << '\n';
-      return 1;
-    }
+      THROW_EXIT_CODE(configuration_invalid, "[ERRMSG]", AIArgs("[ERRMSG]", sanitize_terminal_text(catalog.error().format())));
     if ((*catalog)->provider_auth_is_none(provider_id))
     {
-      out << sanitize_terminal_text((*catalog)->display_name(provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
-      return 0;
+      std::cout << sanitize_terminal_text((*catalog)->display_name(provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
+      return;
     }
     if ((*catalog)->provider_is_user_defined(provider_id) && options.credential_type && *options.credential_type != ConnectCredentialType::ApiKey)
-    {
-      err << "user-defined providers only support API key credentials\n";
-      return 2;
-    }
+      THROW_EXIT_CODE(usage, "user-defined providers only support API key credentials");
   }
   if (provider_id == "openai" && !options.credential_type)
   {
-    return run_connect_openai_wizard(paths, ConnectProviderWizardOptions{.provider_id = provider_id, .stdin_is_tty = options.stdin_is_tty}, in, out, err,
-                                     std::move(process_scope));
+    run_connect_openai_wizard(paths, ConnectProviderWizardOptions{.provider_id = provider_id, .stdin_is_tty = options.stdin_is_tty}, std::move(process_scope));
+    return;
   }
 
   ConnectCredentialType credential_type = ConnectCredentialType::ApiKey;
@@ -882,72 +847,46 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
     credential_type = *options.credential_type;
   }
 
-  auto secret = read_prompt_line(in, out, credential_type_label(credential_type) + " for " + provider_id + ": ", true, options.stdin_is_tty);
+  auto secret = read_prompt_line(credential_type_label(credential_type) + " for " + provider_id + ": ", true, options.stdin_is_tty);
   if (!secret)
-  {
-    if (terminal_mode_cancelled_by_signal())
-      return 130;
-    err << sanitize_terminal_text(secret.error().format()) << '\n';
-    return 1;
-  }
-  if (terminal_mode_cancelled_by_signal())
-    return 130;
+    throw_connect_failure(ExitCode::credentials_unavailable, secret.error());
+  throw_if_interrupted();
   auto stored = store_connect_secret(paths, provider_id, credential_type, *secret);
   if (!stored)
-  {
-    err << sanitize_terminal_text(stored.error().format()) << '\n';
-    return 1;
-  }
-  out << "Stored " << sanitize_terminal_text(provider_id) << ' ' << credential_type_label(credential_type) << " credential at "
-      << sanitize_terminal_text(paths.auth_file.string()) << '\n';
+    throw_connect_failure(ExitCode::credentials_unavailable, stored.error());
+  std::cout << "Stored " << sanitize_terminal_text(provider_id) << ' ' << credential_type_label(credential_type) << " credential at "
+            << sanitize_terminal_text(paths.auth_file.string()) << '\n';
   if (provider_id == "openai")
   {
-    out << "Tip: `ava connect openai` opens the OpenAI login method picker.\n";
+    std::cout << "Tip: `ava connect openai` opens the OpenAI login method picker.\n";
   }
-  return 0;
 }
 
-int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectProviderCredentialOptions const& options, std::istream& in, std::ostream& out,
-                                    std::ostream& err)
+void run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectProviderCredentialOptions const& options)
 {
   ScopedConnectSignalInvocation const signal_invocation;
   {
     auto catalog = ava::provider::ProviderCatalog::build(paths);
     if (!catalog)
-    {
-      err << sanitize_terminal_text(catalog.error().format()) << '\n';
-      return 1;
-    }
+      THROW_EXIT_CODE(configuration_invalid, "[ERRMSG]", AIArgs("[ERRMSG]", sanitize_terminal_text(catalog.error().format())));
     if ((*catalog)->provider_auth_is_none(options.provider_id))
     {
-      out << sanitize_terminal_text((*catalog)->display_name(options.provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
-      return 0;
+      std::cout << sanitize_terminal_text((*catalog)->display_name(options.provider_id))
+                << " requires no credential (auth:none). auth.json was not modified.\n";
+      return;
     }
     if ((*catalog)->provider_is_user_defined(options.provider_id) && options.credential_type != ConnectCredentialType::ApiKey)
-    {
-      err << "user-defined providers only support API key credentials\n";
-      return 2;
-    }
+      THROW_EXIT_CODE(usage, "user-defined providers only support API key credentials");
   }
-  auto secret = read_connect_secret(options, in);
+  auto secret = read_connect_secret(options);
   if (!secret)
-  {
-    if (terminal_mode_cancelled_by_signal())
-      return 130;
-    err << sanitize_terminal_text(secret.error().format()) << '\n';
-    return 1;
-  }
-  if (terminal_mode_cancelled_by_signal())
-    return 130;
+    throw_connect_failure(ExitCode::credentials_unavailable, secret.error());
+  throw_if_interrupted();
 
   auto stored = store_connect_secret(paths, options.provider_id, options.credential_type, *secret);
   if (!stored)
-  {
-    err << sanitize_terminal_text(stored.error().format()) << '\n';
-    return 1;
-  }
-  out << "Stored " << credential_type_label(options.credential_type) << " credential at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
-  return 0;
+    throw_connect_failure(ExitCode::credentials_unavailable, stored.error());
+  std::cout << "Stored " << credential_type_label(options.credential_type) << " credential at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
 }
 
 }  // namespace ava::app

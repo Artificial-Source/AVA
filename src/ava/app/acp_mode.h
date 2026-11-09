@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ava/app/ExitCode.h"
+
 #include <iosfwd>
 #include <memory>
 
@@ -13,7 +15,7 @@ class ProcessScopeV1;
 
 namespace ava::app {
 
-[[nodiscard]] int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const& application_process_scope,
-                               std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics = nullptr);
+[[nodiscard]] ExitCode run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const& application_process_scope,
+                                    std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics = nullptr);
 
 } // namespace ava::app

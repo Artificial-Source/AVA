@@ -3,6 +3,7 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/stream_redirect.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
@@ -21,6 +22,7 @@
 #include "ava/permissions/permission_rules.h"
 #include "ava/provider/openai_provider.h"
 #include "ava/core/json.h"
+#include "utils/AIAlert.h"
 
 #include <algorithm>
 #include <chrono>
@@ -28,10 +30,13 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 #include <sys/stat.h>
 #include <termios.h>
@@ -108,8 +113,14 @@ void test_invocation_signal_policy_mapping()
   char const* conflict_argv[] = {"ava", "--print", "hello", "--rpc"};
   auto conflict = ava::app::parse_command_line(4, conflict_argv);
   auto const* conflict_output = std::get_if<ava::app::ImmediateInvocation>(&conflict);
-  expect(conflict_output && conflict_output->status == 2 && conflict_output->stderr_output &&
-             conflict_output->text == "ava: use either --print or --rpc, not both\n" && ava::app::invocation_mode(conflict) == InvocationMode::ImmediateOutput,
+  if (!conflict_output)
+    Dout(dc::warning, "!conflict_output");
+  else if (conflict_output->status != ava::app::ExitCode::usage)
+    Dout(dc::warning, "conflict_output->status = " << conflict_output->status);
+  else if (conflict_output->text != "use either --print or --rpc, not both")
+    Dout(dc::warning, "conflict_output->text = \"" << conflict_output->text << "\".");
+  expect(conflict_output && conflict_output->status == ava::app::ExitCode::usage && conflict_output->text == "use either --print or --rpc, not both" &&
+             ava::app::invocation_mode(conflict) == InvocationMode::ImmediateOutput,
          "parser resolves validation failures as exact immediate-error invocations");
 
   char const* acp_precedence_argv[] = {"ava", "--help", "--acp"};
@@ -127,9 +138,9 @@ void test_invocation_signal_policy_mapping()
 
 void test_parallel_read_search_cli_flags()
 {
-  auto expect_immediate = [](ava::app::CommandLineInvocation const& invocation, int status, std::string_view needle, std::string_view message) {
+  auto expect_immediate = [](ava::app::CommandLineInvocation const& invocation, ava::app::ExitCode status, std::string_view needle, std::string_view message) {
     auto const* output = std::get_if<ava::app::ImmediateInvocation>(&invocation);
-    expect(output && output->status == status && output->stderr_output && output->text.find(std::string(needle)) != std::string::npos, std::string(message));
+    expect(output && output->status == status && output->text.find(std::string(needle)) != std::string::npos, std::string(message));
   };
   auto expect_runtime = [](ava::app::CommandLineInvocation const& invocation, ava::app::RuntimeFrontend frontend, bool enabled, std::size_t workers,
                            std::string_view message) {
@@ -173,64 +184,67 @@ void test_parallel_read_search_cli_flags()
   }
 
   char const* missing_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers"};
-  expect_immediate(ava::app::parse_command_line(5, missing_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
-                   "missing max-workers value is rejected");
+  expect_immediate(ava::app::parse_command_line(5, missing_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-max-workers requires an integer from 1 to 4", "missing max-workers value is rejected");
 
   char const* option_value_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(5, option_value_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+  expect_immediate(ava::app::parse_command_line(5, option_value_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-max-workers requires an integer from 1 to 4",
                    "max-workers followed by another option is treated as a missing value");
 
   for (char const* bad : {"0", "5", "01", "+2", "-1", "2.0", "abc", ""})
   {
     char const* bad_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", bad};
-    expect_immediate(ava::app::parse_command_line(6, bad_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+    expect_immediate(ava::app::parse_command_line(6, bad_argv), ava::app::ExitCode::usage, "--parallel-read-search-max-workers requires an integer from 1 to 4",
                      "malformed or out-of-bounds max-workers values are rejected");
   }
 
   char const* workers_without_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "2"};
-  expect_immediate(ava::app::parse_command_line(5, workers_without_enable_argv), 2, "--parallel-read-search-max-workers requires --parallel-read-search-tools",
-                   "max-workers without the enabling flag is rejected");
+  expect_immediate(ava::app::parse_command_line(5, workers_without_enable_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-max-workers requires --parallel-read-search-tools", "max-workers without the enabling flag is rejected");
 
   char const* duplicate_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(5, duplicate_enable_argv), 2, "--parallel-read-search-tools may be specified only once",
+  expect_immediate(ava::app::parse_command_line(5, duplicate_enable_argv), ava::app::ExitCode::usage, "--parallel-read-search-tools may be specified only once",
                    "duplicate enabling flags are rejected");
 
   char const* duplicate_workers_argv[] = {
       "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "2"};
-  expect_immediate(ava::app::parse_command_line(8, duplicate_workers_argv), 2, "--parallel-read-search-max-workers may be specified only once",
-                   "duplicate max-workers values are rejected");
+  expect_immediate(ava::app::parse_command_line(8, duplicate_workers_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-max-workers may be specified only once", "duplicate max-workers values are rejected");
 
   char const* conflict_workers_argv[] = {
       "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "3"};
-  expect_immediate(ava::app::parse_command_line(8, conflict_workers_argv), 2, "--parallel-read-search-max-workers has conflicting values",
-                   "conflicting max-workers values are rejected");
+  expect_immediate(ava::app::parse_command_line(8, conflict_workers_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-max-workers has conflicting values", "conflicting max-workers values are rejected");
 
   char const* interactive_argv[] = {"ava", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(2, interactive_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
-                   "interactive mode rejects the public parallel opt-in");
+  expect_immediate(ava::app::parse_command_line(2, interactive_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-tools is only supported with --print or --rpc", "interactive mode rejects the public parallel opt-in");
 
   char const* connect_after_argv[] = {"ava", "--parallel-read-search-tools", "connect", "openai"};
-  expect_immediate(ava::app::parse_command_line(4, connect_after_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
-                   "connect after the public parallel opt-in is rejected");
+  expect_immediate(ava::app::parse_command_line(4, connect_after_argv), ava::app::ExitCode::usage,
+                   "--parallel-read-search-tools is only supported with --print or --rpc", "connect after the public parallel opt-in is rejected");
 
   char const* connect_before_argv[] = {"ava", "connect", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(3, connect_before_argv), 2, "unknown connect option",
+  expect_immediate(ava::app::parse_command_line(3, connect_before_argv), ava::app::ExitCode::usage, "unknown connect option",
                    "connect rejects the public parallel opt-in as an unknown connect option");
 
   char const* doctor_argv[] = {"ava", "doctor", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(3, doctor_argv), 2, "Usage: ava doctor [--json]", "doctor rejects extra parallel opt-in flags");
+  expect_immediate(ava::app::parse_command_line(3, doctor_argv), ava::app::ExitCode::usage, "usage: ava doctor [--json]",
+                   "doctor rejects extra parallel opt-in flags");
 
   char const* acp_argv[] = {"ava", "--acp", "--parallel-read-search-tools"};
-  expect_immediate(ava::app::parse_command_line(3, acp_argv), 2, "--acp is a standalone mode", "ACP standalone validation rejects the public parallel opt-in");
+  expect_immediate(ava::app::parse_command_line(3, acp_argv), ava::app::ExitCode::usage, "--acp is a standalone mode",
+                   "ACP standalone validation rejects the public parallel opt-in");
 
   char const* acp_before_help_argv[] = {"ava", "--parallel-read-search-tools", "--help", "--acp"};
-  expect_immediate(ava::app::parse_command_line(4, acp_before_help_argv), 2, "--acp is a standalone mode",
+  expect_immediate(ava::app::parse_command_line(4, acp_before_help_argv), ava::app::ExitCode::usage, "--acp is a standalone mode",
                    "ACP standalone validation retains precedence over help when parallel flags are present");
 
   char const* help_after_argv[] = {"ava", "--parallel-read-search-tools", "--help"};
   auto help = ava::app::parse_command_line(3, help_after_argv);
   auto const* help_output = std::get_if<ava::app::ImmediateInvocation>(&help);
-  expect(help_output && help_output->kind == ava::app::ImmediateOutputKind::Help && help_output->status == 0,
+  expect(help_output && help_output->kind == ava::app::ImmediateOutputKind::Help && help_output->status == ava::app::ExitCode::success,
          "help retains precedence when it is reached after the parallel opt-in flag");
 }
 
@@ -1052,8 +1066,16 @@ void test_app_print_mode_refreshes_expired_oauth_before_provider_request()
   std::istringstream in;
   std::ostringstream out;
   std::ostringstream err;
-  auto const exit_code = ava::app::run_print_mode(options, in, out, err);
-  expect(exit_code == 0 && out.str() == "print refreshed answer" && err.str().empty(), "print mode completes after refreshing expired OAuth credentials");
+  bool threw = false;
+  try
+  {
+    ava::app::run_print_mode(options, in, out, err);
+  }
+  catch (AIAlert::Error const&)
+  {
+    threw = true;
+  }
+  expect(!threw && out.str() == "print refreshed answer" && err.str().empty(), "print mode completes after refreshing expired OAuth credentials");
   expect(transport.requests().size() == 2 && transport.requests()[0].url == "https://auth.openai.com/oauth/token" &&
              transport.requests()[1].headers.at("Authorization") == "Bearer print-refreshed-access" &&
              transport.requests()[1].headers.at("ChatGPT-Account-Id") == "acct_print" &&
@@ -1096,10 +1118,55 @@ void test_app_print_offline_fails_before_auth_refresh_or_provider_request()
   std::istringstream in;
   std::ostringstream out;
   std::ostringstream err;
-  auto const exit_code = ava::app::run_print_mode(options, in, out, err);
-  expect(exit_code == 1 && out.str().empty() && err.str().find("offline mode is enabled") != std::string::npos,
+  std::error_code code;
+  try
+  {
+    ava::app::run_print_mode(options, in, out, err);
+  }
+  catch (ava::app::AIAlert::ExitCode const& error)
+  {
+    code = error.getCode();
+  }
+  expect(code == ava::app::ExitCode::run_failed && out.str().empty() && err.str().find("offline mode is enabled") != std::string::npos,
          "print offline mode fails with a clear offline error");
   expect(transport.requests().empty(), "print offline mode skips OAuth refresh and provider requests");
+}
+
+// The outcome of a connect function that ran with redirected standard streams.
+struct ConnectRun
+{
+  ava::app::ExitCode exit_code = ava::app::ExitCode::success;  // The code of a thrown ExitCode, or success.
+  std::string out;                                              // Everything written to std::cout.
+  std::string err;                                              // Everything written to std::cerr, followed by the message of a thrown ExitCode.
+};
+
+// Run connect with std::cin reading input and std::cout and std::cerr captured.
+//
+// A thrown ava::app::AIAlert::ExitCode is caught and reported in the result, as main would, without the program name.
+template <typename Connect>
+ConnectRun run_connect(std::string input, Connect&& connect)
+{
+  std::istringstream in(std::move(input));
+  std::ostringstream out;
+  std::ostringstream err;
+  ConnectRun result;
+  {
+    StreamRedirect const redirect_in{std::cin, in.rdbuf()};
+    StreamRedirect const redirect_out{std::cout, out.rdbuf()};
+    StreamRedirect const redirect_err{std::cerr, err.rdbuf()};
+    try
+    {
+      std::forward<Connect>(connect)();
+    }
+    catch (ava::app::AIAlert::ExitCode const& error)
+    {
+      result.exit_code = static_cast<ava::app::ExitCode>(error.getCode().value());
+      err << error;
+    }
+  }
+  result.out = out.str();
+  result.err = err.str();
+  return result;
 }
 
 void test_app_connect_provider_credentials_headlessly()
@@ -1110,98 +1177,82 @@ void test_app_connect_provider_credentials_headlessly()
 
   auto const paths = app_test_paths(root);
 
-  std::istringstream anthropic_input("anthropic-api-key\n");
-  std::ostringstream anthropic_out;
-  std::ostringstream anthropic_err;
-  auto const anthropic_exit = ava::app::run_connect_provider_credential(
-      paths,
-      ava::app::ConnectProviderCredentialOptions{
-          .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt},
-      anthropic_input, anthropic_out, anthropic_err);
-  expect(anthropic_exit == 0 && anthropic_err.str().empty() && anthropic_out.str().find("Stored API key credential") != std::string::npos,
+  auto const anthropic = run_connect("anthropic-api-key\n", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, ava::app::ConnectProviderCredentialOptions{
+                   .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt});
+  });
+  expect(anthropic.exit_code == ava::app::ExitCode::success && anthropic.err.empty() && anthropic.out.find("Stored API key credential") != std::string::npos,
          "headless provider connect stores Anthropic API key from stdin");
   ava::tests::FakeTransport transport({});
-  auto anthropic = ava::config::provider_credential_for_request(paths, "anthropic", transport);
-  expect(anthropic && anthropic->has_value() && (*anthropic)->access_token == "anthropic-api-key" && (*anthropic)->credential_type == "api_key",
+  auto anthropic_credential = ava::config::provider_credential_for_request(paths, "anthropic", transport);
+  expect(anthropic_credential && anthropic_credential->has_value() && (*anthropic_credential)->access_token == "anthropic-api-key" &&
+             (*anthropic_credential)->credential_type == "api_key",
          "headless provider connect writes loadable Anthropic API key auth");
 
   ScopedEnvVar moonshot_key("AVA_TEST_MOONSHOT_KEY", "moonshot-api-key");
-  std::istringstream moonshot_input;
-  std::ostringstream moonshot_out;
-  std::ostringstream moonshot_err;
-  auto const moonshot_exit = ava::app::run_connect_provider_credential(
-      paths,
-      ava::app::ConnectProviderCredentialOptions{
-          .provider_id = "moonshot", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "AVA_TEST_MOONSHOT_KEY"},
-      moonshot_input, moonshot_out, moonshot_err);
-  expect(moonshot_exit == 0 && moonshot_err.str().empty(), "headless provider connect stores Moonshot API key from environment");
-  auto moonshot = ava::config::provider_credential_for_request(paths, "moonshot", transport);
-  expect(moonshot && moonshot->has_value() && (*moonshot)->access_token == "moonshot-api-key" && (*moonshot)->credential_type == "api_key",
+  auto const moonshot = run_connect("", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, ava::app::ConnectProviderCredentialOptions{
+                   .provider_id = "moonshot", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "AVA_TEST_MOONSHOT_KEY"});
+  });
+  expect(moonshot.exit_code == ava::app::ExitCode::success && moonshot.err.empty(), "headless provider connect stores Moonshot API key from environment");
+  auto moonshot_credential = ava::config::provider_credential_for_request(paths, "moonshot", transport);
+  expect(moonshot_credential && moonshot_credential->has_value() && (*moonshot_credential)->access_token == "moonshot-api-key" &&
+             (*moonshot_credential)->credential_type == "api_key",
          "headless provider connect writes loadable Moonshot API key auth");
-  anthropic = ava::config::provider_credential_for_request(paths, "anthropic", transport);
-  expect(anthropic && anthropic->has_value() && (*anthropic)->access_token == "anthropic-api-key",
+  anthropic_credential = ava::config::provider_credential_for_request(paths, "anthropic", transport);
+  expect(anthropic_credential && anthropic_credential->has_value() && (*anthropic_credential)->access_token == "anthropic-api-key",
          "headless provider connect preserves existing provider credentials when adding another provider");
 
-  std::istringstream invalid_env_input;
-  std::ostringstream invalid_env_out;
-  std::ostringstream invalid_env_err;
-  auto const invalid_env_exit = ava::app::run_connect_provider_credential(
-      paths,
-      ava::app::ConnectProviderCredentialOptions{
-          .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "sk-should-not-be-echoed"},
-      invalid_env_input, invalid_env_out, invalid_env_err);
-  expect(invalid_env_exit == 1 && invalid_env_out.str().empty() && invalid_env_err.str().find("credential env var name is invalid") != std::string::npos &&
-             invalid_env_err.str().find("sk-should-not-be-echoed") == std::string::npos,
+  auto const invalid_env = run_connect("", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, ava::app::ConnectProviderCredentialOptions{
+                   .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "sk-should-not-be-echoed"});
+  });
+  expect(invalid_env.exit_code == ava::app::ExitCode::credentials_unavailable && invalid_env.out.empty() &&
+             invalid_env.err.find("credential env var name is invalid") != std::string::npos &&
+             invalid_env.err.find("sk-should-not-be-echoed") == std::string::npos,
          "headless provider connect rejects invalid env names without echoing secrets");
 
   ScopedEnvVar missing_key("SKSHOULDNOTBEECHOED", std::nullopt);
-  std::istringstream missing_env_input;
-  std::ostringstream missing_env_out;
-  std::ostringstream missing_env_err;
-  auto const missing_env_exit = ava::app::run_connect_provider_credential(
-      paths,
-      ava::app::ConnectProviderCredentialOptions{
-          .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "SKSHOULDNOTBEECHOED"},
-      missing_env_input, missing_env_out, missing_env_err);
-  expect(missing_env_exit == 1 && missing_env_out.str().empty() && missing_env_err.str().find("credential env var is not set") != std::string::npos &&
-             missing_env_err.str().find("SKSHOULDNOTBEECHOED") == std::string::npos,
+  auto const missing_env = run_connect("", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, ava::app::ConnectProviderCredentialOptions{
+                   .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = "SKSHOULDNOTBEECHOED"});
+  });
+  expect(missing_env.exit_code == ava::app::ExitCode::credentials_unavailable && missing_env.out.empty() &&
+             missing_env.err.find("credential env var is not set") != std::string::npos && missing_env.err.find("SKSHOULDNOTBEECHOED") == std::string::npos,
          "headless provider connect omits env var names from missing-env errors");
 
-  std::istringstream empty_stdin_input("\r\n");
-  std::ostringstream empty_stdin_out;
-  std::ostringstream empty_stdin_err;
-  auto const empty_stdin_exit = ava::app::run_connect_provider_credential(
-      paths,
-      ava::app::ConnectProviderCredentialOptions{
-          .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt},
-      empty_stdin_input, empty_stdin_out, empty_stdin_err);
-  expect(empty_stdin_exit == 1 && empty_stdin_out.str().empty() && empty_stdin_err.str().find("credential stdin was empty") != std::string::npos,
+  auto const empty_stdin = run_connect("\r\n", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, ava::app::ConnectProviderCredentialOptions{
+                   .provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt});
+  });
+  expect(empty_stdin.exit_code == ava::app::ExitCode::credentials_unavailable && empty_stdin.out.empty() &&
+             empty_stdin.err.find("credential stdin was empty") != std::string::npos,
          "headless provider connect rejects empty stdin credentials");
   auto after_empty = ava::config::provider_credential_for_request(paths, "anthropic", transport);
   expect(after_empty && after_empty->has_value() && (*after_empty)->access_token == "anthropic-api-key",
          "empty headless connect does not overwrite the existing credential");
-  std::istringstream whitespace_input(" \t \r\n");
-  std::ostringstream whitespace_out;
-  std::ostringstream whitespace_err;
-  auto const whitespace_exit = ava::app::run_connect_provider_credential(
-      paths, {.provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt}, whitespace_input,
-      whitespace_out, whitespace_err);
-  expect_all("whitespace headless connect rejects the secret",
-             {{"failure status", whitespace_exit == 1}, {"no success output", whitespace_out.str().empty()}, {"diagnostic", !whitespace_err.str().empty()}});
+  auto const whitespace = run_connect(" \t \r\n", [&] {
+    ava::app::run_connect_provider_credential(
+        paths, {.provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt});
+  });
+  expect_all("whitespace headless connect rejects the secret", {{"failure status", whitespace.exit_code == ava::app::ExitCode::credentials_unavailable},
+                                                                {"no success output", whitespace.out.empty()},
+                                                                {"diagnostic", !whitespace.err.empty()}});
   auto after_whitespace = ava::config::provider_credential_for_request(paths, "anthropic", transport);
   expect(after_whitespace && after_whitespace->has_value() && (*after_whitespace)->access_token == "anthropic-api-key",
          "whitespace headless connect preserves the existing credential");
 
   auto const wizard_root = create_empty_root("app-connect-provider-wizard");
   auto const wizard_paths = app_test_paths(wizard_root);
-  std::istringstream wizard_input("anthropic\nwizard-api-key\n");
-  std::ostringstream wizard_out;
-  std::ostringstream wizard_err;
-  auto const wizard_exit = ava::app::run_connect_provider_wizard(
-      wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = std::nullopt, .credential_type = std::nullopt, .stdin_is_tty = true}, wizard_input,
-      wizard_out, wizard_err);
-  expect(wizard_exit == 0 && wizard_err.str().empty() && wizard_out.str().find("Add credential") != std::string::npos &&
-             wizard_out.str().find("Select provider") != std::string::npos && wizard_out.str().find("Stored anthropic API key credential") != std::string::npos,
+  auto const tty_menu_options = ava::app::ConnectProviderWizardOptions{.provider_id = std::nullopt, .credential_type = std::nullopt, .stdin_is_tty = true};
+  auto const wizard = run_connect("anthropic\nwizard-api-key\n", [&] { ava::app::run_connect_provider_wizard(wizard_paths, tty_menu_options); });
+  expect(wizard.exit_code == ava::app::ExitCode::success && wizard.err.empty() && wizard.out.find("Add credential") != std::string::npos &&
+             wizard.out.find("Select provider") != std::string::npos && wizard.out.find("Stored anthropic API key credential") != std::string::npos,
          "interactive provider wizard opens a searchable provider menu before prompting for secret");
   auto wizard_anthropic = ava::config::provider_credential_for_request(wizard_paths, "anthropic", transport);
   expect(wizard_anthropic && wizard_anthropic->has_value() && (*wizard_anthropic)->access_token == "wizard-api-key",
@@ -1209,77 +1260,60 @@ void test_app_connect_provider_credentials_headlessly()
 
   auto const openai_wizard_root = create_empty_root("app-connect-openai-wizard");
   auto const openai_wizard_paths = app_test_paths(openai_wizard_root);
-  std::istringstream openai_wizard_input("3\nwizard-openai-api-key\n");
-  std::ostringstream openai_wizard_out;
-  std::ostringstream openai_wizard_err;
-  auto const openai_wizard_exit = ava::app::run_connect_openai_wizard(
-      openai_wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = "openai", .credential_type = std::nullopt, .stdin_is_tty = true},
-      openai_wizard_input, openai_wizard_out, openai_wizard_err);
-  expect(openai_wizard_exit == 0 && openai_wizard_err.str().empty() && openai_wizard_out.str().find("OpenAI login method") != std::string::npos &&
-             openai_wizard_out.str().find("ChatGPT Pro/Plus (headless OAuth)") != std::string::npos &&
-             openai_wizard_out.str().find("Stored openai API key credential") != std::string::npos,
+  auto const openai_wizard = run_connect("3\nwizard-openai-api-key\n", [&] {
+    ava::app::run_connect_openai_wizard(openai_wizard_paths,
+                                        ava::app::ConnectProviderWizardOptions{.provider_id = "openai", .credential_type = std::nullopt, .stdin_is_tty = true});
+  });
+  expect(openai_wizard.exit_code == ava::app::ExitCode::success && openai_wizard.err.empty() &&
+             openai_wizard.out.find("OpenAI login method") != std::string::npos &&
+             openai_wizard.out.find("ChatGPT Pro/Plus (headless OAuth)") != std::string::npos &&
+             openai_wizard.out.find("Stored openai API key credential") != std::string::npos,
          "interactive OpenAI connect command opens method picker and stores selected API key credential");
   auto openai_wizard_credential = ava::config::load_openai_credential(openai_wizard_paths);
   expect(openai_wizard_credential && openai_wizard_credential->has_value() && (*openai_wizard_credential)->type == ava::config::OpenAICredentialType::ApiKey &&
              (*openai_wizard_credential)->access_token == "wizard-openai-api-key",
          "interactive OpenAI connect command writes a loadable OpenAI credential");
 
-  std::istringstream non_tty_openai_wizard_input;
-  std::ostringstream non_tty_openai_wizard_out;
-  std::ostringstream non_tty_openai_wizard_err;
-  auto const non_tty_openai_wizard_exit = ava::app::run_connect_openai_wizard(
-      openai_wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = "openai", .credential_type = std::nullopt, .stdin_is_tty = false},
-      non_tty_openai_wizard_input, non_tty_openai_wizard_out, non_tty_openai_wizard_err);
-  expect(non_tty_openai_wizard_exit == 2 && non_tty_openai_wizard_out.str().empty() &&
-             non_tty_openai_wizard_err.str().find("--headless-oauth") != std::string::npos,
+  auto const non_tty_openai_wizard = run_connect("", [&] {
+    ava::app::run_connect_openai_wizard(
+        openai_wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = "openai", .credential_type = std::nullopt, .stdin_is_tty = false});
+  });
+  expect(non_tty_openai_wizard.exit_code == ava::app::ExitCode::usage && non_tty_openai_wizard.out.empty() &&
+             non_tty_openai_wizard.err.find("--headless-oauth") != std::string::npos,
          "interactive OpenAI connect command points non-tty callers at headless OAuth");
 
-  std::istringstream cancelled_wizard_input("\x1b");
-  std::ostringstream cancelled_wizard_out;
-  std::ostringstream cancelled_wizard_err;
-  auto const cancelled_wizard_exit = ava::app::run_connect_provider_wizard(
-      wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = std::nullopt, .credential_type = std::nullopt, .stdin_is_tty = true},
-      cancelled_wizard_input, cancelled_wizard_out, cancelled_wizard_err);
-  expect(cancelled_wizard_exit == 1 && cancelled_wizard_err.str().find("provider login cancelled") != std::string::npos,
-         "interactive provider wizard cancels on standalone escape without waiting for more input");
+  auto const cancelled_wizard = run_connect("\x1b", [&] { ava::app::run_connect_provider_wizard(wizard_paths, tty_menu_options); });
+  expect(
+      cancelled_wizard.exit_code == ava::app::ExitCode::credentials_unavailable && cancelled_wizard.err.find("provider login cancelled") != std::string::npos,
+      "interactive provider wizard cancels on standalone escape without waiting for more input");
   auto after_cancel = ava::config::provider_credential_for_request(wizard_paths, "anthropic", transport);
   expect(after_cancel && after_cancel->has_value() && (*after_cancel)->access_token == "wizard-api-key",
          "cancelling the provider wizard preserves the existing credential");
 
-  std::istringstream arrow_wizard_input("\x1b[B\narrow-api-key\n");
-  std::ostringstream arrow_wizard_out;
-  std::ostringstream arrow_wizard_err;
-  auto const arrow_wizard_exit = ava::app::run_connect_provider_wizard(
-      wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = std::nullopt, .credential_type = std::nullopt, .stdin_is_tty = true},
-      arrow_wizard_input, arrow_wizard_out, arrow_wizard_err);
-  expect(arrow_wizard_exit == 0 && arrow_wizard_err.str().empty(), "interactive provider wizard supports arrow-key provider selection");
+  auto const arrow_wizard = run_connect("\x1b[B\narrow-api-key\n", [&] { ava::app::run_connect_provider_wizard(wizard_paths, tty_menu_options); });
+  expect(arrow_wizard.exit_code == ava::app::ExitCode::success && arrow_wizard.err.empty(),
+         "interactive provider wizard supports arrow-key provider selection");
   wizard_anthropic = ava::config::provider_credential_for_request(wizard_paths, "anthropic", transport);
   expect(wizard_anthropic && wizard_anthropic->has_value() && (*wizard_anthropic)->access_token == "arrow-api-key",
          "interactive provider wizard arrow selection stores the selected provider credential");
 
-  std::istringstream ignored_escape_wizard_input("\x1b[Canthropic\nright-arrow-api-key\n");
-  std::ostringstream ignored_escape_wizard_out;
-  std::ostringstream ignored_escape_wizard_err;
-  auto const ignored_escape_wizard_exit = ava::app::run_connect_provider_wizard(
-      wizard_paths, ava::app::ConnectProviderWizardOptions{.provider_id = std::nullopt, .credential_type = std::nullopt, .stdin_is_tty = true},
-      ignored_escape_wizard_input, ignored_escape_wizard_out, ignored_escape_wizard_err);
-  expect(ignored_escape_wizard_exit == 0 && ignored_escape_wizard_err.str().empty(),
+  auto const ignored_escape_wizard =
+      run_connect("\x1b[Canthropic\nright-arrow-api-key\n", [&] { ava::app::run_connect_provider_wizard(wizard_paths, tty_menu_options); });
+  expect(ignored_escape_wizard.exit_code == ava::app::ExitCode::success && ignored_escape_wizard.err.empty(),
          "interactive provider wizard ignores unsupported escape sequences without polluting search text");
-  expect(ignored_escape_wizard_out.str().find("Search: anthropic") != std::string::npos,
+  expect(ignored_escape_wizard.out.find("Search: anthropic") != std::string::npos,
          "interactive provider wizard keeps typed search text after unsupported escape sequence");
   wizard_anthropic = ava::config::provider_credential_for_request(wizard_paths, "anthropic", transport);
   expect(wizard_anthropic && wizard_anthropic->has_value() && (*wizard_anthropic)->access_token == "right-arrow-api-key",
          "interactive provider wizard stores typed provider after ignoring unsupported escape sequence");
 
-  std::istringstream non_tty_wizard_input;
-  std::ostringstream non_tty_wizard_out;
-  std::ostringstream non_tty_wizard_err;
-  auto const non_tty_wizard_exit = ava::app::run_connect_provider_wizard(
-      wizard_paths,
-      ava::app::ConnectProviderWizardOptions{.provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .stdin_is_tty = false},
-      non_tty_wizard_input, non_tty_wizard_out, non_tty_wizard_err);
-  expect(non_tty_wizard_exit == 2 && non_tty_wizard_out.str().empty() &&
-             non_tty_wizard_err.str().find("interactive provider login requires a terminal") != std::string::npos,
+  auto const non_tty_wizard = run_connect("", [&] {
+    ava::app::run_connect_provider_wizard(
+        wizard_paths,
+        ava::app::ConnectProviderWizardOptions{.provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .stdin_is_tty = false});
+  });
+  expect(non_tty_wizard.exit_code == ava::app::ExitCode::usage && non_tty_wizard.out.empty() &&
+             non_tty_wizard.err.find("interactive provider login requires a terminal") != std::string::npos,
          "interactive provider wizard refuses to prompt without a tty");
 }
 

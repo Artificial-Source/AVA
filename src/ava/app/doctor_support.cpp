@@ -440,17 +440,17 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
   return collect_passive_doctor_report_impl(paths, workspace_dir, nullptr);
 }
 
-int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, bool json, std::ostream& out, std::ostream& err)
+ExitCode run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, bool json, std::ostream& out, std::ostream& err)
 {
   ModeSignalLatch signal_latch;
   try
   {
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
     Dout(dc::app, "operation=doctor state=start format=" << (json ? "json" : "human"));
     auto const report = collect_passive_doctor_report_impl(paths, workspace_dir, &signal_latch);
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
 #ifdef CWDEBUG
     std::uint64_t warning_count = 0;
     std::uint64_t failure_count = 0;
@@ -462,9 +462,9 @@ int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& 
     Dout(dc::config, "operation=doctor state=result checks=" << report.checks.size() << " warnings=" << warning_count << " failures=" << failure_count);
 #endif
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
     out << (json ? ava::diagnostics::serialize_doctor_report_json(report) + '\n' : ava::diagnostics::serialize_doctor_report_human(report));
-    return report.has_failures() ? 1 : 0;
+    return report.has_failures() ? ExitCode::check_failed : ExitCode::success;
   }
   catch (...)
   {
@@ -478,17 +478,17 @@ int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& 
     {
       out << "AVA doctor\nfail version_platform [invalid_configuration] items=0 enabled=0 errors=1\nsummary pass=0 warning=0 fail=1\n";
     }
-    return 1;
+    return ExitCode::internal_error;
   }
 }
 
-int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, std::ostream& out, std::ostream& err)
+ExitCode run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, std::ostream& out, std::ostream& err)
 {
   ModeSignalLatch signal_latch;
   try
   {
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
     Dout(dc::app, "operation=support_export state=start");
     std::error_code state_error;
     std::filesystem::create_directories(paths.ava_state_dir, state_error);
@@ -498,7 +498,7 @@ int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path
     if (!anchor_set)
     {
       err << "Support artifact generation failed [storage_unavailable].\n";
-      return 1;
+      return ExitCode::environment_unavailable;
     }
     auto const state_anchor = (*anchor_set)->find_anchor(paths.ava_state_dir);
     auto state_directory = ava::core::open_readable(**anchor_set, paths.ava_state_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NONBLOCK);
@@ -508,15 +508,15 @@ int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path
         ::fchmod(state_directory->fd(), 0700) != 0)
     {
       err << "Support artifact generation failed [unsafe_storage].\n";
-      return 1;
+      return ExitCode::environment_unavailable;
     }
     auto report = collect_passive_doctor_report_impl(paths, workspace_dir, &signal_latch);
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
     auto trace = ava::diagnostics::read_trace_counter_snapshot(paths, **anchor_set);
     auto last_failure = ava::diagnostics::read_last_failure_record(paths, **anchor_set);
     if (signal_latch.poll())
-      return 130;
+      return ExitCode::interrupted;
     ava::diagnostics::SupportArtifact artifact{
         .generated_at = now_seconds(), .doctor = std::move(report), .trace = std::move(trace), .last_failure = std::move(last_failure)};
     auto const publication = ava::diagnostics::publish_support_artifact(paths, **anchor_set, artifact);
@@ -525,15 +525,15 @@ int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path
     if (publication.status != ava::diagnostics::ArtifactWriteStatus::Success)
     {
       err << "Support artifact generation failed [" << ava::diagnostics::to_string(publication.status) << "].\n";
-      return 1;
+      return ExitCode::environment_unavailable;
     }
     out << "Support artifact created: " << publication.path.string() << '\n';
-    return 0;
+    return ExitCode::success;
   }
   catch (...)
   {
     err << "Support artifact generation failed [internal_failure].\n";
-    return 1;
+    return ExitCode::internal_error;
   }
 }
 

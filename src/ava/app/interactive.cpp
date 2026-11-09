@@ -276,7 +276,7 @@ InteractiveResult handle_interactive_submission(InteractiveState& state, std::st
 
 namespace ava::app {
 
-int run_interactive(runtime::session_ts& unlocked_session)
+ExitCode run_interactive(runtime::session_ts& unlocked_session)
 {
   AVA_ASSERT_SESSION_UNLOCKED(unlocked_session, "calling run_interactive");
 

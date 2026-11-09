@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/app/ExitCode.h"
 #include "ava/app/branch_summary_coordinator.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/interactive_internal.h"
@@ -63,6 +64,6 @@ void capture_tui_request_presentation(TuiRequestPresentation& presentation, bool
                                                                   std::string_view initial_session_id, ava::tui::TuiSubmitContext const& context,
                                                                   std::function<std::string()> const& current_session_id,
                                                                   std::function<InteractiveResult(ava::tui::TuiQueuedFollowUp const&)> const& run_follow_up);
-[[nodiscard]] int run_tui(InteractiveState state);
+[[nodiscard]] ExitCode run_tui(InteractiveState state);
 
 }  // namespace ava::app::interactive_internal

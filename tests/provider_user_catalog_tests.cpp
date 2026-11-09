@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/stream_redirect.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
@@ -14,9 +15,11 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -231,10 +234,23 @@ void test_connect_auth_none_does_not_write_auth_file()
   std::istringstream in;
   std::ostringstream out;
   std::ostringstream err;
-  auto const code = ava::app::run_connect_provider_credential(
-      paths, ava::app::ConnectProviderCredentialOptions{.provider_id = "local-anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey}, in, out,
-      err);
-  expect(code == 0 && err.str().empty(), "connect auth:none succeeds without error");
+  std::error_code code;
+  {
+    ava::tests::StreamRedirect const redirect_in{std::cin, in.rdbuf()};
+    ava::tests::StreamRedirect const redirect_out{std::cout, out.rdbuf()};
+    ava::tests::StreamRedirect const redirect_err{std::cerr, err.rdbuf()};
+    try
+    {
+      ava::app::run_connect_provider_credential(
+          paths, ava::app::ConnectProviderCredentialOptions{.provider_id = "local-anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey});
+    }
+    catch (ava::app::AIAlert::ExitCode const& error)
+    {
+      code = error.getCode();
+      err << error;
+    }
+  }
+  expect(!code && err.str().empty(), "connect auth:none succeeds without error");
   expect(out.str().find("auth:none") != std::string::npos || out.str().find("no credential") != std::string::npos,
          "connect auth:none reports no credential required");
   expect(!std::filesystem::exists(paths.auth_file), "connect auth:none does not write auth.json");

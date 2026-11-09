@@ -921,7 +921,7 @@ void TuiSession::flush()
     loop_.wakeup().notify();
 }
 
-int TuiSession::shutdown(std::function<bool()> const& before_shutdown)
+app::ExitCode TuiSession::shutdown(std::function<bool()> const& before_shutdown)
 {
   // Release worker waits before joining, then retire producer transports while
   // the frontend and terminal still exist. Preserve exit causes across cleanup.
@@ -939,7 +939,13 @@ int TuiSession::shutdown(std::function<bool()> const& before_shutdown)
   prompt_coordinator_.shutdown();
   if (!before_shutdown())
     terminal_write_failed_ = true;
-  return terminal_signal_received_ ? 130 : ((terminal_write_failed_ || cleanup_failed_) ? 1 : 0);
+  if (terminal_signal_received_)
+    return app::ExitCode::interrupted;
+  if (terminal_write_failed_)
+    return app::ExitCode::terminal_io_failed;
+  if (cleanup_failed_)
+    return app::ExitCode::cleanup_incomplete;
+  return app::ExitCode::success;
 }
 
 } // namespace ava::tui

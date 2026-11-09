@@ -1,5 +1,6 @@
 #pragma once
 #include "ava/http/transport.h"
+#include "ava/app/ExitCode.h"
 #include "ava/app/headless_policy.h"
 #include "ava/app/runtime.h"
 #include "ava/provider/provider.h"
@@ -61,6 +62,14 @@ struct PrintModeOptions
                                                                               ava::provider::Provider const& provider, ava::http::Transport& transport,
                                                                               PrintModeRunOptions const& options, std::ostream& out, std::ostream& err);
 
-[[nodiscard]] int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err);
+// Run one prompt in print mode with options, reading the prompt from options and/or in, writing the answer to out
+// and run diagnostics to err.
+//
+// Returns normally only when the prompt ran successfully.
+// Otherwise throws an AIAlert::ErrorCode whose code is the ExitCode that main must return
+// (usage, terminal_io_failed, interrupted, session_unavailable, environment_unavailable, configuration_invalid,
+// credentials_unavailable or run_failed) and whose message is meant to be printed after the program name.
+// When the run itself fails (run_failed) its cause was already reported on err, or as an error event on out.
+void run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err);
 
 }  // namespace ava::app

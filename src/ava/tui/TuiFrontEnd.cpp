@@ -147,7 +147,7 @@ class TerminalBackgroundDetectionGuard
 }  // namespace
 
 // Enter the private composer implementation after the application has registered frontend data.
-int TuiFrontEnd::run()
+app::ExitCode TuiFrontEnd::run()
 {
   DoutEntering(dc::notice, "TuiFrontEnd::run()");
   using EventLoop = utils::threading::EventLoop;

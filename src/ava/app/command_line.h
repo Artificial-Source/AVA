@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/app/ExitCode.h"
 #include "ava/app/connect_openai.h"
 #include "ava/app/headless_policy.h"
 #include "ava/app/print_mode.h"
@@ -29,8 +30,7 @@ enum class ImmediateOutputKind
 struct ImmediateInvocation
 {
   ImmediateOutputKind kind = ImmediateOutputKind::Text;
-  int status = 0;
-  bool stderr_output = false;
+  ExitCode status = ExitCode::success;
   ava::core::NoLogString text;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
