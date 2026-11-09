@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -68,17 +69,15 @@ enum class ConnectInputReadiness
   Failed,
 };
 
-// The stream buffer of std::cin at program start, which reads file descriptor STDIN_FILENO.
-//
-// Tests replace the stream buffer of std::cin with one that holds their input.
-std::streambuf* const stdin_descriptor_streambuf = std::cin.rdbuf();
-
 // Return true when std::cin currently reads STDIN_FILENO.
 //
-// Only then does polling STDIN_FILENO tell whether reading std::cin can block.
+// ava::core::Application turns off sync_with_stdio, after which std::cin reads STDIN_FILENO through a std::filebuf.
+// Its in_avail() counts both the characters it buffered and those the kernel holds for STDIN_FILENO, so when it
+// returns zero, polling STDIN_FILENO tells whether reading std::cin would block. Tests replace the stream buffer
+// of std::cin with one that holds their input and is not backed by any file descriptor.
 bool cin_reads_stdin_descriptor()
 {
-  return std::cin.rdbuf() == stdin_descriptor_streambuf;
+  return dynamic_cast<std::filebuf*>(std::cin.rdbuf()) != nullptr;
 }
 
 // Wait until std::cin can be read without blocking, while polling the shared process signal bits.
@@ -146,8 +145,9 @@ class ScopedTerminalEcho
   }
 
  private:
-  bool active_ = false;
+  // original_ must be declared before active_: the initializer of active_ stores the current attributes in original_.
   termios original_{};
+  bool active_ = false;
 };
 
 class ScopedTerminalRawMode
@@ -179,8 +179,9 @@ class ScopedTerminalRawMode
   }
 
  private:
-  bool active_ = false;
+  // original_ must be declared before active_: the initializer of active_ stores the current attributes in original_.
   termios original_{};
+  bool active_ = false;
 };
 
 struct ConnectProviderMenuItem

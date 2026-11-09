@@ -30,7 +30,6 @@
 #include <chrono>
 #include <csignal>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <functional>
@@ -44,6 +43,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include "debug.h"
 
 namespace ava::tui {
 
@@ -490,7 +490,7 @@ void ActiveRun::finish_queues()
       // Keep failure before preparing feedback, which may throw. Diagnostics
       // name only the stage because the backend error can contain private text.
       operation_->completion_failed = true;
-      std::fprintf(stderr, "TUI cleanup failed at queue receipts\n");
+      Dout(dc::warning, "TUI cleanup failed at queue receipts");
       presentation_state_.publish_status(finished.error().format());
     }
   }
@@ -602,7 +602,7 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
   auto outcome = exit_outcome();
   // Cleanup runs synchronously on the TUI thread. Preserve failure even in a
   // release build, and log only a fixed stage: exception text may contain input.
-  auto cleanup = [&outcome](char const* stage, auto&& operation) noexcept {
+  auto cleanup = [&outcome]([[maybe_unused]] char const* stage, auto&& operation) noexcept {
     try
     {
       operation();
@@ -611,7 +611,7 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
     catch (...)
     {
       outcome = outcome.with_cleanup_failure();
-      std::fprintf(stderr, "TUI shutdown cleanup failed at %s\n", stage);
+      Dout(dc::warning, "TUI shutdown cleanup failed at " << stage);
       return false;
     }
   };

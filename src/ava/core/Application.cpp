@@ -2,6 +2,7 @@
 #include "ava/core/Application.h"
 
 #include <cstdlib>
+#include <ios>
 #include "debug.h"
 
 #if defined(__SANITIZE_THREAD__)
@@ -65,6 +66,14 @@ Application::Application(CWDEBUG_ONLY(bool debug_init_arg))
   // Instantiate only one `Application` object derived from ava::core::Application.
   ASSERT(s_instance == nullptr);
   s_instance = this;
+  // Let the standard streams use their own buffers instead of going through C stdio.
+  // Afterwards std::cin reads STDIN_FILENO through a std::filebuf whose in_avail() counts both the characters it
+  // buffered and those the kernel holds, so code that polls STDIN_FILENO only when in_avail() is zero never waits
+  // for input that was already read. Synchronized with stdio, in_avail() is always zero while characters can sit
+  // in the stdio buffer of stdin, and such a poll blocks although std::cin could be read.
+  // After this, do not mix C stdio and C++ streams on stdin or stdout, since their buffers are independent;
+  // stderr is safe because it is unbuffered on both sides.
+  std::ios::sync_with_stdio(false);
 }
 
 Application::~Application() noexcept
