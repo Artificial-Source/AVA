@@ -26,6 +26,14 @@ using TuiTimerId = std::uint64_t;
 // Moving transfers responsibility for removing the timer without changing its callback target.
 class TuiTimerHandle final
 {
+ private:
+  // Borrowed stable registry address, changed only by moves/release.
+  // Null means empty; a nonnull pointer must stay valid until this timer is removed.
+  TuiTimeoutHandler const* registry_ = nullptr;
+  // Registry-assigned identity paired with registry_; moves transfer it and release
+  // clears it. Zero denotes an empty handle and is never a registered ID.
+  TuiTimerId timer_id_ = 0;
+
  public:
   // Share the registry's monotonic time domain for every arm operation.
   using Clock = std::chrono::steady_clock;
@@ -81,13 +89,6 @@ class TuiTimerHandle final
   // With the borrowed registry alive: erase the timer then become
   // empty. Used by destruction/move assignment so neither leaves a stale callback.
   void release() noexcept;
-
-  // Borrowed stable registry address, changed only by moves/release.
-  // Null means empty; a nonnull pointer must stay valid until this timer is removed.
-  TuiTimeoutHandler const* registry_ = nullptr;
-  // Registry-assigned identity paired with registry_; moves transfer it and release
-  // clears it. Zero denotes an empty handle and is never a registered ID.
-  TuiTimerId timer_id_ = 0;
 };
 
 } // namespace ava::tui

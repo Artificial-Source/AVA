@@ -25,13 +25,39 @@ namespace ava::tui {
 // Handles returned by `create_timer`, including disarmed ones, must die before this registry;
 // callback Target's must stay at stable addresses until their timers are removed and active calls end.
 //
-class TuiTimeoutHandler final
+class TuiTimeoutHandler
 {
  public:
   // Use monotonic deadlines throughout the TUI so wall-clock changes cannot reschedule work.
   using Clock = std::chrono::steady_clock;
   using timers_ts = threadsafe::Unlocked<std::map<TuiTimerId, TuiTimer>, threadsafe::policy::Primitive<std::mutex>>;
 
+ private:
+  //---------------------------------------------------------------------------
+  // These members may be accessed by any thread.
+
+  // All timers, with entries created and removed through TuiTimerHandle handles.
+  // Mutable because it is thread-safe. Callbacks are copied out and invoked without
+  // holding its lock, so that they may create, arm or remove timers.
+  mutable timers_ts timers_;
+  // Assigns increasing IDs and rejects exhaustion to avoid confusing a
+  // removed timer or dispatch snapshot with a later timer. Mutable because it is thread-safe.
+  mutable std::atomic<TuiTimerId> next_timer_id_{1};
+
+  //---------------------------------------------------------------------------
+  // These members may only be accessed by the TUI thread.
+
+#if CW_DEBUG
+  // TUI thread holds this through `expire`, including callbacks; rejects recursive
+  // dispatch and is cleared on both normal return and exception propagation.
+  bool inside_expire_ = false;
+#endif
+
+  // Set by `stop`; from then on there are no more deadlines and no timer runs.
+  bool stopping_ = false;
+
+ public:
+  // Use monotonic deadlines throughout the TUI so wall-clock changes cannot reschedule work.
   // Create an empty registry; this may happen before the TUI thread exists.
   TuiTimeoutHandler() = default;
   // Outside dispatch and after every timer handle is destroyed.
@@ -109,29 +135,6 @@ class TuiTimeoutHandler final
   // Replace an existing schedule with positive-interval repetition;
   // the first tick follows now and missed ticks will be coalesced during dispatch.
   void arm_timer_every(TuiTimerId timer_id, Clock::duration interval, Clock::time_point now) /*threadsafe-*/ const;
-
-  //---------------------------------------------------------------------------
-  // These members may be accessed by any thread.
-
-  // All timers, with entries created and removed through TuiTimerHandle handles.
-  // Mutable because it is thread-safe. Callbacks are copied out and invoked without
-  // holding its lock, so that they may create, arm or remove timers.
-  mutable timers_ts timers_;
-  // Assigns increasing IDs and rejects exhaustion to avoid confusing a
-  // removed timer or dispatch snapshot with a later timer. Mutable because it is thread-safe.
-  mutable std::atomic<TuiTimerId> next_timer_id_{1};
-
-  //---------------------------------------------------------------------------
-  // These members may only be accessed by the TUI thread.
-
-#if CW_DEBUG
-  // TUI thread holds this through `expire`, including callbacks; rejects recursive
-  // dispatch and is cleared on both normal return and exception propagation.
-  bool inside_expire_ = false;
-#endif
-
-  // Set by `stop`; from then on there are no more deadlines and no timer runs.
-  bool stopping_ = false;
 };
 
 } // namespace ava::tui
