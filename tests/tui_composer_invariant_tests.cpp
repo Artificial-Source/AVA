@@ -297,7 +297,7 @@ void test_interrupt_clear_publishes_before_caller_work()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   Composer composer;
   tui_test_support::TuiEventLoopFixture event_loop;
-  ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeRenderer renderer(event_loop.tui_timeout_handler(), frontend.frontend(), presentation, composer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, ava::core::Application::instance().terminal_context());

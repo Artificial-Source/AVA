@@ -19,7 +19,7 @@ class RuntimePresentationState;
 
 struct ComposerSnapshot;
 class RuntimePluginUiCoordinatorState;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 // TUI-call-owned summary consumed by ActiveRun to request paint or cooperative stop.
 // It carries no borrowed state and preserves independent redraw and expiry evidence.
@@ -55,7 +55,7 @@ class RuntimePluginUiCoordinator final
  public:
   // TUI thread: register expiry before accepting requests. The registry and presentation
   // outlive this coordinator; workers receive only wakeup, which is a weak wake handle, and transport.
-  RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, RuntimePresentationState& presentation);
+  RuntimePluginUiCoordinator(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, RuntimePresentationState& presentation);
   // TUI thread: close transport and clear surfaces before its members are destroyed.
   // Retained endpoints may survive; their weak locks can only reach closed transport.
   ~RuntimePluginUiCoordinator();

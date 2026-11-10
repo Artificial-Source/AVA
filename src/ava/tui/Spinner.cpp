@@ -8,8 +8,8 @@
 
 namespace ava::tui {
 
-Spinner::Spinner(TuiTimerRegistry& timer_registry, std::function<void(std::size_t)> publish_frame)
-    : publish_frame_(std::move(publish_frame)), timer_(timer_registry.create_timer(*this, &Spinner::tick))
+Spinner::Spinner(TuiTimeoutHandler const& tui_timeout_handler, std::function<void(std::size_t)> publish_frame)
+    : publish_frame_(std::move(publish_frame)), timer_(tui_timeout_handler.create_timer(*this, &Spinner::tick))
 {
   // Supply a live presentation member binding; an empty callback cannot publish animation frames.
   ASSERT(publish_frame_);
@@ -27,12 +27,12 @@ void Spinner::stop()
   timer_.disarm();
 }
 
-bool Spinner::active() const
+bool Spinner::active()
 {
   return timer_.armed();
 }
 
-void Spinner::tick(TuiTimerRegistry::Clock::time_point)
+void Spinner::tick(TuiTimeoutHandler::Clock::time_point)
 {
   ++frame_;
   publish_frame_(frame_);

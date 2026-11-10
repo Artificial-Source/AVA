@@ -39,7 +39,7 @@ class SelectorHost;
 class RuntimeRenderer;
 class TuiSessionGrantRegistry;
 
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 namespace runtime_input {
 struct RuntimeInput;
@@ -84,7 +84,7 @@ class RuntimePromptCoordinator final
   // The optional selector and timer registry must outlive this stable callback target.
   // Prompt requests from workers wake the TUI thread through copies of wakeup.
   RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                           RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, TuiWakeup wakeup, SelectorHost* selectors = nullptr);
+                           RuntimeRenderer& renderer, TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, SelectorHost* selectors = nullptr);
   // Not copyable: one owner releases active requests, and resolver/timer callbacks retain its address.
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;

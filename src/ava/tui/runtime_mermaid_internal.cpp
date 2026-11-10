@@ -1,6 +1,6 @@
 // Publishes accepted Mermaid results on the TUI thread while application workers retain process ownership.
 #include "sys.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "TuiWakeup.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -95,12 +95,12 @@ RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
   shutdown();
 }
 
-void RuntimeMermaidPresentationController::create_timers(TuiTimerRegistry& timer_registry, TuiWakeup wakeup)
+void RuntimeMermaidPresentationController::create_timers(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup)
 {
   // Supply set_completion_notifier before attaching any nonempty bridge, even
   // while disabled; otherwise accepted work can finish without waking its owner.
   ASSERT((!bridge_.enqueue && !bridge_.cancel && !bridge_.drain) || bridge_.set_completion_notifier);
-  retry_timer_ = timer_registry.create_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
+  retry_timer_ = tui_timeout_handler.create_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
   if (bridge_.set_completion_notifier)
   {
     bridge_.set_completion_notifier([ready = completion_ready_, wakeup = std::move(wakeup)]() noexcept {

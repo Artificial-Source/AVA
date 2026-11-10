@@ -18,7 +18,7 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 class TuiFrontEnd;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 namespace terminal {
 class Context;
@@ -149,7 +149,7 @@ class RuntimeRenderer final
   // TUI thread: register timers in the earlier-lived registry, then borrow presentation,
   // Composer, frontend and optional Context. Registration never dispatches callbacks.
   // A null frontend is supported; a supplied Context applies cursor settings.
-  RuntimeRenderer(TuiTimerRegistry& timer_registry, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state,
+  RuntimeRenderer(TuiTimeoutHandler const& tui_timeout_handler, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state,
                   terminal::Context* terminal_context = nullptr);
   // Not copyable or movable: timer callbacks hold this address, and one owner manages caches and frames.
   RuntimeRenderer(RuntimeRenderer const&) = delete;

@@ -31,7 +31,7 @@ class RuntimeMermaidPresentationController;
 class RuntimeSubagentWorkspaceController;
 class SessionTransitionCoordinator;
 class TranscriptSearchController;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 enum class PromptServiceOutcome;
 struct TuiActiveNonblockingCommandDispatchResult;
 
@@ -55,10 +55,10 @@ class ActiveRun final
   // TUI thread: bind session owners and a spinner callback to this stable address.
   // All collaborators and the timer registry must survive shutdown and destruction.
   // Worker publications wake the TUI thread through copies of wakeup.
-  ActiveRun(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
-            RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
-            RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid,
-            PendingAttachments& attachments, terminal::Context& terminal_context);
+  ActiveRun(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
+            RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui,
+            TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
+            RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments, terminal::Context& terminal_context);
   // TUI thread: stop and join any submission before releasing owned resources.
   ~ActiveRun();
   // Not copyable or movable: one owner joins the worker, and callbacks retain its address.

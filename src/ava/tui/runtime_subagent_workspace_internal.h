@@ -15,7 +15,7 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 class SelectorHost;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 // Owned TUI-thread dispatch result returned to session routing; no borrowed data survives the synchronous
 // handler.
@@ -53,7 +53,7 @@ class RuntimeSubagentWorkspaceController final
 
   // TUI setup: register the discovery timer at this stable address. The registry
   // outlives this owner; callbacks only mark a read due, never call the frontend.
-  void create_timers(TuiTimerRegistry& timer_registry);
+  void create_timers(TuiTimeoutHandler const& tui_timeout_handler);
   // TUI application stage: consume pending discovery once, even after several
   // timer ticks. Return true only when visible state changed and needs a frame.
   // Service before the host-prompt guard; workspace discovery remains eligible.

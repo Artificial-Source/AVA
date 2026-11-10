@@ -3,7 +3,7 @@
 #pragma once
 
 #include "TuiTimerHandle.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "ava/debug/print_members_on.h"
 
 #include <cstddef>
@@ -19,10 +19,10 @@ namespace ava::tui {
 class Spinner final
 {
  public:
-  // TUI thread with timer_registry and publish_frame's target alive: bind a disarmed member timer.
+  // TUI thread with tui_timeout_handler and publish_frame's target alive: bind a disarmed member timer.
   // publish_frame must be nonempty and only update display data or request a frame;
   // it must not paint, poll input, run session control checks, wait or dispatch timers recursively.
-  Spinner(TuiTimerRegistry& timer_registry, std::function<void(std::size_t)> publish_frame);
+  Spinner(TuiTimeoutHandler const& tui_timeout_handler, std::function<void(std::size_t)> publish_frame);
   // Not copyable or movable: one spinner owns the animation and its timer borrows this address.
   Spinner(Spinner const&) = delete;
   Spinner& operator=(Spinner const&) = delete;
@@ -36,14 +36,14 @@ class Spinner final
   // Any executing publish_frame_ call must return before this owner can be destroyed.
   void stop();
   // TUI thread: report whether the animation has an armed deadline; does not advance it.
-  [[nodiscard]] bool active() const;
+  [[nodiscard]] bool active();
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // TUI timer stage while this owner and publish_frame_'s target live: advance
   // one phase per dispatched tick and pass it to publish_frame_; missed ticks are skipped.
-  void tick(TuiTimerRegistry::Clock::time_point now);
+  void tick(TuiTimeoutHandler::Clock::time_point now);
 
   // Constructor-installed binding, invoked only by TUI timer ticks. Its borrowed
   // presentation target outlives this owner; the timer is removed first.

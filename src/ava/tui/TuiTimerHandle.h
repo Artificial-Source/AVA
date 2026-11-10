@@ -8,15 +8,21 @@
 
 namespace ava::tui {
 
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
-// Identifies one TuiTimer in its TuiTimerRegistry; IDs are never reused.
+// Identifies one TuiTimer in its TuiTimeoutHandler; IDs are never reused.
 using TuiTimerId = std::uint64_t;
 
-// Move-only handle owned by the feature whose callback TuiTimerRegistry stores. All
-// operations and destruction run on the TUI thread. The registry and stable callback
-// target outlive the handle; an executing callback must also finish before its
-// target dies. Destruction removes the timer, while disarm only clears its deadline.
+// Move-only handle owned by the feature whose callback TuiTimeoutHandler stores.
+//
+// Any thread can create a handle, through TuiTimeoutHandler::create_timer, and destroy it.
+// Arming is TUI-thread-only, because a deadline set by another thread would not wake the event loop.
+// The owner may disarm on any thread; see disarm for what that does and does not guarantee.
+// A single handle is not thread-safe: it has one owner at a time.
+//
+// The registry and stable callback target outlive the handle; an executing callback must
+// also finish before its target dies, which matters when destroying an armed handle on
+// another thread. Destruction removes the timer, while disarm only clears its deadline.
 // Moving transfers responsibility for removing the timer without changing its callback target.
 class TuiTimerHandle final
 {
@@ -24,29 +30,38 @@ class TuiTimerHandle final
   // Share the registry's monotonic time domain for every arm operation.
   using Clock = std::chrono::steady_clock;
 
-  // TUI thread: create an empty handle; scheduling calls remain harmless no-ops.
+  // Create an empty handle; scheduling calls remain harmless no-ops.
   TuiTimerHandle() = default;
-  // TUI thread before the registry dies: remove this timer, even if disarmed.
+  // Before the registry dies: remove this timer, even if disarmed.
   // A callback already copied for its current invocation still has to return.
   ~TuiTimerHandle();
   // Not copyable: exactly one handle owns removal of each timer.
   TuiTimerHandle(TuiTimerHandle const&) = delete;
   TuiTimerHandle& operator=(TuiTimerHandle const&) = delete;
-  // TUI thread: take other's timer and leave other empty; the callback's
+  // Take other's timer and leave other empty; the callback's
   // target address and the requirement that its registry outlive this handle persist.
   TuiTimerHandle(TuiTimerHandle&& other) noexcept;
-  // TUI thread with both registries alive: remove this handle's old timer, then
+  // With both registries alive: remove this handle's old timer, then
   // take other's. Self-assignment preserves it; callback targets are never moved.
   TuiTimerHandle& operator=(TuiTimerHandle&& other) noexcept;
 
-  // TUI thread: disarm without releasing ownership; any due-work snapshot becomes
-  // stale. Does not interrupt an already executing callback; empty is harmless.
+  // Disarm without releasing ownership; any due-work snapshot becomes stale. Empty is harmless.
+  //
+  // May be called on any thread by the owner of this handle; no wakeup is needed, because
+  // a removed deadline at most causes one wakeup in which nothing is due.
+  // Does not interrupt an already executing callback. On the TUI thread that means the callback
+  // will not run anymore once this returns. On another thread the callback may still be running,
+  // or start once more, if expire already took it out before this call: its target must stay alive
+  // until any such invocation returns.
   void disarm() noexcept;
-  // TUI thread with the registry alive: report an armed deadline, not whether a callback
-  // is currently running. Empty and disarmed handles report false.
-  [[nodiscard]] bool armed() const noexcept;
+  // TUI thread: report an armed deadline, not whether a callback is currently running.
+  // Empty and disarmed handles report false.
+  //
+  // Not const, because it is not thread-safe: it reads this handle's members, which its owner may change.
+  // Only on the TUI thread is the answer also stable, because only that thread arms and disarms timers.
+  [[nodiscard]] bool armed() noexcept;
   // TUI thread: replace any schedule with one shot. A past deadline is serviced by
-  // a later service_due pass, never synchronously by this call; empty is harmless.
+  // a later `expire` pass, never synchronously by this call; empty is harmless.
   void arm_at(Clock::time_point deadline);
   // TUI thread: schedule one shot relative to now; nonpositive delay means now,
   // overflow saturates, and no callback runs until dispatch. Empty is harmless.
@@ -59,18 +74,18 @@ class TuiTimerHandle final
 
  private:
   // The registry alone may manufacture a handle for an ID it already owns.
-  friend class TuiTimerRegistry;
-  // TUI thread after inserting timer_id: borrow timer_registry and assume exclusive responsibility
+  friend class TuiTimeoutHandler;
+  // After inserting timer_id: borrow tui_timeout_handler and assume exclusive responsibility
   // for removing that timer before registry destruction.
-  TuiTimerHandle(TuiTimerRegistry& timer_registry, TuiTimerId timer_id) noexcept;
-  // TUI thread with the borrowed registry alive: erase the timer then become
+  TuiTimerHandle(TuiTimeoutHandler const& tui_timeout_handler, TuiTimerId timer_id) noexcept;
+  // With the borrowed registry alive: erase the timer then become
   // empty. Used by destruction/move assignment so neither leaves a stale callback.
   void release() noexcept;
 
-  // Borrowed stable registry address, changed only by TUI-thread moves/release.
+  // Borrowed stable registry address, changed only by moves/release.
   // Null means empty; a nonnull pointer must stay valid until this timer is removed.
-  TuiTimerRegistry* registry_ = nullptr;
-  // Registry-assigned identity paired with registry_; TUI moves transfer it and release
+  TuiTimeoutHandler const* registry_ = nullptr;
+  // Registry-assigned identity paired with registry_; moves transfer it and release
   // clears it. Zero denotes an empty handle and is never a registered ID.
   TuiTimerId timer_id_ = 0;
 };

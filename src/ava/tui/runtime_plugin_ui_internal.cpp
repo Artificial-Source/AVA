@@ -1,6 +1,6 @@
 // Queues plugin requests from workers and prepares their views on the TUI thread.
 #include "sys.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "TuiWakeup.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
@@ -688,11 +688,11 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, RuntimePresentationState& presentation)
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, RuntimePresentationState& presentation)
     : presentation_(presentation),
       state_(std::make_shared<RuntimePluginUiCoordinatorState>(std::move(wakeup))),
       runtime_token_(std::make_shared<int const>(1)),
-      deadline_timer_(timer_registry.create_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
+      deadline_timer_(tui_timeout_handler.create_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
 {
 }
 

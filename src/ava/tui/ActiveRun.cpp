@@ -7,7 +7,7 @@
 #include "ava/tui/ActiveRunEvents.h"
 #include "ava/tui/ActiveRunInbox.h"
 #include "ava/tui/TuiFrontEnd.h"
-#include "ava/tui/TuiTimerRegistry.h"
+#include "ava/tui/TuiTimeoutHandler.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/event_state.h"
 #include "ava/tui/runtime_commands_internal.h"
@@ -61,7 +61,7 @@ using runtime_commands::shell_helper_submission;
 using runtime_transcript::apply_assistant_turn_meta;
 using runtime_transcript::assistant_meta_for_snapshot;
 
-ActiveRun::ActiveRun(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
+ActiveRun::ActiveRun(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
                      RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui,
                      TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                      SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments,
@@ -78,7 +78,7 @@ ActiveRun::ActiveRun(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, TuiFron
       attachments_(attachments),
       terminal_context_(terminal_context),
       wakeup_(std::move(wakeup)),
-      spinner_(timer_registry, std::bind_front(&ActiveRun::publish_spinner_frame, this))
+      spinner_(tui_timeout_handler, std::bind_front(&ActiveRun::publish_spinner_frame, this))
 {
 }
 

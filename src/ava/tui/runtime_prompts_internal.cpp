@@ -3,7 +3,7 @@
 #include "PendingPermissionRequest.h"
 #include "PendingQuestionRequest.h"
 #include "SelectorHost.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "ava/event/events.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -42,15 +42,15 @@ bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std:
 }
 
 RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                                                   RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, TuiWakeup wakeup, SelectorHost* selectors)
+                                                   RuntimeRenderer& renderer, TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup, SelectorHost* selectors)
     : frontend_(frontend),
       presentation_(presentation),
       session_grants_(session_grants),
       renderer_(renderer),
       selectors_(selectors),
       wakeup_(std::move(wakeup)),
-      auto_resolution_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::mark_auto_resolution_due)),
-      wheel_expiry_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::expire_wheel_suppression))
+      auto_resolution_timer_(tui_timeout_handler.create_timer(*this, &RuntimePromptCoordinator::mark_auto_resolution_due)),
+      wheel_expiry_timer_(tui_timeout_handler.create_timer(*this, &RuntimePromptCoordinator::expire_wheel_suppression))
 {
 }
 

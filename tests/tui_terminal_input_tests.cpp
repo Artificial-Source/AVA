@@ -4,7 +4,7 @@
 #include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "support/tui_test_support.h"
-#include "ava/tui/TuiTimerRegistry.h"
+#include "ava/tui/TuiTimeoutHandler.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
@@ -1822,7 +1822,7 @@ class InputReadDeadline
 {
  public:
   // A real timer callback ends the fixture wait without reading the terminal.
-  void expire(ava::tui::TuiTimerRegistry::Clock::time_point) { expired_ = true; }
+  void expire(ava::tui::TuiTimeoutHandler::Clock::time_point) { expired_ = true; }
   // Test thread: observe the real timer result without advancing or servicing it.
   [[nodiscard]] bool expired() const noexcept { return expired_; }
   // This anonymous test helper has internal linkage and no generated printer.
@@ -1840,19 +1840,19 @@ class InputReadDeadline
 ava::tui::runtime_input::InputPollResult wait_for_decoded_input(std::chrono::milliseconds timeout)
 {
   using namespace ava::tui;
-  auto const deadline = TuiTimerRegistry::Clock::now() + timeout;
+  auto const deadline = TuiTimeoutHandler::Clock::now() + timeout;
   auto input = runtime_input::poll_curses_input();
   if (input.kind == runtime_input::InputPollKind::Input)
     return input;
   auto& terminal_context = ava::core::Application::instance().terminal_context();
   tui_test_support::TuiEventLoopFixture event_loop(::fileno(terminal_context.input_stream()));
-  TuiTimerRegistry& timer_registry = event_loop.timer_registry();
+  TuiTimeoutHandler& tui_timeout_handler = event_loop.tui_timeout_handler();
   InputReadDeadline expired;
-  auto timer = timer_registry.create_timer(expired, &InputReadDeadline::expire);
+  auto timer = tui_timeout_handler.create_timer(expired, &InputReadDeadline::expire);
   timer.arm_at(deadline);
   while (!expired.expired() && !event_loop.terminal_hangup() && !event_loop.terminal_error())
   {
-    timer_registry.service_due();
+    tui_timeout_handler.expire(TuiTimeoutHandler::Clock::now());
     if (expired.expired())
       break;
     if (input.kind == runtime_input::InputPollKind::Empty)

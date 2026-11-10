@@ -308,7 +308,7 @@ class EnqueueDeadline final
 {
  public:
   // Timer dispatch records timeout without running any coordinator operation.
-  void expire(ava::tui::TuiTimerRegistry::Clock::time_point) { expired_ = true; }
+  void expire(ava::tui::TuiTimeoutHandler::Clock::time_point) { expired_ = true; }
   // TUI-only observation after actual loop waiting and timer service.
   [[nodiscard]] bool expired() const { return expired_; }
   // Internal-linkage timer targets have no generated printer.
@@ -326,8 +326,8 @@ class PromptFixture final
   // Bind real UI owners before enabling the worker-facing resolver APIs.
   PromptFixture()
       : presentation_(frontend_.frontend(), {}),
-        renderer_(event_loop_.timer_registry(), frontend_.frontend(), presentation_, composer_),
-        coordinator_(*frontend_.frontend(), presentation_, grants_, renderer_, event_loop_.timer_registry(), event_loop_.wakeup())
+        renderer_(event_loop_.tui_timeout_handler(), frontend_.frontend(), presentation_, composer_),
+        coordinator_(*frontend_.frontend(), presentation_, grants_, renderer_, event_loop_.tui_timeout_handler(), event_loop_.wakeup())
   {
     coordinator_.open_admission();
   }
@@ -338,12 +338,12 @@ class PromptFixture final
   // no rendering or other producer exists, so that next wake proves the second enqueue.
   [[nodiscard]] bool wait_for_enqueue()
   {
-    auto& timer_registry = event_loop_.timer_registry();
+    auto& tui_timeout_handler = event_loop_.tui_timeout_handler();
     EnqueueDeadline deadline;
-    auto timeout = timer_registry.create_timer(deadline, &EnqueueDeadline::expire);
+    auto timeout = tui_timeout_handler.create_timer(deadline, &EnqueueDeadline::expire);
     timeout.arm_after(kGuard);
     event_loop_.wait();
-    timer_registry.service_due();
+    tui_timeout_handler.expire(std::chrono::steady_clock::now());
     return !deadline.expired() && !event_loop_.terminal_hangup() && !event_loop_.terminal_error() && coordinator_.has_pending_requests();
   }
   // Internal-linkage composition owns opaque fixtures and deliberately opts out of printing.

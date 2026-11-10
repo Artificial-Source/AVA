@@ -5,7 +5,7 @@
 #include "tests/support/test_timeout.h"
 #include "ava/tui/Spinner.h"
 #include "ava/tui/TuiTimerHandle.h"
-#include "ava/tui/TuiTimerRegistry.h"
+#include "ava/tui/TuiTimeoutHandler.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/core/UniqueFd.h"
 
@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -24,7 +25,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 using ava::tui::TuiTimerHandle;
-using ava::tui::TuiTimerRegistry;
+using ava::tui::TuiTimeoutHandler;
 using Fixture = tui_test_support::TuiEventLoopFixture;
 
 // Test-thread RAII pipe for readiness and hangup cases; the loop borrows its read end.
@@ -110,10 +111,10 @@ class MutatingTimerPair final
 {
  public:
   // Test thread: register stable targets; the registry must outlive both optional handles.
-  MutatingTimerPair(TuiTimerRegistry& timer_registry, PeerTimerAction action)
+  MutatingTimerPair(TuiTimeoutHandler& tui_timeout_handler, PeerTimerAction action)
       : action_(action),
-        first_(timer_registry.create_timer(*this, &MutatingTimerPair::first_tick)),
-        second_(timer_registry.create_timer(*this, &MutatingTimerPair::second_tick))
+        first_(tui_timeout_handler.create_timer(*this, &MutatingTimerPair::first_tick)),
+        second_(tui_timeout_handler.create_timer(*this, &MutatingTimerPair::second_tick))
   {
   }
   // Both timers retain this stable callback target until their handles retire.
@@ -165,7 +166,7 @@ class RearmingTimer final
 {
  public:
   // Register before arming; the borrowed registry outlives this owner and its handle.
-  explicit RearmingTimer(TuiTimerRegistry& timer_registry) : timer_(timer_registry.create_timer(*this, &RearmingTimer::tick)) { }
+  explicit RearmingTimer(TuiTimeoutHandler& tui_timeout_handler) : timer_(tui_timeout_handler.create_timer(*this, &RearmingTimer::tick)) { }
   // The timer keeps this callback target stable throughout the self-rearm scenario.
   RearmingTimer(RearmingTimer const&) = delete;
   RearmingTimer& operator=(RearmingTimer const&) = delete;
@@ -175,7 +176,7 @@ class RearmingTimer final
   // Test-thread inspection after dispatch; counts only callbacks actually invoked.
   [[nodiscard]] std::size_t calls() const { return calls_; }
   // Test-thread inspection proves the one-shot timer retires after firing.
-  [[nodiscard]] bool active() const { return timer_.armed(); }
+  [[nodiscard]] bool active() { return timer_.armed(); }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
@@ -198,33 +199,33 @@ void test_timer_deadline_replacement_and_late_repeat()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer test input pipe"))
     return;
-  TuiTimerRegistry timer_registry;
+  TuiTimeoutHandler tui_timeout_handler;
   TimerRecorder one_shot;
   TimerRecorder repeating;
-  auto timer = timer_registry.create_timer(one_shot, &TimerRecorder::tick);
-  auto repeat = timer_registry.create_timer(repeating, &TimerRecorder::tick);
+  auto timer = tui_timeout_handler.create_timer(one_shot, &TimerRecorder::tick);
+  auto repeat = tui_timeout_handler.create_timer(repeating, &TimerRecorder::tick);
   auto const start = Clock::time_point{};
   expect(!timer.armed() && !repeat.armed(), "member timer registrations begin disarmed");
 
   timer.arm_at(start + 10ms);
   timer.arm_after(20ms, start);
-  timer_registry.service_due(start + 19ms);
+  tui_timeout_handler.expire(start + 19ms);
   expect(one_shot.ticks().empty(), "rearming replaces the old one-shot deadline");
-  timer_registry.service_due(start + 20ms);
-  timer_registry.service_due(start + 100ms);
+  tui_timeout_handler.expire(start + 20ms);
+  tui_timeout_handler.expire(start + 100ms);
   expect(one_shot.ticks() == std::vector{start + 20ms} && !timer.armed(), "one-shot dispatch uses the supplied timestamp and disarms before later service");
 
   auto const repeat_start = start + 100ms;
   repeat.arm_every(10ms, repeat_start);
-  timer_registry.service_due(repeat_start + 9ms);
+  tui_timeout_handler.expire(repeat_start + 9ms);
   expect(repeating.ticks().empty(), "a repeating timer starts after its first full interval");
-  timer_registry.service_due(repeat_start + 35ms);
-  timer_registry.service_due(repeat_start + 35ms);
-  timer_registry.service_due(repeat_start + 39ms);
+  tui_timeout_handler.expire(repeat_start + 35ms);
+  tui_timeout_handler.expire(repeat_start + 35ms);
+  tui_timeout_handler.expire(repeat_start + 39ms);
   expect(repeating.ticks() == std::vector{repeat_start + 35ms} && repeat.armed(), "an overdue repeat fires once and skips missed callbacks");
-  timer_registry.service_due(repeat_start + 40ms);
+  tui_timeout_handler.expire(repeat_start + 40ms);
   repeat.disarm();
-  timer_registry.service_due(repeat_start + 100ms);
+  tui_timeout_handler.expire(repeat_start + 100ms);
   expect(repeating.ticks() == std::vector{repeat_start + 35ms, repeat_start + 40ms} && !repeat.armed(),
          "late repeat preserves its original phase and cancellation suppresses later ticks");
 }
@@ -235,26 +236,26 @@ void test_timer_mutation_during_dispatch()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer mutation input pipe"))
     return;
-  TuiTimerRegistry timer_registry;
+  TuiTimeoutHandler tui_timeout_handler;
   auto due = Clock::time_point{} + 10ms;
   for (auto action : {PeerTimerAction::Disarm, PeerTimerAction::Rearm, PeerTimerAction::Destroy})
   {
-    MutatingTimerPair pair(timer_registry, action);
+    MutatingTimerPair pair(tui_timeout_handler, action);
     pair.arm(due);
-    timer_registry.service_due(due);
+    tui_timeout_handler.expire(due);
     expect(pair.calls() == 1, "cancel, rearm, or destruction suppresses a peer timer's already captured due generation");
-    timer_registry.service_due(due + 9ms);
+    tui_timeout_handler.expire(due + 9ms);
     expect(pair.calls() == 1, "a changed due registration is not replayed by the following service pass");
-    timer_registry.service_due(due + 10ms);
+    tui_timeout_handler.expire(due + 10ms);
     expect(pair.calls() == (action == PeerTimerAction::Rearm ? 2U : 1U), "only explicit rearming admits a later peer callback");
     due += 30ms;
   }
 
-  RearmingTimer self(timer_registry);
+  RearmingTimer self(tui_timeout_handler);
   self.start(due - 10ms);
-  timer_registry.service_due(due);
+  tui_timeout_handler.expire(due);
   expect(self.calls() == 1 && self.active(), "self-rearming for now does not recurse in the current due batch");
-  timer_registry.service_due(due);
+  tui_timeout_handler.expire(due);
   expect(self.calls() == 2 && !self.active(), "callback rearming replaces the repeat and becomes eligible on the next service pass");
 }
 
@@ -264,29 +265,29 @@ void test_timer_move_and_destruction()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer ownership input pipe"))
     return;
-  TuiTimerRegistry timer_registry;
+  TuiTimeoutHandler tui_timeout_handler;
   TimerRecorder source_target;
   TimerRecorder displaced_target;
-  auto source = timer_registry.create_timer(source_target, &TimerRecorder::tick);
+  auto source = tui_timeout_handler.create_timer(source_target, &TimerRecorder::tick);
   auto const due = Clock::time_point{} + 10ms;
   source.arm_at(due);
   auto moved = std::move(source);
   expect(!source.armed() && moved.armed(), "moving a timer transfers its armed registration");
-  timer_registry.service_due(due);
+  tui_timeout_handler.expire(due);
   expect(source_target.ticks().size() == 1, "a moved timer fires exactly once on its original target");
 
-  auto destination = timer_registry.create_timer(displaced_target, &TimerRecorder::tick);
+  auto destination = tui_timeout_handler.create_timer(displaced_target, &TimerRecorder::tick);
   destination.arm_at(due + 10ms);
   moved.arm_at(due + 10ms);
   destination = std::move(moved);
-  timer_registry.service_due(due + 10ms);
+  tui_timeout_handler.expire(due + 10ms);
   expect(!moved.armed() && source_target.ticks().size() == 2 && displaced_target.ticks().empty(),
          "move assignment retires the destination registration before taking the source");
   {
-    auto destroyed = timer_registry.create_timer(displaced_target, &TimerRecorder::tick);
+    auto destroyed = tui_timeout_handler.create_timer(displaced_target, &TimerRecorder::tick);
     destroyed.arm_at(due + 20ms);
   }
-  timer_registry.service_due(due + 20ms);
+  tui_timeout_handler.expire(due + 20ms);
   expect(displaced_target.ticks().empty(), "destroying an armed registration prevents its callback");
 }
 
@@ -296,20 +297,20 @@ void test_spinner_preserves_phase_and_skips_missed_ticks()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create spinner test input pipe"))
     return;
-  TuiTimerRegistry timer_registry;
+  TuiTimeoutHandler tui_timeout_handler;
   SpinnerFrames frames;
-  ava::tui::Spinner spinner(timer_registry, std::bind_front(&SpinnerFrames::publish, &frames));
+  ava::tui::Spinner spinner(tui_timeout_handler, std::bind_front(&SpinnerFrames::publish, &frames));
   auto const before_start = Clock::now();
   spinner.start(7);
   auto const after_start = Clock::now();
-  timer_registry.service_due(before_start + 119ms);
+  tui_timeout_handler.expire(before_start + 119ms);
   expect(spinner.active() && frames.frames().empty() && ava::tui::detail::kProcessingIndicatorFrameDelay == 120ms,
          "spinner preserves the starting phase and schedules its first update after 120ms");
-  timer_registry.service_due(after_start + 120ms);
-  timer_registry.service_due(after_start + 900ms);
+  tui_timeout_handler.expire(after_start + 120ms);
+  tui_timeout_handler.expire(after_start + 900ms);
   expect(frames.frames() == std::vector<std::size_t>{8, 9}, "late spinner servicing advances one visible phase without catch-up frames");
   spinner.stop();
-  timer_registry.service_due(after_start + 1200ms);
+  tui_timeout_handler.expire(after_start + 1200ms);
   expect(!spinner.active() && frames.frames() == std::vector<std::size_t>{8, 9}, "stopping the spinner retires future phase publication");
 }
 
@@ -320,9 +321,9 @@ void test_notification_before_wait_and_simultaneous_input()
   if (!ava::tests::require(pipe.valid(), "create notification test input pipe"))
     return;
   Fixture event_loop(pipe.input());
-  TuiTimerRegistry& timer_registry = event_loop.timer_registry();
+  TuiTimeoutHandler& tui_timeout_handler = event_loop.tui_timeout_handler();
   TimerRecorder fallback;
-  auto deadline = timer_registry.create_timer(fallback, &TimerRecorder::tick);
+  auto deadline = tui_timeout_handler.create_timer(fallback, &TimerRecorder::tick);
   auto wake = event_loop.wakeup();
   auto copied_wake = wake;
 
@@ -333,7 +334,7 @@ void test_notification_before_wait_and_simultaneous_input()
   copied_wake.notify();
   wake.notify();
   event_loop.wait();
-  timer_registry.service_due();
+  tui_timeout_handler.expire(Clock::now());
   if (!ava::tests::require(fallback.ticks().empty() && event_loop.notified(),
                            "notifications published before wait wake it without reaching the fallback deadline"))
     return;
@@ -341,7 +342,7 @@ void test_notification_before_wait_and_simultaneous_input()
   // No input is readable. If the first wait left duplicate wake hints behind,
   // this wait would return before the armed deadline becomes due.
   event_loop.wait();
-  timer_registry.service_due();
+  tui_timeout_handler.expire(Clock::now());
   if (!ava::tests::require(fallback.ticks().size() == 1 && !event_loop.notified(), "repeated notifications coalesce and are consumed by one wait"))
     return;
 
@@ -350,12 +351,12 @@ void test_notification_before_wait_and_simultaneous_input()
   deadline.arm_at(ava::tests::now_plus_seconds(2));
   copied_wake.notify();
   event_loop.wait();
-  timer_registry.service_due();
+  tui_timeout_handler.expire(Clock::now());
   if (!ava::tests::require(fallback.ticks().size() == 1 && event_loop.notified() && pipe.consume(),
                            "simultaneous input and a fresh wake return together without consuming the input byte"))
     return;
   event_loop.wait();
-  timer_registry.service_due();
+  tui_timeout_handler.expire(Clock::now());
   expect(fallback.ticks().size() == 2 && !event_loop.notified(), "simultaneous fd readiness does not leave its notification pending for another wait");
 }
 
@@ -378,20 +379,54 @@ void test_hangup_preserves_final_input()
 // Protect the earliest-deadline query that TuiFrontEnd::run uses to choose between wait and wait_until.
 void test_next_deadline()
 {
-  TuiTimerRegistry timer_registry;
+  TuiTimeoutHandler tui_timeout_handler;
   TimerRecorder first;
   TimerRecorder second;
-  auto early = timer_registry.create_timer(first, &TimerRecorder::tick);
-  auto late = timer_registry.create_timer(second, &TimerRecorder::tick);
+  auto early = tui_timeout_handler.create_timer(first, &TimerRecorder::tick);
+  auto late = tui_timeout_handler.create_timer(second, &TimerRecorder::tick);
   auto const start = Clock::time_point{} + 1s;
-  expect(!timer_registry.next_deadline(), "a registry without armed timers has no deadline");
+  expect(!tui_timeout_handler.next_deadline(), "a registry without armed timers has no deadline");
   late.arm_at(start + 20ms);
   early.arm_at(start + 10ms);
-  expect(timer_registry.next_deadline() == start + 10ms, "the earliest armed deadline wins");
+  expect(tui_timeout_handler.next_deadline() == start + 10ms, "the earliest armed deadline wins");
   early.disarm();
-  expect(timer_registry.next_deadline() == start + 20ms, "a canceled timer no longer constrains the wait");
-  timer_registry.service_due(start + 20ms);
-  expect(!timer_registry.next_deadline() && second.ticks().size() == 1, "a dispatched one-shot timer no longer constrains the wait");
+  expect(tui_timeout_handler.next_deadline() == start + 20ms, "a canceled timer no longer constrains the wait");
+  tui_timeout_handler.expire(start + 20ms);
+  expect(!tui_timeout_handler.next_deadline() && second.ticks().size() == 1, "a dispatched one-shot timer no longer constrains the wait");
+}
+
+// Protect creating and destroying disarmed timers on other threads through a const registry.
+void test_timer_creation_on_other_threads()
+{
+  constexpr std::size_t kThreads = 4;
+  constexpr std::size_t kKeptPerThread = 200;
+  TuiTimeoutHandler tui_timeout_handler;
+  TuiTimeoutHandler const& const_registry = tui_timeout_handler;
+  std::array<TimerRecorder, kThreads> recorders;
+  std::array<std::vector<TuiTimerHandle>, kThreads> handles;
+  {
+    std::vector<std::jthread> threads;
+    for (std::size_t index = 0; index < kThreads; ++index)
+    {
+      threads.emplace_back([&const_registry, &recorder = recorders[index], &owned = handles[index]] {
+        for (std::size_t count = 0; count < kKeptPerThread; ++count)
+        {
+          owned.push_back(const_registry.create_timer(recorder, &TimerRecorder::tick));
+          // This one has to be gone again, without disturbing the timers of the other threads.
+          [[maybe_unused]] auto const discarded = const_registry.create_timer(recorder, &TimerRecorder::tick);
+        }
+      });
+    }
+  }
+  expect(!tui_timeout_handler.next_deadline(), "timers created on other threads start out disarmed");
+
+  auto const deadline = Clock::time_point{} + 1s;
+  for (auto& owned : handles)
+    for (auto& handle : owned)
+      handle.arm_at(deadline);
+  tui_timeout_handler.expire(deadline);
+  for (auto const& recorder : recorders)
+    expect(recorder.ticks().size() == kKeptPerThread, "every timer created on another thread has its own identity and runs once");
 }
 
 // Protect safe notification through an expired weak wake handle.
@@ -420,7 +455,7 @@ void test_retired_wakeup()
 void run_tui_runtime_owner_tests();
 
 // Run scheduler, readiness and owner regressions without decoding terminal input.
-void run_tui_timer_registry_tests()
+void run_tui_timeout_handler_tests()
 {
   run_tui_runtime_owner_tests();
   test_timer_deadline_replacement_and_late_repeat();
@@ -430,5 +465,6 @@ void run_tui_timer_registry_tests()
   test_notification_before_wait_and_simultaneous_input();
   test_hangup_preserves_final_input();
   test_next_deadline();
+  test_timer_creation_on_other_threads();
   test_retired_wakeup();
 }

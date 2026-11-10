@@ -122,6 +122,8 @@ class TuiSession final
   // TUI thread, before due timers. Handle signals and observe terminal failures;
   // cancellation may release workers, so it must run outside timer callbacks.
   void service_control();
+  // Callback of control_timer_; the work is in the wake-up that its deadline causes.
+  void wake_for_control(TuiTimerHandle::Clock::time_point now);
   // TUI thread after due timers: consume at most 256 events, then attempt final
   // settlement. Return whether another turn can process accepted application work.
   [[nodiscard]] bool service_application_updates();
@@ -257,6 +259,9 @@ class TuiSession final
   // TUI-thread idle handlers in precedence order. Their targets above outlive this
   // dispatcher and stay at stable addresses for the session.
   TuiInputDispatcher input_dispatcher_;
+  // Wakes the event loop every 100 ms so that service_control observes the signal bits.
+  // Declared last, so that it is removed first.
+  TuiTimerHandle control_timer_;
 };
 
 } // namespace ava::tui

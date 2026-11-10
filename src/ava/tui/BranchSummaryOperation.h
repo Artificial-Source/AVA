@@ -12,7 +12,7 @@ class BranchSummaryActions;
 
 class RuntimeRenderer;
 class SelectorHost;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 namespace terminal {
 class Context;
 }
@@ -62,7 +62,7 @@ class BranchSummaryOperation final
 
   // TUI thread: register a timer that only marks discovery due. The registry outlives this
   // stable operation and the already-constructed renderer used by service_if_due.
-  void create_timers(TuiTimerRegistry& timer_registry);
+  void create_timers(TuiTimeoutHandler const& tui_timeout_handler);
   // TUI application stage: read one pending backend snapshot, or return no value.
   // Several timer ticks require only one read. The returned outcome is handled before
   // input; the timer itself never reads the frontend or completes the operation.

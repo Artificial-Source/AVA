@@ -22,7 +22,7 @@ class RuntimePresentationState;
 
 class RuntimeRenderer;
 class TranscriptSearchController;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 // TUI-thread application-stage result; session control distinguishes a changed projection from latched renderer
 // failure.
@@ -59,7 +59,7 @@ class RuntimeMermaidPresentationController final
   // The already-constructed renderer outlives this owner and batches its frame requests.
   // A nonempty bridge must support notifier registration, including while disabled.
   // Render completions wake the TUI thread through a copy of wakeup, which may outlive this object.
-  void create_timers(TuiTimerRegistry& timer_registry, TuiWakeup wakeup);
+  void create_timers(TuiTimeoutHandler const& tui_timeout_handler, TuiWakeup wakeup);
   // TUI application stage: reconcile records, drain results before submitting work, update accepted diagram layout, refresh
   // search, and invalidate a frame.
   [[nodiscard]] MermaidServiceOutcome service();

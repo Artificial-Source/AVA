@@ -10,7 +10,7 @@
 namespace ava::tui {
 namespace {
 
-// Used by TUI-thread scheduling to avoid signed overflow for caller-supplied times.
+// Used by scheduling to avoid signed overflow for caller-supplied times.
 // Nonpositive delay means immediate eligibility; an unrepresentable future deadline
 // saturates at the clock limit. Pure calculation with no borrowed object lifetime.
 TuiTimer::Clock::time_point saturated_deadline(TuiTimer::Clock::time_point now, TuiTimer::Clock::duration delay)

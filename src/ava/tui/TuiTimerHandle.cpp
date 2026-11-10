@@ -1,14 +1,14 @@
-// Transfers and removes timers on the TUI thread, leaving
+// Transfers and removes timers, leaving
 // deadline policy and callback dispatch to the registry-owned TuiTimer.
 #include "sys.h"
 #include "TuiTimerHandle.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 
 #include <utility>
 
 namespace ava::tui {
 
-TuiTimerHandle::TuiTimerHandle(TuiTimerRegistry& timer_registry, TuiTimerId timer_id) noexcept : registry_(&timer_registry), timer_id_(timer_id)
+TuiTimerHandle::TuiTimerHandle(TuiTimeoutHandler const& tui_timeout_handler, TuiTimerId timer_id) noexcept : registry_(&tui_timeout_handler), timer_id_(timer_id)
 {
 }
 
@@ -49,7 +49,7 @@ void TuiTimerHandle::disarm() noexcept
     registry_->disarm_timer(timer_id_);
 }
 
-bool TuiTimerHandle::armed() const noexcept
+bool TuiTimerHandle::armed() noexcept
 {
   return registry_ && registry_->timer_armed(timer_id_);
 }

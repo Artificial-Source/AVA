@@ -56,7 +56,6 @@ add_library(ava_tui
   "TuiTimeoutHandler.cpp"
   "CommandOutput.cpp"
   "TuiInputDispatcher.cpp"
-  "TuiTimerRegistry.cpp"
   "TuiTimerHandle.cpp"
   "TuiWakeup.cpp"
   "TuiTimer.cpp"

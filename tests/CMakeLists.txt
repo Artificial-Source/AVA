@@ -443,7 +443,7 @@ set(AVA_TEST_SUITES
   tui_shutdown
   permission_rules
   tui_composer
-  tui_timer_registry
+  tui_timeout_handler
   tui_pending_requests
   terminal_horizontal_layout
   terminal_paragraph

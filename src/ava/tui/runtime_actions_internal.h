@@ -24,7 +24,7 @@ class PendingAttachments;
 class TuiFrontEnd;
 class RuntimeRenderer;
 class SessionSelector;
-class TuiTimerRegistry;
+class TuiTimeoutHandler;
 
 // Session owns local action coordination used by idle and active input routing.
 // Every member, including timer callbacks, is TUI-thread-only. Frontend callbacks
@@ -45,7 +45,7 @@ class RuntimeActionController final
   // TUI thread: attach the 500 ms timer once; it only marks display reload work due.
   // The registry outlives this stable owner; maybe_reload_display_settings performs the check.
   // Session supplies its control timer's epoch so their deadlines coincide every fifth tick.
-  void create_timers(TuiTimerRegistry& timer_registry, TuiTimerHandle::Clock::time_point epoch = TuiTimerHandle::Clock::now());
+  void create_timers(TuiTimeoutHandler const& tui_timeout_handler, TuiTimerHandle::Clock::time_point epoch = TuiTimerHandle::Clock::now());
   // TUI thread: consume initial or timer-marked work once; repeated calls without
   // a due flag do not check. TerminalFailure means rendering has already failed.
   // Applied updates display values without requesting a final frame, so callers can

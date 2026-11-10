@@ -4,7 +4,7 @@
 #include "BranchSummaryActions.h"
 #include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "runtime_render_internal.h"
 #include "runtime_views_internal.h"
 #include "terminal/Context.h"
@@ -20,9 +20,9 @@ BranchSummaryOperation::BranchSummaryOperation(BranchSummaryActions& frontend, R
 {
 }
 
-void BranchSummaryOperation::create_timers(TuiTimerRegistry& timer_registry)
+void BranchSummaryOperation::create_timers(TuiTimeoutHandler const& tui_timeout_handler)
 {
-  discovery_timer_ = timer_registry.create_timer(*this, &BranchSummaryOperation::discover_progress);
+  discovery_timer_ = tui_timeout_handler.create_timer(*this, &BranchSummaryOperation::discover_progress);
   if (active_)
     discovery_timer_.arm_every(std::chrono::milliseconds{250});
 }

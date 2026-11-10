@@ -1,7 +1,7 @@
 // Refreshes path-free subagent views and routes workspace input without owning backend job lifetimes.
 #include "sys.h"
 #include "SelectorHost.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
@@ -69,9 +69,9 @@ RuntimeSubagentWorkspaceController::~RuntimeSubagentWorkspaceController()
   close();
 }
 
-void RuntimeSubagentWorkspaceController::create_timers(TuiTimerRegistry& timer_registry)
+void RuntimeSubagentWorkspaceController::create_timers(TuiTimeoutHandler const& tui_timeout_handler)
 {
-  discovery_timer_ = timer_registry.create_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
+  discovery_timer_ = tui_timeout_handler.create_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
   if (active())
     discovery_timer_.arm_every(kPollInterval);
 }

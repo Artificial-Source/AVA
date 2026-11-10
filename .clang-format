@@ -25,7 +25,7 @@ AlignTrailingComments:
 SortIncludes: CaseSensitive
 SpacesBeforeTrailingComments: 1
 SpaceInEmptyBraces: Block
-CommentPragmas: '^(static$|FIXME:)'
+CommentPragmas: '^(static$|FIXME:|threadsafe$)'
 IncludeIsMainRegex: '$^'
 IncludeBlocks: Regroup
 IncludeCategories:

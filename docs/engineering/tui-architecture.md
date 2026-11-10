@@ -11,7 +11,7 @@ still apply to every change.
 Read `TuiFrontEnd::run` in [TuiFrontEnd.cpp](../../src/ava/tui/TuiFrontEnd.cpp) for the
 event loop, then [TuiSession.h](../../src/ava/tui/TuiSession.h) for ownership and
 `TuiSession::flush` in [TuiSession.cpp](../../src/ava/tui/TuiSession.cpp) for the work done per wakeup.
-Read [TuiTimerRegistry.h](../../src/ava/tui/TuiTimerRegistry.h) next for timer lifetimes.
+Read [TuiTimeoutHandler.h](../../src/ava/tui/TuiTimeoutHandler.h) next for timer lifetimes.
 These files coordinate work. Keep feature algorithms in the owners listed below.
 
 For a submitted message, follow `RuntimeSubmitController::submit`,
@@ -83,8 +83,8 @@ owner prepares a frame.
 | --- | --- |
 | `TuiFrontEnd` | Owns the TUI thread's `utils::threading::EventLoop`. `run()` is the only code that waits on it and dispatches its events; `terminate()` ends it. |
 | `TuiSession` | Composition, the order of work per wakeup, control decisions and transitions between owners. |
-| `TuiTimeoutHandler` | Member of `TuiFrontEnd`. Owns the `TuiTimerRegistry` and the control timer, reports the next deadline and runs due timers. It knows nothing about `TuiSession`. |
-| `TuiTimerRegistry` | The timers. It does not wait, own feature state or decode keys. |
+| `TuiTimeoutHandler` | Member of `TuiFrontEnd`. Owns the `TuiTimeoutHandler`, reports the next deadline and runs due timers. It knows nothing about `TuiSession`. |
+| `TuiTimeoutHandler` | The timers. It does not wait, own feature state or decode keys. |
 | `RuntimePresentationState` | The screen and sidebar projections. Readers get const views; features publish through named operations that preserve bounds and generations. |
 | `Composer` | Draft, cursor, selection, editing history, completion choices and Escape state. |
 | `RuntimeRenderer` | Frame scheduling, completion/layout caches and `TranscriptView`. It prepares layout around viewport changes. |
@@ -104,7 +104,7 @@ flowchart TD
   App --> Context[terminal::Context]
   Frontend --> Session[TuiSession]
   Frontend --> Timeout[TuiTimeoutHandler]
-  Timeout --> Registry[TuiTimerRegistry]
+  Timeout --> Registry[TuiTimeoutHandler]
   Session -->|create timers, stop| Timeout
   Session --> State[RuntimePresentationState]
   Session --> Features[Editor and feature owners]
@@ -218,7 +218,7 @@ publishes completion, `complete()` joins it and freezes further publication,
 then drains the finite final backlog in chunks of at most 256 events and settles
 in that same call. A large final backlog can therefore lengthen that turn.
 
-The control timer of `TuiTimeoutHandler` is a plain wake-up every 100 ms. Its callback does not claim
+The control timer of `TuiSession` is a plain wake-up every 100 ms. Its callback does not claim
 signals or perform cancellation. This is a nominal observation cadence, not a
 100 ms response guarantee: synchronous callbacks and long flushes can delay the
 next control stage. The underlying waiter retries interrupted system calls.
@@ -413,7 +413,9 @@ plugin dialog does not grant access to mutable session or permission state.
 1. Let the feature own a `TuiTimerHandle`. Construct the registry before that feature;
    declare the handle after the state its callback uses. Create the timer with
    `timer_registry.create_timer(*this, &Owner::callback)` at a stable object address.
-   Creating it does not invoke the callback.
+   Creating it does not invoke the callback. Any thread that has a
+   `TuiTimeoutHandler const&` may do this, and the handle's owner may disarm it on any thread,
+   but arming stays on the TUI thread.
 2. Use `arm_at` for an absolute one-shot deadline or `arm_every` for a positive
    interval. In the callback, mark work due or request a frame, then return.
    For work that calls the frontend or other features, add a service method and
@@ -436,7 +438,7 @@ inside a callback.
 ## Validation and limits
 
 Use the development build and a UTF-8 locale. Focused tests such as
-`ava_tests.tui_timer_registry`, `ava_tests.tui_pending_requests`,
+`ava_tests.tui_timeout_handler`, `ava_tests.tui_pending_requests`,
 `ava_tests.plugin_ui`, `ava_tests.tui_composer` and the isolated
 `ava_tests.tui_composer_rendering.*` cases cover different parts of the mechanism.
 The isolated `ava_tests.tui_session.*` cases drive the real session with native

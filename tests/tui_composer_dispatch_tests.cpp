@@ -47,7 +47,7 @@ struct ComposerDispatchFixture
   explicit ComposerDispatchFixture(ava::tui::TuiRuntimeOptions options = {})
       : frontend(std::move(options)),
         presentation(frontend.frontend(), {}),
-        renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer),
+        renderer(event_loop.tui_timeout_handler(), frontend.frontend(), presentation, composer),
         navigation(*frontend.frontend(), presentation, composer, renderer)
   {
   }

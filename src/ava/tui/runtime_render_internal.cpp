@@ -1,6 +1,6 @@
 // Prepares feature display data and transcript layout before the session's single paint stage.
 #include "sys.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
 #include "runtime_state_internal.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/mermaid_projection.h"
@@ -109,15 +109,15 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(TuiTimerRegistry& timer_registry, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer,
+RuntimeRenderer::RuntimeRenderer(TuiTimeoutHandler const& tui_timeout_handler, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer,
                                  terminal::Context* terminal_context)
     : presentation_(presentation), draft_state_(composer), terminal_context_(terminal_context), transcript_(presentation, composer), frontend_(frontend)
 {
   // Register while all callback targets are alive. The caller services the registry
   // only after construction; partially constructed handles retire on failure.
-  frame_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::frame_due);
-  indicator_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::indicator_due);
-  autoscroll_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::autoscroll_due);
+  frame_timer_ = tui_timeout_handler.create_timer(*this, &RuntimeRenderer::frame_due);
+  indicator_timer_ = tui_timeout_handler.create_timer(*this, &RuntimeRenderer::indicator_due);
+  autoscroll_timer_ = tui_timeout_handler.create_timer(*this, &RuntimeRenderer::autoscroll_due);
   synchronize_timers();
 }
 

@@ -24,11 +24,21 @@
 #include "runtime_views_internal.h"
 #include "ava/core/Application.h"
 
+#include <chrono>
 #include <cstdio>
 #include <functional>
 #include <utility>
 
 namespace ava::tui {
+
+namespace {
+// Signals only set atomic bits, and the OS wait retries EINTR. control_timer_
+// supplies a nominal 100 ms observation cadence (ten idle wakes/second).
+// Decode, callbacks and synchronous work can delay the next control turn.
+// The timer deadline wakes the loop so the next control stage can observe those bits.
+constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
+} // namespace
+
 bool TuiSession::is_action(TuiAction action, InputEvent const& event) const
 {
   return key_matches_action(frontend_.key_bindings(), action, event.key);
@@ -52,8 +62,8 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       presentation_state_(&frontend, initial_status_line),
       command_output_(presentation_state_),
       attachments_(presentation_state_),
-      plugin_ui_(timeout_handler_.timer_registry(), wakeup_, presentation_state_),
-      renderer_(timeout_handler_.timer_registry(), &frontend, presentation_state_, draft_state_, &terminal_context),
+      plugin_ui_(timeout_handler_, wakeup_, presentation_state_),
+      renderer_(timeout_handler_, &frontend, presentation_state_, draft_state_, &terminal_context),
       navigation_(frontend, presentation_state_, draft_state_, renderer_),
       selectors_(presentation_state_),
       selector_input_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
@@ -62,13 +72,13 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       branch_summary_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings(), attachments_),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
-      prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, timeout_handler_.timer_registry(), wakeup_, &selectors_),
+      prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, timeout_handler_, wakeup_, &selectors_),
       mermaid_presentation_(presentation_state_, renderer_, transcript_search_, frontend_.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_, attachments_),
       subagent_workspace_(frontend, presentation_state_, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_, attachments_,
                            command_session_grants_),
-      active_run_controller_(timeout_handler_.timer_registry(), wakeup_, frontend, presentation_state_, renderer_, prompt_coordinator_, plugin_ui_,
+      active_run_controller_(timeout_handler_, wakeup_, frontend, presentation_state_, renderer_, prompt_coordinator_, plugin_ui_,
                              transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_, attachments_, terminal_context),
       active_run_input_(frontend, presentation_state_, draft_state_, renderer_, prompt_stash_, navigation_, action_controller_, transcript_search_,
                         subagent_workspace_, active_run_controller_, command_output_, terminal_context),
@@ -95,12 +105,19 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
   // Share an origin so the 500 ms reload deadline adds no wake between control
   // ticks. Each timer still skips missed ticks independently after a slow turn.
   auto const control_epoch = TuiTimerHandle::Clock::now();
-  TuiTimerRegistry& timer_registry = timeout_handler_.timer_registry();
-  action_controller_.create_timers(timer_registry, control_epoch);
-  branch_summary_.create_timers(timer_registry);
-  subagent_workspace_.create_timers(timer_registry);
-  mermaid_presentation_.create_timers(timer_registry, wakeup_);
-  timeout_handler_.arm_control_timer(control_epoch);
+  TuiTimeoutHandler const& tui_timeout_handler = timeout_handler_;
+  action_controller_.create_timers(tui_timeout_handler, control_epoch);
+  branch_summary_.create_timers(tui_timeout_handler);
+  subagent_workspace_.create_timers(tui_timeout_handler);
+  mermaid_presentation_.create_timers(tui_timeout_handler, wakeup_);
+  control_timer_ = tui_timeout_handler.create_timer(*this, &TuiSession::wake_for_control);
+  control_timer_.arm_every(kControlObservationInterval, control_epoch);
+}
+
+void TuiSession::wake_for_control(TuiTimerHandle::Clock::time_point)
+{
+  // The timer deadline already wakes the event loop. Control actions belong to the
+  // next control stage (service_control), never to a due-timer callback.
 }
 
 // TUI thread: keep all members alive during explicit shutdown; reverse member
