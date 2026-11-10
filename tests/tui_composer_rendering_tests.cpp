@@ -674,17 +674,17 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry());
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), event_loop.wakeup(), presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-  ava::tui::ActiveRun active_run(event_loop.timer_registry(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+  ava::tui::ActiveRun active_run(event_loop.timer_registry(), event_loop.wakeup(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
                                  subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
 
   ava::tui::CommandOutput command_output(presentation);
@@ -799,17 +799,17 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
       ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                                  ava::core::Application::instance().terminal_context());
-      ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry());
+      ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
       ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                           attachments);
-      ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), presentation);
+      ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), event_loop.wakeup(), presentation);
       ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                           attachments);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                                 attachments, grants);
       ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-      ava::tui::ActiveRun active_run(event_loop.timer_registry(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+      ava::tui::ActiveRun active_run(event_loop.timer_registry(), event_loop.wakeup(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
                                      subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
 
       // Declare after ActiveRun so every return or exception opens the worker's
@@ -934,12 +934,12 @@ bool test_prompt_completion_wakes_deferred_plugin(bool permission)
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
-  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, timer_registry);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(timer_registry, presentation);
+  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, timer_registry, event_loop.wakeup());
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(timer_registry, event_loop.wakeup(), presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
   ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
-  ava::tui::ActiveRun active_run(timer_registry, *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid, attachments,
+  ava::tui::ActiveRun active_run(timer_registry, event_loop.wakeup(), *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid, attachments,
                                  context);
   // Every early return releases the provider before ActiveRun's destructor joins it.
   auto release_run = at_scope_end([finish = &finish_run] { finish->set_value(); });
@@ -1070,7 +1070,7 @@ bool test_attached_prompt_render_failure_returns_io()
   ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer);
 
   ava::tui::TuiSessionGrantRegistry grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
   bool passed = true;
   for (bool permission : {false, true})
   {
@@ -1115,7 +1115,7 @@ bool test_claimed_question_cancellation_keeps_automatic_answer()
   ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer);
 
   ava::tui::TuiSessionGrantRegistry grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
   bool passed = true;
   for (bool throws : {false, true})
   {
@@ -1172,7 +1172,7 @@ bool test_atomic_search_input_prompt_precedence()
   ava::tui::Composer draft_state;
   ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, draft_state);
   ava::tui::TuiSessionGrantRegistry session_grants;
-  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, session_grants, renderer, event_loop.timer_registry());
+  ava::tui::RuntimePromptCoordinator coordinator(*frontend.frontend(), presentation, session_grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
   coordinator.open_admission();
   auto resolver = coordinator.question_resolver();
 
@@ -2199,17 +2199,17 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry());
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation, grants, renderer, event_loop.timer_registry(), event_loop.wakeup());
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
                                                       attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(event_loop.timer_registry(), event_loop.wakeup(), presentation);
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
                                                       attachments);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation, active_select_list);
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-  ava::tui::ActiveRun active_run(event_loop.timer_registry(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+  ava::tui::ActiveRun active_run(event_loop.timer_registry(), event_loop.wakeup(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
                                  subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
   ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,

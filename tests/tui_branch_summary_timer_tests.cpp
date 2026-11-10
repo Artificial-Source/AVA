@@ -71,8 +71,7 @@ class SummaryTimerFixture final
   // Establish borrowed dependencies before registering callbacks; the common
   // runner owns the initialized process terminal for this fixture's lifetime.
   SummaryTimerFixture()
-      : timer_registry_(ava::tui::TuiWakeup{}),
-        presentation_(frontend_.frontend(), {}),
+      : presentation_(frontend_.frontend(), {}),
         renderer_(timer_registry_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         summary_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context())

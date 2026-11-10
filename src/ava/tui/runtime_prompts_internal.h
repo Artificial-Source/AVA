@@ -82,8 +82,9 @@ class RuntimePromptCoordinator final
  public:
   // TUI thread: bind session collaborators and member timers before accepting requests.
   // The optional selector and timer registry must outlive this stable callback target.
+  // Prompt requests from workers wake the TUI thread through copies of wakeup.
   RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                           RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, SelectorHost* selectors = nullptr);
+                           RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, TuiWakeup wakeup, SelectorHost* selectors = nullptr);
   // Not copyable: one owner releases active requests, and resolver/timer callbacks retain its address.
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;

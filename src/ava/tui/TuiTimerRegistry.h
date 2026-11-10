@@ -4,7 +4,6 @@
 
 #include "TuiTimer.h"
 #include "TuiTimerHandle.h"
-#include "TuiWakeup.h"
 #include "ava/debug/print_members_on.h"
 
 #include <chrono>
@@ -15,11 +14,11 @@
 
 namespace ava::tui {
 
-// TuiSession's registry for feature-owned timers, plus the factory of wakeup tokens.
+// Registry for feature-owned timers, owned by TuiTimeoutHandler.
 //
-// It does not wait: TuiFrontEnd::run owns the event loop, asks next_deadline() how long it may sleep
-// and calls service_due() after every wakeup. All members are TUI-thread-only; producers use a
-// previously obtained TuiWakeup. Handles, including disarmed ones, must die before the registry;
+// It does not wait: TuiFrontEnd::run owns the event loop and asks TuiTimeoutHandler how long it may
+// sleep, which in turn calls next_deadline() here, and service_due() after every wakeup.
+// All members are TUI-thread-only. Handles, including disarmed ones, must die before the registry;
 // callback targets stay at stable addresses until their timers are removed and active calls end.
 class TuiTimerRegistry final
 {
@@ -27,9 +26,9 @@ class TuiTimerRegistry final
   // Use monotonic deadlines throughout the TUI so wall-clock changes cannot reschedule work.
   using Clock = std::chrono::steady_clock;
 
-  // TUI thread: create an empty registry whose wakeup() tokens are copies of wakeup.
-  explicit TuiTimerRegistry(TuiWakeup wakeup);
-  // TUI thread, outside dispatch and after every timer handle is destroyed.
+  // Create an empty registry; this may happen before the TUI thread exists.
+  TuiTimerRegistry() = default;
+  // Outside dispatch and after every timer handle is destroyed.
   ~TuiTimerRegistry();
   // Not copyable or movable: timer handles borrow this registry at a stable address.
   TuiTimerRegistry(TuiTimerRegistry const&) = delete;
@@ -55,9 +54,6 @@ class TuiTimerRegistry final
   //
   // A returned deadline may already have passed; the caller should then not sleep at all.
   [[nodiscard]] std::optional<Clock::time_point> next_deadline() const noexcept;
-  // TUI thread while this registry lives: create a copyable token for producer notifications.
-  // Producers must store their payload in a synchronized mailbox before calling notify().
-  [[nodiscard]] TuiWakeup wakeup() const noexcept { return wakeup_; }
   // TUI thread: check current deadlines without dispatching.
   [[nodiscard]] bool has_due_work(Clock::time_point now = Clock::now()) const noexcept;
 
@@ -87,8 +83,6 @@ class TuiTimerRegistry final
   // the first tick follows now and missed ticks will be coalesced during dispatch.
   void arm_timer_every(TuiTimerId timer_id, Clock::duration interval, Clock::time_point now);
 
-  // Token copied for every producer; it names the notification Event of TuiFrontEnd's event loop.
-  TuiWakeup wakeup_;
   // TUI-thread registry, with entries created and removed through TuiTimerHandle handles.
   // Callbacks are copied out before invocation so callbacks may mutate this map.
   std::map<TuiTimerId, TuiTimer> timers_;

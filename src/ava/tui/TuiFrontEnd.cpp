@@ -148,10 +148,9 @@ class TerminalBackgroundDetectionGuard
 
 void TuiFrontEnd::set_tui_session(TuiSession* session)
 {
-  // For now all three handlers forward to the session.
+  // For now these handlers forward to the session.
   terminal_input_handler_.set_tui_session(session);
   notification_handler_.set_tui_session(session);
-  timeout_handler_.set_tui_session(session);
 }
 
 // Enter the private composer implementation after the application has registered frontend data.
@@ -218,7 +217,7 @@ app::ExitCode TuiFrontEnd::run()
 
     //FIXME: TuiWakeup and TuiSession is *old* code that needs to be replaced.
     TuiWakeup const wakeup(event_loop_, notify_event);
-    TuiSession session(*this, terminal_context, initial_status_line, wakeup);
+    TuiSession session(*this, terminal_context, initial_status_line, timeout_handler_, wakeup);
     set_tui_session(&session);
     session.start();
 

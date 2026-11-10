@@ -281,18 +281,18 @@ void run_tui_active_input_route_tests()
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
   ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, terminal_context);
-  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, timer_registry);
+  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, timer_registry, event_loop.wakeup());
   ava::tui::RuntimePromptStashController stash(presentation, composer, renderer, selectors, frontend.frontend()->key_bindings(), attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(timer_registry, presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(timer_registry, event_loop.wakeup(), presentation);
   ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, composer, renderer, selectors, sessions, attachments);
   actions.create_timers(timer_registry);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
   workspace.create_timers(timer_registry);
   ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
-  mermaid.create_timers(timer_registry);
-  ava::tui::ActiveRun active_run(timer_registry, *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid,
-                                 attachments, terminal_context);
+  mermaid.create_timers(timer_registry, event_loop.wakeup());
+  ava::tui::ActiveRun active_run(timer_registry, event_loop.wakeup(), *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace,
+                                 transitions, mermaid, attachments, terminal_context);
   // This guard is destroyed before ActiveRun, including failed setup and assertion unwinding, so joining cannot strand the worker.
   auto release_run = at_scope_end([&finish_run] { finish_run.set_value(); });
   ava::tui::CommandOutput command_output(presentation);

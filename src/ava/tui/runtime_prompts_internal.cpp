@@ -42,13 +42,13 @@ bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std:
 }
 
 RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                                                   RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, SelectorHost* selectors)
+                                                   RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, TuiWakeup wakeup, SelectorHost* selectors)
     : frontend_(frontend),
       presentation_(presentation),
       session_grants_(session_grants),
       renderer_(renderer),
       selectors_(selectors),
-      wakeup_(timer_registry.wakeup()),
+      wakeup_(std::move(wakeup)),
       auto_resolution_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::mark_auto_resolution_due)),
       wheel_expiry_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::expire_wheel_suppression))
 {

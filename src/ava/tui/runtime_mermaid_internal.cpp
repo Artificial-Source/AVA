@@ -95,7 +95,7 @@ RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
   shutdown();
 }
 
-void RuntimeMermaidPresentationController::create_timers(TuiTimerRegistry& timer_registry)
+void RuntimeMermaidPresentationController::create_timers(TuiTimerRegistry& timer_registry, TuiWakeup wakeup)
 {
   // Supply set_completion_notifier before attaching any nonempty bridge, even
   // while disabled; otherwise accepted work can finish without waking its owner.
@@ -103,7 +103,7 @@ void RuntimeMermaidPresentationController::create_timers(TuiTimerRegistry& timer
   retry_timer_ = timer_registry.create_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
   if (bridge_.set_completion_notifier)
   {
-    bridge_.set_completion_notifier([ready = completion_ready_, wakeup = timer_registry.wakeup()]() noexcept {
+    bridge_.set_completion_notifier([ready = completion_ready_, wakeup = std::move(wakeup)]() noexcept {
       // Publish readiness before waking. Only shared/weak values cross threads;
       // a copied callback cannot reach a retired controller or terminal object.
       ready->store(true, std::memory_order_release);

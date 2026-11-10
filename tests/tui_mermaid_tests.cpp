@@ -406,7 +406,7 @@ struct B5AttachedMermaidFixture
   // Renderer is already registered; attach Mermaid and install one eligible block.
   B5AttachedMermaidFixture()
   {
-    controller.create_timers(timer_registry);
+    controller.create_timers(timer_registry, event_loop.wakeup());
     presentation.finish_session_transition("b5-attached");
     auto display = frontend.frontend()->display_settings_snapshot();
     display.mermaid_enabled = true;

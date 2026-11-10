@@ -272,7 +272,7 @@ void test_inbox_publication_wakes_event_loop()
   ava::tui::TuiTimerRegistry& timer_registry = event_loop.timer_registry();
   WakeDeadline fallback;
   auto deadline = timer_registry.create_timer(fallback, &WakeDeadline::expire);
-  auto inbox = make_inbox(timer_registry.wakeup());
+  auto inbox = make_inbox(event_loop.wakeup());
   auto sink = inbox->event_sink();
   inbox->set_request_id("wake-request");
   deadline.arm_at(ava::tests::now_plus_seconds(2));
@@ -310,7 +310,7 @@ void test_inbox_retained_endpoints_outlive_owner_and_loop()
   ActiveRunInbox::FollowUpStarted follow_up;
   {
     tui_test_support::TuiEventLoopFixture event_loop(pipe.input());
-    auto inbox = make_inbox(event_loop.timer_registry().wakeup());
+    auto inbox = make_inbox(event_loop.wakeup());
     lifetime = inbox;
     events = inbox->event_sink();
     envelopes = inbox->envelope_sink();

@@ -83,7 +83,8 @@ owner prepares a frame.
 | --- | --- |
 | `TuiFrontEnd` | Owns the TUI thread's `utils::threading::EventLoop`. `run()` is the only code that waits on it and dispatches its events; `terminate()` ends it. |
 | `TuiSession` | Composition, the order of work per wakeup, control decisions and transitions between owners. |
-| `TuiTimerRegistry` | Timers and the wakeup tokens that producers use. It does not wait, own feature state or decode keys. |
+| `TuiTimeoutHandler` | Member of `TuiFrontEnd`. Owns the `TuiTimerRegistry` and the control timer, reports the next deadline and runs due timers. It knows nothing about `TuiSession`. |
+| `TuiTimerRegistry` | The timers. It does not wait, own feature state or decode keys. |
 | `RuntimePresentationState` | The screen and sidebar projections. Readers get const views; features publish through named operations that preserve bounds and generations. |
 | `Composer` | Draft, cursor, selection, editing history, completion choices and Escape state. |
 | `RuntimeRenderer` | Frame scheduling, completion/layout caches and `TranscriptView`. It prepares layout around viewport changes. |
@@ -102,7 +103,9 @@ flowchart TD
   App[Application] --> Frontend[TuiFrontEnd]
   App --> Context[terminal::Context]
   Frontend --> Session[TuiSession]
-  Session --> Registry[TuiTimerRegistry]
+  Frontend --> Timeout[TuiTimeoutHandler]
+  Timeout --> Registry[TuiTimerRegistry]
+  Session -->|create timers, stop| Timeout
   Session --> State[RuntimePresentationState]
   Session --> Features[Editor and feature owners]
   Session --> Run[ActiveRun]
@@ -118,7 +121,7 @@ terminal closure or a failure) it stops its own work and calls
 `core::Application::request_shutdown()`. The main thread waits for that request in
 `app::Application::wait_for_shutdown`, then calls `TuiFrontEnd::terminate()`, which
 returns once the TUI thread left its loop, and joins the TUI thread.
-Normal exit then cancels the control timer, shuts down the active run, stops
+Normal exit then shuts down the active run, stops
 Mermaid/plugin/prompt requests and invokes the frontend shutdown hook while
 the terminal is still available. The session destructor also covers early
 returns and exceptions. Active-run cleanup releases waiting prompts and plugin
@@ -137,8 +140,8 @@ view it will restore. `TuiSession::handle_selector_input` applies that result
 after selector cleanup and before requesting paint. Session success and error
 both reconcile the backend's committed identity before displaying feedback.
 
-`RuntimeRenderer` and `RuntimePluginUiCoordinator` require the session's timer
-registry in their constructors. Their timers are ready before input or
+`RuntimeRenderer` and `RuntimePluginUiCoordinator` require the timer
+registry of `TuiTimeoutHandler` in their constructors. Their timers are ready before input or
 worker endpoints can use them. Tests also supply a real loop, whose pipe and
 registry outlive the feature. `render()` requests a batch paint;
 `paint_ready_frame()` performs eligible work, and `paint_for_handoff()` supplies
@@ -178,10 +181,11 @@ event, then repeats:
    The only way out of the loop is the `terminated` status set by `terminate()`.
 2. **Dispatch.** Pass input readiness, including hangup and error, to
    `TuiTerminalInputHandler::input_ready` and notifications to
-   `TuiNotificationHandler::notified`. For now these handlers and
-   `TuiTimeoutHandler` only forward to `TuiSession`.
+   `TuiNotificationHandler::notified`. For now these two handlers only forward
+   to `TuiSession`.
 3. **Due timers.** `TuiTimeoutHandler::expire` dispatches the timers whose
-   deadlines are due. Timer callbacks update their feature or request a frame.
+   deadlines are due, unless the session stopped them with `TuiTimeoutHandler::stop`.
+   Timer callbacks update their feature or request a frame.
 4. **Flush.** `TuiSession::flush` does the remaining work, for now still by
    checking every mailbox:
    1. **Control.** Observe signals, terminal closure, descriptor errors and recorded
@@ -214,7 +218,7 @@ publishes completion, `complete()` joins it and freezes further publication,
 then drains the finite final backlog in chunks of at most 256 events and settles
 in that same call. A large final backlog can therefore lengthen that turn.
 
-The control timer is a plain wake-up every 100 ms. Its callback does not claim
+The control timer of `TuiTimeoutHandler` is a plain wake-up every 100 ms. Its callback does not claim
 signals or perform cancellation. This is a nominal observation cadence, not a
 100 ms response guarantee: synchronous callbacks and long flushes can delay the
 next control stage. The underlying waiter retries interrupted system calls.
@@ -249,7 +253,7 @@ independent lock. FIFO means first in, first out: draining preserves publication
 order within the queue.
 
 `TuiWakeup` holds a weak pointer to the OS wait resources. Locking it briefly
-keeps those resources alive during notification, possibly after `TuiTimerRegistry`
+keeps those resources alive during notification, possibly after `TuiFrontEnd`
 has released its own share. The last producer pin may destroy them. This does
 not join a producer or protect any other object it uses. Owners must still stop
 and join workers before destroying their dependencies. A copied Mermaid callback

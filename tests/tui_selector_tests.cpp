@@ -1897,7 +1897,7 @@ void run_tui_selector_tests()
   auto const parent_generation = controller_snapshot.transcript_generation;
   controller_presentation.publish_dimensions(40, 8);
   // Discovery runs through the production timer registry; nothing waits, so it needs no wakeup.
-  ava::tui::TuiTimerRegistry discovery_timer_registry{ava::tui::TuiWakeup{}};
+  ava::tui::TuiTimerRegistry discovery_timer_registry;
   ava::tui::RuntimeRenderer workspace_renderer(discovery_timer_registry, controller_frontend.frontend(), controller_presentation, controller_composer);
   ava::tui::SelectorHost selectors(controller_presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);

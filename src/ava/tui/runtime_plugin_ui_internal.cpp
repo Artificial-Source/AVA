@@ -688,9 +688,9 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, RuntimePresentationState& presentation)
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, RuntimePresentationState& presentation)
     : presentation_(presentation),
-      state_(std::make_shared<RuntimePluginUiCoordinatorState>(timer_registry.wakeup())),
+      state_(std::make_shared<RuntimePluginUiCoordinatorState>(std::move(wakeup))),
       runtime_token_(std::make_shared<int const>(1)),
       deadline_timer_(timer_registry.create_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
 {

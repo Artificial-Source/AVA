@@ -327,7 +327,7 @@ class PromptFixture final
   PromptFixture()
       : presentation_(frontend_.frontend(), {}),
         renderer_(event_loop_.timer_registry(), frontend_.frontend(), presentation_, composer_),
-        coordinator_(*frontend_.frontend(), presentation_, grants_, renderer_, event_loop_.timer_registry())
+        coordinator_(*frontend_.frontend(), presentation_, grants_, renderer_, event_loop_.timer_registry(), event_loop_.wakeup())
   {
     coordinator_.open_admission();
   }

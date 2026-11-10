@@ -38,25 +38,22 @@ namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
 // Fairness budget includes discarded replies, so buffered keys cannot starve updates.
 constexpr std::size_t kInputBatchLimit = 32;
-// Signals only set atomic bits, and the OS wait retries EINTR. This retained
-// timer supplies a nominal 100 ms observation cadence (ten idle wakes/second).
-// Decode, callbacks and synchronous work can delay the next control turn.
-// The timer deadline wakes the loop so the next control stage can observe those bits.
-constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
 } // namespace
 using Key = terminal::Key;
 
 // TUI thread: construct owners in header declaration order, then create their
 // timers. No callback may run until every borrowed target exists.
-TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiWakeup wakeup)
+TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiTimeoutHandler& timeout_handler,
+                       TuiWakeup wakeup)
     : frontend_(frontend),
       terminal_context_(terminal_context),
-      timer_registry_(std::move(wakeup)),
+      timeout_handler_(timeout_handler),
+      wakeup_(std::move(wakeup)),
       presentation_state_(&frontend, initial_status_line),
       command_output_(presentation_state_),
       attachments_(presentation_state_),
-      plugin_ui_(timer_registry_, presentation_state_),
-      renderer_(timer_registry_, &frontend, presentation_state_, draft_state_, &terminal_context),
+      plugin_ui_(timeout_handler_.timer_registry(), wakeup_, presentation_state_),
+      renderer_(timeout_handler_.timer_registry(), &frontend, presentation_state_, draft_state_, &terminal_context),
       navigation_(frontend, presentation_state_, draft_state_, renderer_),
       selectors_(presentation_state_),
       selector_input_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
@@ -65,14 +62,14 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       branch_summary_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings(), attachments_),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
-      prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, timer_registry_, &selectors_),
+      prompt_coordinator_(frontend, presentation_state_, command_session_grants_, renderer_, timeout_handler_.timer_registry(), wakeup_, &selectors_),
       mermaid_presentation_(presentation_state_, renderer_, transcript_search_, frontend_.mermaid_bridge()),
       action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_, attachments_),
       subagent_workspace_(frontend, presentation_state_, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_, attachments_,
                            command_session_grants_),
-      active_run_controller_(timer_registry_, frontend, presentation_state_, renderer_, prompt_coordinator_, plugin_ui_, transcript_search_,
-                             subagent_workspace_, session_transitions_, mermaid_presentation_, attachments_, terminal_context),
+      active_run_controller_(timeout_handler_.timer_registry(), wakeup_, frontend, presentation_state_, renderer_, prompt_coordinator_, plugin_ui_,
+                             transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_, attachments_, terminal_context),
       active_run_input_(frontend, presentation_state_, draft_state_, renderer_, prompt_stash_, navigation_, action_controller_, transcript_search_,
                         subagent_workspace_, active_run_controller_, command_output_, terminal_context),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
@@ -90,20 +87,20 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
            std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Jump), std::bind_front(&TuiSession::handle_primary_input, this),
            std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Editor), std::bind_front(&TuiSession::handle_session_input, this),
            std::bind_front(&TuiSession::handle_transcript_input, this),
-           std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Navigation), std::bind_front(&TuiSession::handle_tail_input, this)}),
-      control_timer_(timer_registry_.create_timer(*this, &TuiSession::wake_for_control))
+           std::bind_front(&TuiSession::handle_composer_input, this, ComposerInputPhase::Navigation), std::bind_front(&TuiSession::handle_tail_input, this)})
 {
   // Some members registered timers during initialization; the remaining owners
-  // attach here. Registration never dispatches callbacks. Only run() services
-  // due timers, after every member and attachment is ready at a stable address.
+  // attach here. Registration never dispatches callbacks. Only TuiTimeoutHandler::expire
+  // services due timers, after every member and attachment is ready at a stable address.
   // Share an origin so the 500 ms reload deadline adds no wake between control
   // ticks. Each timer still skips missed ticks independently after a slow turn.
   auto const control_epoch = TuiTimerHandle::Clock::now();
-  action_controller_.create_timers(timer_registry_, control_epoch);
-  branch_summary_.create_timers(timer_registry_);
-  subagent_workspace_.create_timers(timer_registry_);
-  mermaid_presentation_.create_timers(timer_registry_);
-  control_timer_.arm_every(kControlObservationInterval, control_epoch);
+  TuiTimerRegistry& timer_registry = timeout_handler_.timer_registry();
+  action_controller_.create_timers(timer_registry, control_epoch);
+  branch_summary_.create_timers(timer_registry);
+  subagent_workspace_.create_timers(timer_registry);
+  mermaid_presentation_.create_timers(timer_registry, wakeup_);
+  timeout_handler_.arm_control_timer(control_epoch);
 }
 
 // TUI thread: keep all members alive during explicit shutdown; reverse member
@@ -111,7 +108,6 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
 TuiSession::~TuiSession()
 {
   // Each collaborator is still alive here; shutdown also covers early run returns.
-  control_timer_.disarm();
   active_run_controller_.shutdown();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
@@ -706,14 +702,10 @@ void TuiSession::request_stop()
   if (stopping_)
     return;
   stopping_ = true;
+  // A stopping session runs no more timers; they must not keep waking the TUI thread.
+  timeout_handler_.stop();
   // The TUI does not end its own event loop: the application decides when to shut down.
   core::Application::instance().request_shutdown();
-}
-
-void TuiSession::wake_for_control(TuiTimerRegistry::Clock::time_point)
-{
-  // The timer deadline already wakes wait(). Control actions belong to the
-  // next control stage, never to a due-timer callback.
 }
 
 // Control runs outside timer dispatch because it can release prompt waiters
@@ -852,21 +844,6 @@ void TuiSession::start()
     apply_input_outcome(TuiInputOutcome::Failure);
 }
 
-std::optional<TuiTimerRegistry::Clock::time_point> TuiSession::next_timer_deadline() const noexcept
-{
-  // A stopping session runs no more timers; it must not keep waking the TUI thread.
-  if (stopping_)
-    return std::nullopt;
-  return timer_registry_.next_deadline();
-}
-
-void TuiSession::expire_timers(TuiTimerRegistry::Clock::time_point now)
-{
-  if (stopping_)
-    return;
-  timer_registry_.service_due(now);
-}
-
 void TuiSession::terminal_input_ready(utils::threading::EventLoop::ReadyEvents ready)
 {
   using ReadyEvents = utils::threading::EventLoop::ReadyEvents;
@@ -895,7 +872,7 @@ void TuiSession::flush()
     // work while draining these bytes; come back until the drain stops the session.
     static_cast<void>(service_input_batch());
     if (!stopping_)
-      timer_registry_.wakeup().notify();
+      wakeup_.notify();
     return;
   }
   auto const application_pending = service_application_updates();
@@ -905,7 +882,7 @@ void TuiSession::flush()
     return;
   if (terminal_closing_)
   {
-    timer_registry_.wakeup().notify();
+    wakeup_.notify();
     return;
   }
 
@@ -918,7 +895,7 @@ void TuiSession::flush()
   // Work that was left behind (bounded batches, keys buffered inside ncurses that do not
   // make the fd readable) gets another flush without sleeping.
   if (application_pending || input_pending || active_run_controller_.has_pending_updates())
-    timer_registry_.wakeup().notify();
+    wakeup_.notify();
 }
 
 app::ExitCode TuiSession::shutdown(std::function<bool()> const& before_shutdown)
@@ -929,7 +906,6 @@ app::ExitCode TuiSession::shutdown(std::function<bool()> const& before_shutdown)
   // Io to a held prompt before ordinary shutdown can answer it as interrupted.
   if (terminal_write_failed_)
     prompt_coordinator_.fail_active_render();
-  control_timer_.disarm();
   auto const stopped = active_run_controller_.shutdown();
   terminal_write_failed_ = terminal_write_failed_ || stopped.terminal_write_failed();
   terminal_signal_received_ = terminal_signal_received_ || stopped.terminal_signal_received();

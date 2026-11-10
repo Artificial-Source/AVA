@@ -2,6 +2,7 @@
 #pragma once
 
 #include "TuiTimerHandle.h"
+#include "TuiWakeup.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_plugin_ui.h"
 #include "ava/tui/terminal.h"
@@ -53,8 +54,8 @@ class RuntimePluginUiCoordinator final
 {
  public:
   // TUI thread: register expiry before accepting requests. The registry and presentation
-  // outlive this coordinator; workers receive only a weak wake handle and transport.
-  RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, RuntimePresentationState& presentation);
+  // outlive this coordinator; workers receive only wakeup, which is a weak wake handle, and transport.
+  RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, RuntimePresentationState& presentation);
   // TUI thread: close transport and clear surfaces before its members are destroyed.
   // Retained endpoints may survive; their weak locks can only reach closed transport.
   ~RuntimePluginUiCoordinator();

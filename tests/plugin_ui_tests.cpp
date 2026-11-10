@@ -1091,7 +1091,7 @@ void test_external_disable_revokes_active_ui_command()
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
   tui_test_support::TuiEventLoopFixture coordinator_loop;
-  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), coordinator_loop.wakeup(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 12);
   auto const artificial_start = std::chrono::steady_clock::now() - ava::tui::kTuiPluginUiInvocationDeadline + std::chrono::seconds(3);
@@ -1296,7 +1296,7 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
   tui_test_support::TuiEventLoopFixture coordinator_loop;
-  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), coordinator_loop.wakeup(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 24);
   ava::tui::Composer snapshot_composer;
@@ -1386,7 +1386,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   tui_test_support::TuiFrontEndFixture snapshot_frontend;
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
-  ava::tui::RuntimePluginUiCoordinator coordinator(timer_registry, snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator coordinator(timer_registry, event_loop.wakeup(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 10);
   ava::tui::Composer snapshot_composer;
@@ -1527,7 +1527,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
       ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
       auto const& snapshot = snapshot_presentation.screen();
       tui_test_support::TuiEventLoopFixture coordinator_loop;
-      ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), snapshot_presentation);
+      ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), coordinator_loop.wakeup(), snapshot_presentation);
       snapshot_presentation.publish_dimensions(80, snapshot.height);
       snapshot_presentation.publish_dimensions(snapshot.width, height);
       auto const invocation_id = std::string(invocation_prefix) + std::to_string(height);
@@ -1578,7 +1578,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
         ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
         auto const& snapshot = snapshot_presentation.screen();
         tui_test_support::TuiEventLoopFixture coordinator_loop;
-        ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), snapshot_presentation);
+        ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), coordinator_loop.wakeup(), snapshot_presentation);
         snapshot_presentation.publish_dimensions(160, snapshot.height);
         snapshot_presentation.publish_dimensions(snapshot.width, height);
         auto const invocation_id = "wide_narrow_" + std::to_string(height) + std::string(suffix);
@@ -1689,7 +1689,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
   ava::tui::RuntimePresentationState queued_snapshot_presentation(queued_snapshot_frontend.frontend(), {});
   auto const& queued_snapshot = queued_snapshot_presentation.screen();
   tui_test_support::TuiEventLoopFixture queued_coordinator_loop;
-  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_coordinator_loop.timer_registry(), queued_snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator queued_coordinator(queued_coordinator_loop.timer_registry(), queued_coordinator_loop.wakeup(),
+                                                          queued_snapshot_presentation);
   queued_snapshot_presentation.publish_dimensions(160, queued_snapshot.height);
   queued_snapshot_presentation.publish_dimensions(queued_snapshot.width, 12);
   auto queued_endpoint = queued_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "queued_resize");
@@ -1730,7 +1731,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
   ava::tui::RuntimePresentationState visible_snapshot_presentation(visible_snapshot_frontend.frontend(), {});
   auto const& visible_snapshot = visible_snapshot_presentation.screen();
   tui_test_support::TuiEventLoopFixture visible_coordinator_loop;
-  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_coordinator_loop.timer_registry(), visible_snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator visible_coordinator(visible_coordinator_loop.timer_registry(), visible_coordinator_loop.wakeup(),
+                                                           visible_snapshot_presentation);
   visible_snapshot_presentation.publish_dimensions(160, visible_snapshot.height);
   visible_snapshot_presentation.publish_dimensions(visible_snapshot.width, 12);
   auto visible_endpoint = visible_coordinator.begin_submission("/plugin run " + first_id + " " + max_command + " {}", "visible_resize");
@@ -1772,7 +1774,7 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
   ava::tui::RuntimePresentationState snapshot_presentation(snapshot_frontend.frontend(), {});
   auto const& snapshot = snapshot_presentation.screen();
   tui_test_support::TuiEventLoopFixture coordinator_loop;
-  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), snapshot_presentation);
+  ava::tui::RuntimePluginUiCoordinator coordinator(coordinator_loop.timer_registry(), coordinator_loop.wakeup(), snapshot_presentation);
   snapshot_presentation.publish_dimensions(80, snapshot.height);
   snapshot_presentation.publish_dimensions(snapshot.width, 24);
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "close_race");

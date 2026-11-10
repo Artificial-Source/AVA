@@ -13,7 +13,8 @@
 #include "SessionTransitionCoordinator.h"
 #include "SettingsDialog.h"
 #include "TuiInputDispatcher.h"
-#include "TuiTimerRegistry.h"
+#include "TuiTimeoutHandler.h"
+#include "TuiWakeup.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_input_internal.h"
@@ -41,20 +42,22 @@ class TuiSessionActions;
 // borrows through shutdown and reverse destruction.
 //
 // TuiFrontEnd::run owns the event loop and drives this session through its public members,
-// partly via the handlers TuiTerminalInputHandler, TuiNotificationHandler and TuiTimeoutHandler:
+// partly via the handlers TuiTerminalInputHandler and TuiNotificationHandler:
 // it calls start() once, then for every wakeup terminal_input_ready() and/or notified(),
-// followed by expire_timers() and flush(), until the application terminates the loop; and
-// finally shutdown(). For now flush() still services every mailbox and polls the terminal
-// input itself; those parts will move into the handlers.
+// followed by flush(), until the application terminates the loop; and finally shutdown().
+// Timers do not go through this object: TuiTimeoutHandler owns them and runs them just before flush().
+// For now flush() still services every mailbox and polls the terminal input itself;
+// those parts will move into the handlers.
 // Read docs/engineering/tui-architecture.md before adding a feature or timer.
 class TuiSession final
 {
  public:
   // TUI thread: construct once after terminal initialization. Members may register
-  // timers while being built, but only expire_timers() dispatches them.
-  // Frontend and Context outlive the session; status text is copied during initialization.
+  // timers on timeout_handler while being built, but only timeout_handler dispatches them.
+  // Frontend, Context and timeout_handler outlive the session; status text is copied during initialization.
   // Producers wake the TUI thread through copies of wakeup.
-  TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiWakeup wakeup);
+  TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_context, std::string const& initial_status_line, TuiTimeoutHandler& timeout_handler,
+             TuiWakeup wakeup);
   // TUI thread: stop new worker requests and join active work while all feature
   // owners are still alive. This also covers exceptions.
   ~TuiSession();
@@ -68,12 +71,6 @@ class TuiSession final
   //
   // A pending terminal signal or a paint failure stops the session immediately.
   void start();
-  // TUI thread: return when the TUI thread must wake up for the next timer, or nothing when no timer is armed.
-  //
-  // A deadline in the past means that the caller should not sleep at all.
-  [[nodiscard]] std::optional<TuiTimerRegistry::Clock::time_point> next_timer_deadline() const noexcept;
-  // TUI thread after every wakeup: run the callbacks of all timers that are due at now.
-  void expire_timers(TuiTimerRegistry::Clock::time_point now);
   // TUI thread: the terminal input fd reported ready, which may include a hangup or error.
   //
   // Only records hangup and error; the input itself is read by flush().
@@ -125,9 +122,6 @@ class TuiSession final
   // TUI thread, before due timers. Handle signals and observe terminal failures;
   // cancellation may release workers, so it must run outside timer callbacks.
   void service_control();
-  // Plain timer wake: keeps the 100 ms observation cadence without handling
-  // signals or running application work from inside service_due().
-  void wake_for_control(TuiTimerRegistry::Clock::time_point now);
   // TUI thread after due timers: consume at most 256 events, then attempt final
   // settlement. Return whether another turn can process accepted application work.
   [[nodiscard]] bool service_application_updates();
@@ -192,9 +186,10 @@ class TuiSession final
   TuiSessionActions& frontend_;
   // External initialized terminal, borrowed for TUI-thread input/output until destruction.
   terminal::Context& terminal_context_;
-  // TUI-thread timer registry and wakeup factory, constructed before every registered feature.
-  // Timer handles below die first; copied weak wakeups may outlive the registry.
-  TuiTimerRegistry timer_registry_;
+  // Owner of the timers, borrowed for its registry and to stop it; it outlives this session and all feature timers.
+  TuiTimeoutHandler& timeout_handler_;
+  // Token copied for every producer; it names the notification Event of TuiFrontEnd's event loop.
+  TuiWakeup wakeup_;
   // TUI-owned display data; readers borrow const views and features update them through named operations.
   RuntimePresentationState presentation_state_;
   // TUI-thread output-modal policy shared by idle and active dispatch. Its current
@@ -262,9 +257,6 @@ class TuiSession final
   // TUI-thread idle handlers in precedence order. Their targets above outlive this
   // dispatcher and stay at stable addresses for the session.
   TuiInputDispatcher input_dispatcher_;
-  // TUI-thread plain wake every 100 ms, targeting this session. Cancel on exit
-  // before any feature owner is destroyed.
-  TuiTimerHandle control_timer_;
 };
 
 } // namespace ava::tui

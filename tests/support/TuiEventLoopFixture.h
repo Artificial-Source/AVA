@@ -20,8 +20,8 @@ namespace tui_test_support {
 
 // Test-thread stand-in for the event loop of TuiFrontEnd::run.
 //
-// Owns the utils event loop (watching one input fd and one notification Event) and the TuiTimerRegistry
-// timer registry whose wakeup() tokens notify that Event. Construct it before every feature borrowing
+// Owns the utils event loop (watching one input fd and one notification Event) and a TuiTimerRegistry;
+// wakeup() returns tokens that notify that Event. Construct it before every feature borrowing
 // timer_registry(); destroy those features first so their timers retire before the registry. It never services
 // timer callbacks itself and creates no worker.
 class TuiEventLoopFixture final
@@ -41,8 +41,8 @@ class TuiEventLoopFixture final
 
   // Test-thread borrow valid until fixture destruction; feature timers may use it.
   [[nodiscard]] ava::tui::TuiTimerRegistry& timer_registry() { return timer_registry_; }
-  // Return a token that notifies the same Event as timer_registry().wakeup().
-  [[nodiscard]] ava::tui::TuiWakeup wakeup() const { return timer_registry_.wakeup(); }
+  // Return a token that notifies the notification Event of this fixture.
+  [[nodiscard]] ava::tui::TuiWakeup wakeup() const { return ava::tui::TuiWakeup(event_loop_, notification_event_); }
 
   // Wait like TuiFrontEnd::run does, but do not dispatch anything: consume readiness and notifications.
   //
@@ -82,8 +82,7 @@ class TuiEventLoopFixture final
       : descriptors_(std::move(descriptors)),
         event_loop_(std::make_shared<utils::threading::EventLoop>()),
         input_event_(event_loop_->watch_fd(input_fd >= 0 ? input_fd : descriptors_.first.get(), utils::threading::EventLoop::PollEvents::read)),
-        notification_event_(event_loop_->watch_event()),
-        timer_registry_(ava::tui::TuiWakeup(event_loop_, notification_event_))
+        notification_event_(event_loop_->watch_event())
   {
   }
 

@@ -11,10 +11,6 @@
 
 namespace ava::tui {
 
-TuiTimerRegistry::TuiTimerRegistry(TuiWakeup wakeup) : wakeup_(std::move(wakeup))
-{
-}
-
 TuiTimerRegistry::~TuiTimerRegistry()
 {
   // Destroy every TuiTimerHandle before its registry, including disarmed handles; declare the registry before its clients.

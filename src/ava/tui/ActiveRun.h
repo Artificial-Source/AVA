@@ -54,7 +54,8 @@ class ActiveRun final
  public:
   // TUI thread: bind session owners and a spinner callback to this stable address.
   // All collaborators and the timer registry must survive shutdown and destruction.
-  ActiveRun(TuiTimerRegistry& timer_registry, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
+  // Worker publications wake the TUI thread through copies of wakeup.
+  ActiveRun(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
             RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
             RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid,
             PendingAttachments& attachments, terminal::Context& terminal_context);

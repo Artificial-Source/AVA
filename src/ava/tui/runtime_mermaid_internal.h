@@ -2,6 +2,7 @@
 #pragma once
 
 #include "TuiTimerHandle.h"
+#include "TuiWakeup.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime.h"
@@ -57,7 +58,8 @@ class RuntimeMermaidPresentationController final
   // The timer registry outlives this stable owner and its timer.
   // The already-constructed renderer outlives this owner and batches its frame requests.
   // A nonempty bridge must support notifier registration, including while disabled.
-  void create_timers(TuiTimerRegistry& timer_registry);
+  // Render completions wake the TUI thread through a copy of wakeup, which may outlive this object.
+  void create_timers(TuiTimerRegistry& timer_registry, TuiWakeup wakeup);
   // TUI application stage: reconcile records, drain results before submitting work, update accepted diagram layout, refresh
   // search, and invalidate a frame.
   [[nodiscard]] MermaidServiceOutcome service();

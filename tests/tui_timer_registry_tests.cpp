@@ -198,7 +198,7 @@ void test_timer_deadline_replacement_and_late_repeat()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer test input pipe"))
     return;
-  TuiTimerRegistry timer_registry{ava::tui::TuiWakeup{}};
+  TuiTimerRegistry timer_registry;
   TimerRecorder one_shot;
   TimerRecorder repeating;
   auto timer = timer_registry.create_timer(one_shot, &TimerRecorder::tick);
@@ -235,7 +235,7 @@ void test_timer_mutation_during_dispatch()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer mutation input pipe"))
     return;
-  TuiTimerRegistry timer_registry{ava::tui::TuiWakeup{}};
+  TuiTimerRegistry timer_registry;
   auto due = Clock::time_point{} + 10ms;
   for (auto action : {PeerTimerAction::Disarm, PeerTimerAction::Rearm, PeerTimerAction::Destroy})
   {
@@ -264,7 +264,7 @@ void test_timer_move_and_destruction()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create timer ownership input pipe"))
     return;
-  TuiTimerRegistry timer_registry{ava::tui::TuiWakeup{}};
+  TuiTimerRegistry timer_registry;
   TimerRecorder source_target;
   TimerRecorder displaced_target;
   auto source = timer_registry.create_timer(source_target, &TimerRecorder::tick);
@@ -296,7 +296,7 @@ void test_spinner_preserves_phase_and_skips_missed_ticks()
   EventLoopPipe pipe;
   if (!ava::tests::require(pipe.valid(), "create spinner test input pipe"))
     return;
-  TuiTimerRegistry timer_registry{ava::tui::TuiWakeup{}};
+  TuiTimerRegistry timer_registry;
   SpinnerFrames frames;
   ava::tui::Spinner spinner(timer_registry, std::bind_front(&SpinnerFrames::publish, &frames));
   auto const before_start = Clock::now();
@@ -323,7 +323,7 @@ void test_notification_before_wait_and_simultaneous_input()
   TuiTimerRegistry& timer_registry = event_loop.timer_registry();
   TimerRecorder fallback;
   auto deadline = timer_registry.create_timer(fallback, &TimerRecorder::tick);
-  auto wake = timer_registry.wakeup();
+  auto wake = event_loop.wakeup();
   auto copied_wake = wake;
 
   // A fallback deadline bounds a regressed lost notification without requiring
@@ -378,7 +378,7 @@ void test_hangup_preserves_final_input()
 // Protect the earliest-deadline query that TuiFrontEnd::run uses to choose between wait and wait_until.
 void test_next_deadline()
 {
-  TuiTimerRegistry timer_registry{ava::tui::TuiWakeup{}};
+  TuiTimerRegistry timer_registry;
   TimerRecorder first;
   TimerRecorder second;
   auto early = timer_registry.create_timer(first, &TimerRecorder::tick);
@@ -404,7 +404,7 @@ void test_retired_wakeup()
   retired_wake.notify();
   {
     Fixture event_loop(pipe.input());
-    retired_wake = event_loop.timer_registry().wakeup();
+    retired_wake = event_loop.wakeup();
   }
   // Expired capabilities must remain safe to call without retaining a loop or
   // touching a destroyed session. The wake API deliberately exposes no mailbox.

@@ -38,8 +38,7 @@ class FeatureOwnerFixture final
   // Construct every borrowed dependency before attaching renderer and summary
   // timers. All methods and returned references are used on this test thread.
   FeatureOwnerFixture()
-      : timer_registry_(ava::tui::TuiWakeup{}),
-        presentation_(frontend_.frontend(), {}),
+      : presentation_(frontend_.frontend(), {}),
         renderer_(timer_registry_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         selector_input_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context()),

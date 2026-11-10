@@ -61,10 +61,11 @@ using runtime_commands::shell_helper_submission;
 using runtime_transcript::apply_assistant_turn_meta;
 using runtime_transcript::assistant_meta_for_snapshot;
 
-ActiveRun::ActiveRun(TuiTimerRegistry& timer_registry, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
-                     RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
-                     RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
-                     RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments, terminal::Context& terminal_context)
+ActiveRun::ActiveRun(TuiTimerRegistry& timer_registry, TuiWakeup wakeup, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
+                     RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui,
+                     TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
+                     SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments,
+                     terminal::Context& terminal_context)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       renderer_(renderer),
@@ -76,7 +77,7 @@ ActiveRun::ActiveRun(TuiTimerRegistry& timer_registry, TuiFrontEnd& frontend, Ru
       mermaid_(mermaid),
       attachments_(attachments),
       terminal_context_(terminal_context),
-      wakeup_(timer_registry.wakeup()),
+      wakeup_(std::move(wakeup)),
       spinner_(timer_registry, std::bind_front(&ActiveRun::publish_spinner_frame, this))
 {
 }
