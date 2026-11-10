@@ -31,7 +31,7 @@ class RuntimeMermaidPresentationController;
 class RuntimeSubagentWorkspaceController;
 class SessionTransitionCoordinator;
 class TranscriptSearchController;
-class TuiEventLoop;
+class TuiTimerRegistry;
 enum class PromptServiceOutcome;
 struct TuiActiveNonblockingCommandDispatchResult;
 
@@ -44,7 +44,7 @@ enum class ActiveRunCancel
 };
 
 // TuiSession owns one ActiveRun at a stable address; all collaborators outlive it
-// and its spinner registration. All methods except submit_worker use the TUI thread.
+// and its spinner timer. All methods except submit_worker use the TUI thread.
 // ActiveRunInput handles ordinary keys; this owner routes prompts and cancellation
 // so permission Escape requests worker stop before releasing the waiting resolver.
 // Workers use synchronized inboxes/requests and never read screen views.
@@ -53,8 +53,8 @@ class ActiveRun final
 {
  public:
   // TUI thread: bind session owners and a spinner callback to this stable address.
-  // All collaborators and the loop must survive shutdown and destruction.
-  ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
+  // All collaborators and the timer registry must survive shutdown and destruction.
+  ActiveRun(TuiTimerRegistry& timer_registry, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
             RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
             RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid,
             PendingAttachments& attachments, terminal::Context& terminal_context);
@@ -249,7 +249,7 @@ class ActiveRun final
   TuiWakeup wakeup_;
   // Absent while idle. Reset only after callback retirement and worker join.
   std::optional<Operation> operation_;
-  // TUI registration binds this owner; stop it before operation reset or destruction.
+  // TUI timer binds this owner; stop it before operation reset or destruction.
   Spinner spinner_;
 };
 } // namespace ava::tui

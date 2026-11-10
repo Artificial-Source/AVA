@@ -88,7 +88,7 @@ void run_mermaid_notification_tests();
 void run_tui_shutdown_tests();
 void run_permission_rules_tests();
 void run_tui_composer_tests();
-void run_tui_event_loop_tests();
+void run_tui_timer_registry_tests();
 void run_tui_pending_request_tests();
 void run_terminal_horizontal_layout_tests();
 void run_terminal_paragraph_tests();
@@ -187,7 +187,7 @@ constexpr std::array kTestSuites{
     TestSuite{"tui_shutdown", run_tui_shutdown_tests},
     TestSuite{"permission_rules", run_permission_rules_tests},
     TestSuite{"tui_composer", run_tui_composer_tests},
-    TestSuite{"tui_event_loop", run_tui_event_loop_tests},
+    TestSuite{"tui_timer_registry", run_tui_timer_registry_tests},
     TestSuite{"tui_pending_requests", run_tui_pending_request_tests},
     TestSuite{"terminal_horizontal_layout", run_terminal_horizontal_layout_tests},
     TestSuite{"terminal_paragraph", run_terminal_paragraph_tests},

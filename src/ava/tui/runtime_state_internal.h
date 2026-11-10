@@ -277,7 +277,7 @@ class RuntimePresentationState final
   void publish_transcript_chrome(std::size_t offset, std::size_t new_output_count);
   // TUI thread at frame preparation: copy either live sidebar or detached snapshot into the visible frame.
   void publish_visible_sidebar(SidebarSnapshot sidebar);
-  // TUI thread: publish the viewport owner's timed visibility decision; renderer registration owns actual
+  // TUI thread: publish the viewport owner's timed visibility decision; the renderer's timer owns actual
   // expiry scheduling.
   void publish_position_indicator(bool visible);
   // TUI thread: ask the selection owner to project validated endpoints; never expose writable selection state.

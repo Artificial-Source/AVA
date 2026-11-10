@@ -4,7 +4,7 @@
 #include "PendingAttachments.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -118,17 +118,17 @@ RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimeP
 {
 }
 
-void RuntimeActionController::attach_loop(TuiEventLoop& loop, TuiTimer::Clock::time_point epoch)
+void RuntimeActionController::create_timers(TuiTimerRegistry& timer_registry, TuiTimerHandle::Clock::time_point epoch)
 {
   // Attach display discovery once before servicing this nonmoving controller.
-  ASSERT(!display_reload_timer_.active());
-  if (display_reload_timer_.active())
+  ASSERT(!display_reload_timer_.armed());
+  if (display_reload_timer_.armed())
     return;
-  display_reload_timer_ = loop.member_timer(*this, &RuntimeActionController::mark_display_reload_due);
-  display_reload_timer_.repeat(kDisplayReloadPollInterval, epoch);
+  display_reload_timer_ = timer_registry.create_timer(*this, &RuntimeActionController::mark_display_reload_due);
+  display_reload_timer_.arm_every(kDisplayReloadPollInterval, epoch);
 }
 
-void RuntimeActionController::mark_display_reload_due(TuiTimer::Clock::time_point)
+void RuntimeActionController::mark_display_reload_due(TuiTimerHandle::Clock::time_point)
 {
   display_reload_due_ = true;
 }

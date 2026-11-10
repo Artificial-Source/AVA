@@ -1,6 +1,6 @@
 #pragma once
 
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "ava/debug/print_members_on.h"
 
 #include <optional>
@@ -33,10 +33,10 @@ class TuiTimeoutHandler
   // Return when expire must be called next, or nothing when no timer is armed.
   //
   // A deadline in the past means that the caller should not sleep at all.
-  [[nodiscard]] std::optional<TuiEventLoop::Clock::time_point> next_deadline() noexcept;
+  [[nodiscard]] std::optional<TuiTimerRegistry::Clock::time_point> next_deadline() noexcept;
 
   // Run the callbacks of all timers that are due at now.
-  void expire(TuiEventLoop::Clock::time_point now);
+  void expire(TuiTimerRegistry::Clock::time_point now);
 
   // End of tui-thread only functions.
   //===========================================================================

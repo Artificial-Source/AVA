@@ -8,8 +8,8 @@
 #include "ava/app/tui/subagent_workspace.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -1897,11 +1897,11 @@ void run_tui_selector_tests()
   auto const parent_generation = controller_snapshot.transcript_generation;
   controller_presentation.publish_dimensions(40, 8);
   // Discovery runs through the production timer registry; nothing waits, so it needs no wakeup.
-  ava::tui::TuiEventLoop discovery_loop{ava::tui::TuiWakeup{}};
-  ava::tui::RuntimeRenderer workspace_renderer(discovery_loop, controller_frontend.frontend(), controller_presentation, controller_composer);
+  ava::tui::TuiTimerRegistry discovery_timer_registry{ava::tui::TuiWakeup{}};
+  ava::tui::RuntimeRenderer workspace_renderer(discovery_timer_registry, controller_frontend.frontend(), controller_presentation, controller_composer);
   ava::tui::SelectorHost selectors(controller_presentation);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_presentation, selectors);
-  workspace_controller.attach_loop(discovery_loop);
+  workspace_controller.create_timers(discovery_timer_registry);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
   // Put discovery far beyond real paint time, with room for all offsets and
   // repeat advancement. Even a slow paint cannot hide an erroneous new frame
@@ -1924,9 +1924,9 @@ void run_tui_selector_tests()
              controller_snapshot.subagent_workspace->launch_detail == "GPT-5.6 Terra · thinking default",
          "selector Enter opens the owner-bound frozen frame with launch metadata using hidden job identity");
   current_new_launch = "GPT-5.6 Luna · thinking default";
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(149));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(149));
   expect(inspect_calls == 1 && list_calls == 1, "subagent workspace never polls faster than 150ms");
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(150));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(150));
   // R7: timer dispatch must leave frontend reads for application servicing.
   expect(inspect_calls == 1 && list_calls == 1 && workspace_controller.known_generation() == std::optional<std::uint64_t>{1} &&
              controller_snapshot.subagent_workspace && controller_snapshot.subagent_workspace->messages.size() == 1 &&
@@ -1955,15 +1955,16 @@ void run_tui_selector_tests()
   // frame timer due before the next 150 ms discovery deadline.
   expect(workspace_renderer.paint_for_handoff(), "workspace paints its prior update before checking unchanged discovery");
   auto const unchanged_generation = workspace_controller.known_generation();
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(300));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(300));
   expect(inspect_calls == 2 && list_calls == 2 && workspace_controller.known_generation() == unchanged_generation,
          "unchanged discovery also waits for application servicing");
   expect(!workspace_controller.service_if_due(), "unchanged workspace servicing does not ask Session for a frame");
-  expect(!discovery_loop.has_due_work(time_zero + std::chrono::milliseconds(300)) && workspace_controller.known_generation() == unchanged_generation &&
-             inspect_calls == 3 && inspected_generations.back() == std::optional<std::uint64_t>{2},
+  expect(!discovery_timer_registry.has_due_work(time_zero + std::chrono::milliseconds(300)) &&
+             workspace_controller.known_generation() == unchanged_generation && inspect_calls == 3 &&
+             inspected_generations.back() == std::optional<std::uint64_t>{2},
          "not-modified inspector polls retain the frozen frame without requesting redraw");
   list_refresh_failure = true;
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(450));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(450));
   expect(workspace_controller.service_if_due() && workspace_renderer.request_render(),
          "application servicing publishes and schedules a newly unavailable workspace");
   expect(controller_snapshot.subagent_workspace && controller_snapshot.subagent_workspace->refresh_unavailable &&
@@ -1976,7 +1977,7 @@ void run_tui_selector_tests()
   expect(refresh_failure_screen.find("Live refresh unavail") != std::string::npos && refresh_failure_screen.find("private backend detail") == std::string::npos,
          "poll failure rendering is truthful and sanitized");
   list_refresh_failure = false;
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(600));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(600));
   expect(workspace_controller.service_if_due() && workspace_renderer.request_render(), "application servicing publishes and schedules workspace recovery");
   expect(controller_snapshot.subagent_workspace && !controller_snapshot.subagent_workspace->refresh_unavailable && inspect_calls == 4,
          "a successful metadata and known-generation refresh clears transient unavailable state");
@@ -2046,7 +2047,7 @@ void run_tui_selector_tests()
   // Closing must retire a pending read so later application passes cannot
   // refresh a closed view or carry that work into a newly opened selector.
   auto const reads_before_close = list_calls;
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(750));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(750));
   expect(list_calls == reads_before_close, "pending workspace discovery does not read before close");
   static_cast<void>(workspace_controller.handle_input(escape_workspace));
   static_cast<void>(workspace_controller.handle_input(escape_workspace));
@@ -2061,14 +2062,14 @@ void run_tui_selector_tests()
   expect(workspace_controller.open_selector(time_zero + std::chrono::milliseconds(800)), "workspace selector reopens after pending discovery was cleared");
   auto const reads_after_reopen = list_calls;
   expect(!workspace_controller.service_if_due() && list_calls == reads_after_reopen, "reopening does not replay the prior pending read");
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(950));
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(1100));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(950));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(1100));
   expect(list_calls == reads_after_reopen, "multiple timer ticks only mark one workspace refresh due");
   expect(!workspace_controller.service_if_due() && list_calls == reads_after_reopen + 1,
          "one application pass coalesces pending ticks and preserves the unchanged selector");
   expect(!workspace_controller.service_if_due() && list_calls == reads_after_reopen + 1, "consumed workspace discovery cannot run twice without another tick");
   // Reopening an already open selector must clear a pending tick as well.
-  discovery_loop.service_due(time_zero + std::chrono::milliseconds(1250));
+  discovery_timer_registry.service_due(time_zero + std::chrono::milliseconds(1250));
   expect(workspace_controller.open_selector(time_zero + std::chrono::milliseconds(1300)), "workspace can replace its selector while discovery is pending");
   auto const reads_after_replace = list_calls;
   expect(!workspace_controller.service_if_due() && list_calls == reads_after_replace, "new selector ownership discards the older due tick");

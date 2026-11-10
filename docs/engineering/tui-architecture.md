@@ -11,7 +11,7 @@ still apply to every change.
 Read `TuiFrontEnd::run` in [TuiFrontEnd.cpp](../../src/ava/tui/TuiFrontEnd.cpp) for the
 event loop, then [TuiSession.h](../../src/ava/tui/TuiSession.h) for ownership and
 `TuiSession::flush` in [TuiSession.cpp](../../src/ava/tui/TuiSession.cpp) for the work done per wakeup.
-Read [TuiEventLoop.h](../../src/ava/tui/TuiEventLoop.h) next for timer lifetimes.
+Read [TuiTimerRegistry.h](../../src/ava/tui/TuiTimerRegistry.h) next for timer lifetimes.
 These files coordinate work. Keep feature algorithms in the owners listed below.
 
 For a submitted message, follow `RuntimeSubmitController::submit`,
@@ -83,7 +83,7 @@ owner prepares a frame.
 | --- | --- |
 | `TuiFrontEnd` | Owns the TUI thread's `utils::threading::EventLoop`. `run()` is the only code that waits on it and dispatches its events; `terminate()` ends it. |
 | `TuiSession` | Composition, the order of work per wakeup, control decisions and transitions between owners. |
-| `TuiEventLoop` | Timer registrations and the wakeup tokens that producers use. It does not wait, own feature state or decode keys. |
+| `TuiTimerRegistry` | Timers and the wakeup tokens that producers use. It does not wait, own feature state or decode keys. |
 | `RuntimePresentationState` | The screen and sidebar projections. Readers get const views; features publish through named operations that preserve bounds and generations. |
 | `Composer` | Draft, cursor, selection, editing history, completion choices and Escape state. |
 | `RuntimeRenderer` | Frame scheduling, completion/layout caches and `TranscriptView`. It prepares layout around viewport changes. |
@@ -102,7 +102,7 @@ flowchart TD
   App[Application] --> Frontend[TuiFrontEnd]
   App --> Context[terminal::Context]
   Frontend --> Session[TuiSession]
-  Session --> Loop[TuiEventLoop]
+  Session --> Registry[TuiTimerRegistry]
   Session --> State[RuntimePresentationState]
   Session --> Features[Editor and feature owners]
   Session --> Run[ActiveRun]
@@ -137,8 +137,8 @@ view it will restore. `TuiSession::handle_selector_input` applies that result
 after selector cleanup and before requesting paint. Session success and error
 both reconcile the backend's committed identity before displaying feedback.
 
-`RuntimeRenderer` and `RuntimePluginUiCoordinator` require the session's event
-loop in their constructors. Their timer registrations are ready before input or
+`RuntimeRenderer` and `RuntimePluginUiCoordinator` require the session's timer
+registry in their constructors. Their timers are ready before input or
 worker endpoints can use them. Tests also supply a real loop, whose pipe and
 registry outlive the feature. `render()` requests a batch paint;
 `paint_ready_frame()` performs eligible work, and `paint_for_handoff()` supplies
@@ -180,7 +180,7 @@ event, then repeats:
    `TuiTerminalInputHandler::input_ready` and notifications to
    `TuiNotificationHandler::notified`. For now these handlers and
    `TuiTimeoutHandler` only forward to `TuiSession`.
-3. **Due timers.** `TuiTimeoutHandler::expire` dispatches the registrations whose
+3. **Due timers.** `TuiTimeoutHandler::expire` dispatches the timers whose
    deadlines are due. Timer callbacks update their feature or request a frame.
 4. **Flush.** `TuiSession::flush` does the remaining work, for now still by
    checking every mailbox:
@@ -249,7 +249,7 @@ independent lock. FIFO means first in, first out: draining preserves publication
 order within the queue.
 
 `TuiWakeup` holds a weak pointer to the OS wait resources. Locking it briefly
-keeps those resources alive during notification, possibly after `TuiEventLoop`
+keeps those resources alive during notification, possibly after `TuiTimerRegistry`
 has released its own share. The last producer pin may destroy them. This does
 not join a producer or protect any other object it uses. Owners must still stop
 and join workers before destroying their dependencies. A copied Mermaid callback
@@ -406,25 +406,25 @@ plugin dialog does not grant access to mutable session or permission state.
 
 ### Add a timer
 
-1. Let the feature own a `TuiTimer`. Construct the loop before that feature;
-   declare the handle after the state its callback uses. Register with
-   `loop.member_timer(*this, &Owner::callback)` at a stable object address.
-   Registration does not invoke the callback.
-2. Use `arm_at` for an absolute one-shot deadline or `repeat` for a positive
+1. Let the feature own a `TuiTimerHandle`. Construct the registry before that feature;
+   declare the handle after the state its callback uses. Create the timer with
+   `timer_registry.create_timer(*this, &Owner::callback)` at a stable object address.
+   Creating it does not invoke the callback.
+2. Use `arm_at` for an absolute one-shot deadline or `arm_every` for a positive
    interval. In the callback, mark work due or request a frame, then return.
    For work that calls the frontend or other features, add a service method and
    call it from `TuiSession::service_presentations` or the appropriate existing
    application-update owner. See
    [BranchSummaryOperation](../../src/ava/tui/BranchSummaryOperation.cpp).
-3. Cancel before callback dependencies are destroyed. `cancel()` disarms the
-   timer; destroying the handle removes its registration. Neither joins a worker.
+3. Disarm before callback dependencies are destroyed. `disarm()` clears the
+   deadline; destroying the handle removes the timer. Neither joins a worker.
    The target must stay alive until any callback already running has returned.
-4. Extend [event-loop tests](../../tests/tui_event_loop_tests.cpp) for scheduling
+4. Extend [timer registry tests](../../tests/tui_timer_registry_tests.cpp) for scheduling
    rules, or feature tests for the work it triggers. Use supplied clock values
    to check deadlines rather than relying on how quickly the test machine runs.
 
-Timer dispatch copies registration IDs and generations before invoking callbacks.
-A callback can rearm, cancel or remove registrations; stale entries from that
+Timer dispatch copies timer IDs and generations before invoking callbacks.
+A callback can rearm, disarm or remove timers; stale entries from that
 pass are skipped. Repeating timers skip missed ticks rather than replay a burst.
 Do not decode input, paint, handle signals, recursively service timers or wait
 inside a callback.
@@ -432,7 +432,7 @@ inside a callback.
 ## Validation and limits
 
 Use the development build and a UTF-8 locale. Focused tests such as
-`ava_tests.tui_event_loop`, `ava_tests.tui_pending_requests`,
+`ava_tests.tui_timer_registry`, `ava_tests.tui_pending_requests`,
 `ava_tests.plugin_ui`, `ava_tests.tui_composer` and the isolated
 `ava_tests.tui_composer_rendering.*` cases cover different parts of the mechanism.
 The isolated `ava_tests.tui_session.*` cases drive the real session with native

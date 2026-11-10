@@ -231,7 +231,7 @@ class RuntimeTranscriptSelectionState final
                                                             std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                             std::function<bool(std::size_t)> const& toggle_tool,
                                                             std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now = Clock::now());
-  // TUI thread: copy next held-drag deadline for renderer registration; absence cancels its wake.
+  // TUI thread: copy next held-drag deadline for the renderer's timer; absence cancels its wake.
   [[nodiscard]] std::optional<Clock::time_point> edge_autoscroll_deadline() const noexcept;
   // TUI timer servicing: check modal visibility and layout compatibility, move one row, extend selection, and arm only the next
   // necessary step.

@@ -170,7 +170,7 @@ class TranscriptView final
   // TUI-thread item-index adjustment since selection was last updated: removing N front items adds -N.
   // Apply it before using live selection indices; detached selection uses its deferred anchor's shift.
   std::ptrdiff_t pending_live_selection_item_index_shift_ = 0;
-  // Owned TUI-thread deadline value; renderer owns the timer registration and retires it before this view dies.
+  // Owned TUI-thread deadline value; renderer owns the timer and retires it before this view dies.
   TranscriptPositionIndicatorState position_indicator_;
   // Owned first detached anchor and cumulative eviction shift; reset only when synchronized or explicitly
   // abandoned.

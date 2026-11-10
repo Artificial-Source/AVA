@@ -254,7 +254,7 @@ app::ExitCode TuiFrontEnd::run()
         break;
 
       // Not only after a timeout: a deadline can pass while other events are being handled.
-      timeout_handler_.expire(TuiEventLoop::Clock::now());
+      timeout_handler_.expire(TuiTimerRegistry::Clock::now());
 
       // FIXME: This is a hack to keep the testsuite working while functionality of the old TuiSession is still being used.
       session.flush();

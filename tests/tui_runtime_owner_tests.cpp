@@ -5,8 +5,8 @@
 #include "tests/support/test_timeout.h"
 #include "ava/tui/ActiveRunInbox.h"
 #include "ava/tui/ActiveRunOutcome.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiInputDispatcher.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/core/UniqueFd.h"
 
@@ -269,16 +269,16 @@ void test_inbox_publication_wakes_event_loop()
   if (!ava::tests::require(pipe.valid(), "create the inbox wake test input pipe"))
     return;
   tui_test_support::TuiEventLoopFixture event_loop(pipe.input());
-  ava::tui::TuiEventLoop& loop = event_loop.loop();
+  ava::tui::TuiTimerRegistry& timer_registry = event_loop.timer_registry();
   WakeDeadline fallback;
-  auto deadline = loop.member_timer(fallback, &WakeDeadline::expire);
-  auto inbox = make_inbox(loop.wakeup());
+  auto deadline = timer_registry.create_timer(fallback, &WakeDeadline::expire);
+  auto inbox = make_inbox(timer_registry.wakeup());
   auto sink = inbox->event_sink();
   inbox->set_request_id("wake-request");
   deadline.arm_at(ava::tests::now_plus_seconds(2));
   expect(sink(message_event("wake event")).has_value(), "publish an event before the loop begins waiting");
   event_loop.wait();
-  loop.service_due();
+  timer_registry.service_due();
   auto events = inbox->drain();
   expect(fallback.expirations() == 0 && event_loop.notified() && !event_loop.terminal_error() && !event_loop.terminal_hangup() && events.size() == 1 &&
              is_message(events[0], "wake event", "wake-request"),
@@ -289,7 +289,7 @@ void test_inbox_publication_wakes_event_loop()
   result.output = {"wake final result"};
   inbox->publish_result(std::move(result));
   event_loop.wait();
-  loop.service_due();
+  timer_registry.service_due();
   auto final_result = inbox->take_result();
   auto const* submitted = final_result ? std::get_if<ava::tui::TuiSubmitResult>(&*final_result) : nullptr;
   expect(fallback.expirations() == 0 && event_loop.notified() && submitted && submitted->output == std::vector<std::string>{"wake final result"},
@@ -310,7 +310,7 @@ void test_inbox_retained_endpoints_outlive_owner_and_loop()
   ActiveRunInbox::FollowUpStarted follow_up;
   {
     tui_test_support::TuiEventLoopFixture event_loop(pipe.input());
-    auto inbox = make_inbox(event_loop.loop().wakeup());
+    auto inbox = make_inbox(event_loop.timer_registry().wakeup());
     lifetime = inbox;
     events = inbox->event_sink();
     envelopes = inbox->envelope_sink();

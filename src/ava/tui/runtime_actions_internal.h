@@ -2,7 +2,7 @@
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -24,13 +24,13 @@ class PendingAttachments;
 class TuiFrontEnd;
 class RuntimeRenderer;
 class SessionSelector;
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 // Session owns local action coordination used by idle and active input routing.
 // Every member, including timer callbacks, is TUI-thread-only. Frontend callbacks
 // perform backend operations; this controller updates display state through its owner.
 // All borrowed owners outlive it, and workers never access it. The final timer member
-// unregisters before the state it uses is destroyed; its loop must outlive it.
+// unregisters before the state it uses is destroyed; its timer registry must outlive it.
 class RuntimeActionController final
 {
  public:
@@ -43,9 +43,9 @@ class RuntimeActionController final
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
   // TUI thread: attach the 500 ms timer once; it only marks display reload work due.
-  // The loop outlives this stable owner; maybe_reload_display_settings performs the check.
+  // The registry outlives this stable owner; maybe_reload_display_settings performs the check.
   // Session supplies its control timer's epoch so their deadlines coincide every fifth tick.
-  void attach_loop(TuiEventLoop& loop, TuiTimer::Clock::time_point epoch = TuiTimer::Clock::now());
+  void create_timers(TuiTimerRegistry& timer_registry, TuiTimerHandle::Clock::time_point epoch = TuiTimerHandle::Clock::now());
   // TUI thread: consume initial or timer-marked work once; repeated calls without
   // a due flag do not check. TerminalFailure means rendering has already failed.
   // Applied updates display values without requesting a final frame, so callers can
@@ -112,7 +112,7 @@ class RuntimeActionController final
  private:
   // TUI timer callback: mark work due without calling the frontend or painting;
   // Session services the flag at its ordered display-reload phase.
-  void mark_display_reload_due(TuiTimer::Clock::time_point now);
+  void mark_display_reload_due(TuiTimerHandle::Clock::time_point now);
   // Borrowed from the app; supplies callbacks for local settings, catalogs, clipboard and editor work.
   TuiFrontEnd& frontend_;
   // Borrowed from Session; display state, read as const and updated through its methods.
@@ -132,9 +132,9 @@ class RuntimeActionController final
   // TUI-thread discovery flag, initially true for the first check. Timer sets it; service
   // consumes it before calling the frontend, so turns without a due flag do no extra work.
   bool display_reload_due_ = true;
-  // TUI-thread repeating registration, destroyed first to retire callbacks before other state.
-  // The loop outlives this controller and its registration.
-  TuiTimer display_reload_timer_;
+  // TUI-thread repeating timer, destroyed first to retire callbacks before other state.
+  // The registry outlives this controller and its timer.
+  TuiTimerHandle display_reload_timer_;
 };
 
 }  // namespace ava::tui

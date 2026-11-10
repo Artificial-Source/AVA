@@ -151,7 +151,7 @@ void test_prompt_stash_runtime_controller()
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
   tui_test_support::TuiEventLoopFixture event_loop;
-  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, draft_state);
+  ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, draft_state);
   ava::tui::SelectorHost active_list(presentation);
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings, attachments);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, draft_state, renderer);

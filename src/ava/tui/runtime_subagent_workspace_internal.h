@@ -1,7 +1,7 @@
 // Owns the TUI workspace selector and inspector projection; backend jobs retain their application owners.
 #pragma once
 
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime.h"
 
@@ -15,7 +15,7 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 class SelectorHost;
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 // Owned TUI-thread dispatch result returned to session routing; no borrowed data survives the synchronous
 // handler.
@@ -32,7 +32,7 @@ struct RuntimeSubagentWorkspaceInputResult
 };
 
 // Session-owned TUI-thread selector/inspector presentation for application-owned jobs. Frontend, projection,
-// selector host and attached loop outlive it. Discovery runs only while open; close/destruction
+// selector host and timer registry outlive it. Discovery runs only while open; close/destruction
 // cancels it before releasing view data and never stops backend jobs.
 class RuntimeSubagentWorkspaceController final
 {
@@ -51,9 +51,9 @@ class RuntimeSubagentWorkspaceController final
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
-  // TUI setup: register the discovery timer at this stable address. The loop
+  // TUI setup: register the discovery timer at this stable address. The registry
   // outlives this owner; callbacks only mark a read due, never call the frontend.
-  void attach_loop(TuiEventLoop& loop);
+  void create_timers(TuiTimerRegistry& timer_registry);
   // TUI application stage: consume pending discovery once, even after several
   // timer ticks. Return true only when visible state changed and needs a frame.
   // Service before the host-prompt guard; workspace discovery remains eligible.
@@ -151,9 +151,9 @@ class RuntimeSubagentWorkspaceController final
   // TUI timer sets this while open; application service consumes it once.
   // Opening or closing clears stale work so it cannot refresh a different view.
   bool discovery_due_ = false;
-  // TUI-thread periodic refresh registration; canceled on close and destroyed before borrowed owners can
+  // TUI-thread periodic refresh timer; disarmed on close and destroyed before borrowed owners can
   // retire.
-  TuiTimer discovery_timer_;
+  TuiTimerHandle discovery_timer_;
 };
 
 }  // namespace ava::tui

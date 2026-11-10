@@ -1,75 +1,77 @@
-// Removes a feature's event-loop timer registration when its owning handle is destroyed.
+// Encapsulates one registry-owned deadline and its dispatch generation; TuiTimerHandle removes
+// the timer on destruction and TuiTimerRegistry decides when the callback may run.
 #pragma once
 
 #include "ava/debug/print_members_on.h"
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <optional>
 
 namespace ava::tui {
 
-class TuiEventLoop;
-
-// Move-only handle owned by the feature whose callback TuiEventLoop stores. All
-// operations and destruction run on the TUI thread. The loop and stable callback
-// target outlive the handle; an executing callback must also finish before its
-// target dies. Destruction removes the registration, while cancel only disarms it.
-// Moving transfers responsibility for removing the registration without changing its callback target.
+// Stored by value in TuiTimerRegistry's map and accessed only on the TUI thread.
+// TuiTimerHandle operations update its schedule; the registry snapshots its generation to
+// reject work changed by an earlier callback. prepare_dispatch copies the callback
+// and advances/disarms the schedule before invocation, so removing a timer
+// inside a callback is safe. Callback targets must survive the executing call as
+// well as their handle; destroying this record does not destroy borrowed targets.
 class TuiTimer final
 {
  public:
-  // Share the registry's monotonic time domain for every arm and repeat operation.
+  // Use the same monotonic clock as the registry and public timer handles.
   using Clock = std::chrono::steady_clock;
+  // TUI-thread callback that updates feature state or requests a frame. It must not
+  // paint, poll input, run session control checks, wait or recursively dispatch timers. Its target
+  // stays alive until the callback returns.
+  using Callback = std::function<void(Clock::time_point)>;
 
-  // TUI thread: create an empty handle; scheduling calls remain harmless no-ops.
-  TuiTimer() = default;
-  // TUI thread before the loop dies: remove this registration, even if disarmed.
-  // A callback already copied for its current invocation still has to return.
-  ~TuiTimer();
-  // Not copyable: exactly one handle owns removal of each registration.
-  TuiTimer(TuiTimer const&) = delete;
-  TuiTimer& operator=(TuiTimer const&) = delete;
-  // TUI thread: take other's registration and leave other empty; the callback's
-  // target address and the requirement that its loop outlive this handle persist.
-  TuiTimer(TuiTimer&& other) noexcept;
-  // TUI thread with both loops alive: remove this handle's old registration, then
-  // take other's. Self-assignment preserves it; callback targets are never moved.
-  TuiTimer& operator=(TuiTimer&& other) noexcept;
-
-  // TUI thread: disarm without releasing ownership; any due-work snapshot becomes
-  // stale. Does not interrupt an already executing callback; empty is harmless.
-  void cancel() noexcept;
-  // TUI thread with the loop alive: report an armed deadline, not whether a callback
-  // is currently running. Empty and disarmed handles report false.
-  [[nodiscard]] bool active() const noexcept;
-  // TUI thread: replace any schedule with one shot. A past deadline is serviced by
-  // a later service_due pass, never synchronously by this call; empty is harmless.
+  // TUI thread: own a nonempty binding in a disarmed record. The binding's borrowed
+  // targets must survive removal of this timer and any copied invocation in progress.
+  explicit TuiTimer(Callback callback);
+  // TUI thread: read the revision used to reject a stale due-work snapshot; this
+  // does not retain the record, so dispatch must look up its ID again before use.
+  [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+  // TUI thread: copy the current wake deadline; absence means disarmed. Later
+  // scheduling changes may invalidate this value, so callers retain no reference.
+  [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept { return deadline_; }
+  // TUI thread: check whether the deadline is due at now without changing the schedule
+  // or running the callback; the registry rechecks after earlier callbacks have run.
+  [[nodiscard]] bool due(Clock::time_point now) const noexcept;
+  // TUI thread: remove deadline/repetition and advance the generation so a saved
+  // due entry cannot fire; preserve the callback so this timer can be armed again.
+  void disarm() noexcept;
+  // TUI thread: replace any repeating/one-shot schedule and advance generation.
+  // A deadline at or before now becomes eligible on the next dispatch pass.
   void arm_at(Clock::time_point deadline);
-  // TUI thread: schedule one shot relative to now; nonpositive delay means now,
-  // overflow saturates, and no callback runs until dispatch. Empty is harmless.
-  void arm_after(Clock::duration delay, Clock::time_point now = Clock::now());
-  // TUI thread: require a positive interval and schedule the first tick after now.
-  // Dispatch skips missed ticks while keeping the original cadence; empty is harmless.
-  void repeat(Clock::duration interval, Clock::time_point now = Clock::now());
+  // TUI thread: arm once relative to now, mapping nonpositive delay to now and
+  // overflow to time_point::max; invalidates old dispatch work through arm_at.
+  void arm_after(Clock::duration delay, Clock::time_point now);
+  // TUI thread: require a positive interval and replace the schedule, first due
+  // after now. Invalidates old work; invalid intervals disarm in nonasserting builds.
+  void arm_every(Clock::duration interval, Clock::time_point now);
+  // TUI thread after checking due(now) and the saved generation: copy the binding,
+  // advance generation and disarm one shots or advance repeats beyond now. The copy
+  // may run after this record is removed, provided its target stays alive through return.
+  [[nodiscard]] Callback prepare_dispatch(Clock::time_point now);
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  // The registry alone may manufacture a handle for an ID it already owns.
-  friend class TuiEventLoop;
-  // TUI thread after inserting id: borrow loop and assume exclusive responsibility
-  // for removing that registration before loop destruction.
-  TuiTimer(TuiEventLoop& loop, std::uint64_t id) noexcept;
-  // TUI thread with the borrowed loop alive: erase the registration then become
-  // empty. Used by destruction/move assignment so neither leaves a stale callback.
-  void release() noexcept;
-
-  // Borrowed stable registry address, changed only by TUI-thread moves/release.
-  // Null means empty; a nonnull pointer must stay valid until this registration is removed.
-  TuiEventLoop* loop_ = nullptr;
-  // Registry-assigned identity paired with loop_; TUI moves transfer it and release
-  // clears it. Zero denotes an empty handle and is never a registered ID.
-  std::uint64_t id_ = 0;
+  // Binding installed on TUI-thread construction and copied for dispatch. It owns
+  // the callable, not the lifetime of create_timer's borrowed target.
+  Callback callback_;
+  // TUI scheduling methods set/clear the next eligible time; prepare_dispatch clears
+  // one shots or advances repeats before the callback is allowed to mutate the registry.
+  std::optional<Clock::time_point> deadline_;
+  // TUI thread records positive repeat cadence, or zero for one shot/disarmed.
+  // Dispatch skips missed periods instead of calling back once per missed tick.
+  Clock::duration interval_{};
+  // TUI thread increments on every arm/disarm and prepare_dispatch. The registry
+  // snapshots (id, generation) before callbacks, then skips entries changed by earlier
+  // callbacks; no callback retains a registry iterator across an invocation.
+  std::uint64_t generation_ = 0;
 };
 
 } // namespace ava::tui

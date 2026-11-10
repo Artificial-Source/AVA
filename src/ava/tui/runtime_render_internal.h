@@ -4,7 +4,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TranscriptView.h"
-#include "ava/tui/TuiTimer.h"
+#include "ava/tui/TuiTimerHandle.h"
 #include "ava/tui/composer_internal.h"
 
 #include <chrono>
@@ -18,7 +18,7 @@ namespace ava::tui {
 class RuntimePresentationState;
 
 class TuiFrontEnd;
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 namespace terminal {
 class Context;
@@ -80,7 +80,7 @@ enum class FrameRenderKind
 };
 
 // Renderer-owned TUI-thread value that coalesces invalidations and latches paint failure. It owns no timer:
-// RuntimeRenderer mirrors its deadline into the loop and consumes work only at paint/handoff.
+// RuntimeRenderer mirrors its deadline into the timer registry and consumes work only at paint/handoff.
 class FrameScheduler final
 {
  public:
@@ -94,7 +94,7 @@ class FrameScheduler final
   void request(FrameRenderKind kind, Clock::time_point now);
   // TUI thread: indicate queued invalidation, independent of whether its deadline has arrived.
   [[nodiscard]] bool pending() const;
-  // TUI thread: copy the pending wake deadline for timer registration; no pending request has no deadline.
+  // TUI thread: copy the pending wake deadline for arming a timer; no pending request has no deadline.
   [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept;
   // TUI thread paint stage: consume pending strength only when due; caller records the eventual paint result.
   [[nodiscard]] std::optional<FrameRenderKind> take_due(Clock::time_point now);
@@ -141,15 +141,15 @@ enum class TranscriptUpdateMode
 
 // Session-owned TUI-thread coordinator for layout caches, TranscriptView, and painting. Feature
 // owners mutate viewport only through its named operations and read const views. The session serializes all
-// access; there is no UI mutex. Borrowed frontend, projection, Composer, Context, and attached loop outlive it;
+// access; there is no UI mutex. Borrowed frontend, projection, Composer, Context, and timer registry outlive it;
 // member timers retire before callback targets are destroyed.
 class RuntimeRenderer final
 {
  public:
-  // TUI thread: register timers in the earlier-lived loop, then borrow presentation,
+  // TUI thread: register timers in the earlier-lived registry, then borrow presentation,
   // Composer, frontend and optional Context. Registration never dispatches callbacks.
   // A null frontend is supported; a supplied Context applies cursor settings.
-  RuntimeRenderer(TuiEventLoop& loop, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state,
+  RuntimeRenderer(TuiTimerRegistry& timer_registry, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& draft_state,
                   terminal::Context* terminal_context = nullptr);
   // Not copyable or movable: timer callbacks hold this address, and one owner manages caches and frames.
   RuntimeRenderer(RuntimeRenderer const&) = delete;
@@ -178,7 +178,7 @@ class RuntimeRenderer final
   // callbacks must keep renderer and view alive.
   [[nodiscard]] TranscriptSelectionMouseResult handle_transcript_selection_mouse(InputEvent const& event, std::function<bool(std::size_t)> const& toggle_tool,
                                                                                  std::function<bool(std::size_t)> const& toggle_thinking);
-  // TUI thread: renew indicator visibility, request a full frame, and mirror its expiry into the loop.
+  // TUI thread: renew indicator visibility, request a full frame, and mirror its expiry into the timer registry.
   void show_transcript_position_indicator(TranscriptPositionIndicatorState::Clock::time_point now = TranscriptPositionIndicatorState::Clock::now());
   // TUI thread: copy from the retained layout cache and reconcile interaction deadlines. Copy does not
   // rebuild it, but earlier layout preparation may have changed it since the last paint.
@@ -302,19 +302,19 @@ class RuntimeRenderer final
   // TUI-thread copy of the registered frame deadline; prevents rearming an expired wake before paint consumes
   // it.
   std::optional<FrameScheduler::Clock::time_point> armed_frame_deadline_;
-  // TUI-thread copy used to change indicator registration only when its semantic expiry changes.
+  // TUI-thread copy used to rearm the indicator timer only when its semantic expiry changes.
   std::optional<FrameScheduler::Clock::time_point> armed_indicator_deadline_;
   // TUI-thread copy used to mirror selection edge-drag cadence without redundant timer rearming.
   std::optional<FrameScheduler::Clock::time_point> armed_autoscroll_deadline_;
-  // TUI-thread wake registration; destroyed before its scheduler/view callback dependencies and the
-  // earlier-lived loop.
-  TuiTimer frame_timer_;
-  // TUI-thread registration hides the scroll-position indicator; destroyed before the indicator owner and earlier-lived
+  // TUI-thread wake timer; destroyed before its scheduler/view callback dependencies and the
+  // earlier-lived registry.
+  TuiTimerHandle frame_timer_;
+  // TUI-thread timer hides the scroll-position indicator; destroyed before the indicator owner and earlier-lived
   // event loop.
-  TuiTimer indicator_timer_;
-  // TUI-thread registration drives held edge drags; destruction retires callbacks before TranscriptView is
+  TuiTimerHandle indicator_timer_;
+  // TUI-thread timer drives held edge drags; destruction retires callbacks before TranscriptView is
   // destroyed.
-  TuiTimer autoscroll_timer_;
+  TuiTimerHandle autoscroll_timer_;
 };
 
 } // namespace ava::tui

@@ -42,12 +42,12 @@ ava::tui::TuiRuntimeOptions file_options(std::vector<ava::tui::FileReferenceItem
 // Owns synchronous TUI-thread dispatch collaborators; declaration order keeps borrowed owners alive through teardown.
 struct ComposerDispatchFixture
 {
-  // Assemble real editor/render owners with timer registrations; this fixture does
+  // Assemble real editor/render owners with timers; this fixture does
   // not run a session or start a worker.
   explicit ComposerDispatchFixture(ava::tui::TuiRuntimeOptions options = {})
       : frontend(std::move(options)),
         presentation(frontend.frontend(), {}),
-        renderer(event_loop.loop(), frontend.frontend(), presentation, composer),
+        renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer),
         navigation(*frontend.frontend(), presentation, composer, renderer)
   {
   }

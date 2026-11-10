@@ -366,7 +366,7 @@ void run_tui_transcript_selection_tests()
     ava::tui::RuntimePresentationState streaming_snapshot_presentation(frontend.frontend(), {});
     ava::tui::Composer streaming_draft;
     tui_test_support::TuiEventLoopFixture event_loop;
-    ava::tui::RuntimeRenderer streaming_renderer(event_loop.loop(), frontend.frontend(), streaming_snapshot_presentation, streaming_draft);
+    ava::tui::RuntimeRenderer streaming_renderer(event_loop.timer_registry(), frontend.frontend(), streaming_snapshot_presentation, streaming_draft);
     change_transcript(streaming_snapshot_presentation, [&](auto& transcript) {
       transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "streaming", .stream_id = "live", .append_only_stream = true});
     });

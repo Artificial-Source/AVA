@@ -4,8 +4,8 @@
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/mermaid_projection.h"
@@ -207,7 +207,7 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
   tui_test_support::TuiEventLoopFixture event_loop;
-  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -264,7 +264,7 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
   auto const& snapshot = presentation.screen();
   ava::tui::Composer composer;
   tui_test_support::TuiEventLoopFixture event_loop;
-  ava::tui::RuntimeRenderer renderer(event_loop.loop(), frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeRenderer renderer(event_loop.timer_registry(), frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -385,7 +385,7 @@ struct B5AttachedMermaidFixture
   // Event loop outlives every attached presentation owner.
   tui_test_support::TuiEventLoopFixture event_loop{descriptors.first.get()};
   // Timer registry of event_loop.
-  ava::tui::TuiEventLoop& loop = event_loop.loop();
+  ava::tui::TuiTimerRegistry& timer_registry = event_loop.timer_registry();
   // Frontend owns registered session data for all following presentation objects.
   tui_test_support::TuiFrontEndFixture frontend;
   // Presentation owns the snapshot borrowed by the remaining members.
@@ -393,7 +393,7 @@ struct B5AttachedMermaidFixture
   // Composer is borrowed by renderer and navigation.
   ava::tui::Composer composer;
   // Renderer batches invalidation while attached to the loop.
-  ava::tui::RuntimeRenderer renderer{loop, frontend.frontend(), presentation, composer};
+  ava::tui::RuntimeRenderer renderer{timer_registry, frontend.frontend(), presentation, composer};
   // Navigation shares the stable presentation and renderer owners.
   ava::tui::RuntimeNavigationController navigation{*frontend.frontend(), presentation, composer, renderer};
   // Selectors precede the search owner that borrows them.
@@ -406,7 +406,7 @@ struct B5AttachedMermaidFixture
   // Renderer is already registered; attach Mermaid and install one eligible block.
   B5AttachedMermaidFixture()
   {
-    controller.attach_loop(loop);
+    controller.create_timers(timer_registry);
     presentation.finish_session_transition("b5-attached");
     auto display = frontend.frontend()->display_settings_snapshot();
     display.mermaid_enabled = true;
@@ -430,8 +430,9 @@ void test_attached_mermaid_completion_without_transcript_change()
           "attached controller admits a request and registers a completion notifier"))
     return;
   auto const drains = fixture.state->drains;
-  expect(!fixture.loop.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)), "outstanding accepted work arms no 16 ms discovery timer");
-  fixture.loop.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
+  expect(!fixture.timer_registry.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)),
+         "outstanding accepted work arms no 16 ms discovery timer");
+  fixture.timer_registry.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
   static_cast<void>(fixture.controller.service_if_changed());
   expect(fixture.state->drains == drains, "unchanged pending work performs no periodic drain");
   auto const request = fixture.state->requests.front();
@@ -453,9 +454,9 @@ void test_attached_mermaid_queue_full_does_not_poll()
   fixture.state->enqueue_result = ava::tui::TuiMermaidEnqueueResult::QueueFull;
   static_cast<void>(fixture.controller.service_if_changed());
   auto const attempts = fixture.state->enqueues;
-  expect(attempts == 1 && !fixture.loop.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)),
+  expect(attempts == 1 && !fixture.timer_registry.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)),
          "QueueFull is distinct from Busy and has no retry timer");
-  fixture.loop.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
+  fixture.timer_registry.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
   static_cast<void>(fixture.controller.service_if_changed());
   expect(fixture.state->enqueues == attempts, "unchanged full-queue work is not retried by loop polling");
 }
@@ -472,32 +473,33 @@ void test_attached_mermaid_busy_backoff(bool busy_drain)
   static_cast<void>(fixture.controller.service_if_changed());
   auto const after_first = Clock::now();
   auto const first_attempts = busy_drain ? fixture.state->drains : fixture.state->enqueues;
-  expect(first_attempts > 0 && !fixture.loop.has_due_work(before_first + 99ms) && fixture.loop.has_due_work(after_first + 100ms),
+  expect(first_attempts > 0 && !fixture.timer_registry.has_due_work(before_first + 99ms) && fixture.timer_registry.has_due_work(after_first + 100ms),
          "first Busy result arms a 100 ms retry");
 
   // Force an unrelated transcript observation; no source changes and no readiness notification justify another bridge attempt.
   fixture.presentation.invalidate_transcript_layout();
   static_cast<void>(fixture.controller.service_if_changed());
   static_cast<void>(fixture.controller.service());
-  expect((busy_drain ? fixture.state->drains : fixture.state->enqueues) == first_attempts && !fixture.loop.has_due_work(before_first + 99ms),
+  expect((busy_drain ? fixture.state->drains : fixture.state->enqueues) == first_attempts && !fixture.timer_registry.has_due_work(before_first + 99ms),
          "unrelated changed and unconditional service calls do not shorten Busy backoff");
 
-  fixture.loop.service_due(after_first + 100ms);
+  fixture.timer_registry.service_due(after_first + 100ms);
   expect((busy_drain ? fixture.state->drains : fixture.state->enqueues) == first_attempts, "due retry callback sets readiness without executing bridge work");
   auto const before_second = Clock::now();
   static_cast<void>(fixture.controller.service_if_changed());
   auto const after_second = Clock::now();
   auto const second_attempts = busy_drain ? fixture.state->drains : fixture.state->enqueues;
-  expect(second_attempts > first_attempts && !fixture.loop.has_due_work(before_second + 249ms) && fixture.loop.has_due_work(after_second + 250ms),
+  expect(second_attempts > first_attempts && !fixture.timer_registry.has_due_work(before_second + 249ms) &&
+             fixture.timer_registry.has_due_work(after_second + 250ms),
          "repeated Busy result backs off to 250 ms");
   static_cast<void>(fixture.controller.service());
   expect((busy_drain ? fixture.state->drains : fixture.state->enqueues) == second_attempts, "repeated service does not bypass the longer retry");
 
   fixture.state->drain_busy = false;
   fixture.state->enqueue_result = ava::tui::TuiMermaidEnqueueResult::Accepted;
-  fixture.loop.service_due(after_second + 250ms);
+  fixture.timer_registry.service_due(after_second + 250ms);
   static_cast<void>(fixture.controller.service_if_changed());
-  expect(!fixture.loop.has_due_work(Clock::now() + 1h), "successful empty drain and accepted pending work cancel contention retries");
+  expect(!fixture.timer_registry.has_due_work(Clock::now() + 1h), "successful empty drain and accepted pending work cancel contention retries");
 }
 
 // Shutdown unregisters and cancels Busy retry; copied notifications remain safe after controller and loop destruction.
@@ -515,9 +517,9 @@ void test_attached_mermaid_late_notification_lifetime()
     auto const drains = fixture.state->drains;
     auto const enqueues = fixture.state->enqueues;
     late_notification();
-    fixture.loop.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
+    fixture.timer_registry.service_due(std::chrono::steady_clock::now() + std::chrono::hours(1));
     auto const result = fixture.controller.service_if_changed();
-    expect(!fixture.state->notify && !fixture.loop.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)) &&
+    expect(!fixture.state->notify && !fixture.timer_registry.has_due_work(std::chrono::steady_clock::now() + std::chrono::hours(1)) &&
                result == ava::tui::MermaidServiceOutcome::Unchanged && fixture.state->drains == drains && fixture.state->enqueues == enqueues,
            "shutdown unregisters and cancels retry while late notifications perform no bridge work");
   }

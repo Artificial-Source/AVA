@@ -4,12 +4,12 @@
 
 namespace ava::tui {
 
-std::optional<TuiEventLoop::Clock::time_point> TuiTimeoutHandler::next_deadline() noexcept
+std::optional<TuiTimerRegistry::Clock::time_point> TuiTimeoutHandler::next_deadline() noexcept
 {
   return session_->next_timer_deadline();
 }
 
-void TuiTimeoutHandler::expire(TuiEventLoop::Clock::time_point now)
+void TuiTimeoutHandler::expire(TuiTimerRegistry::Clock::time_point now)
 {
   session_->expire_timers(now);
 }

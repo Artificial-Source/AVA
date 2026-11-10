@@ -2,7 +2,7 @@
 // See docs/engineering/tui-architecture.md for the owner relationships.
 #pragma once
 
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "runtime_state_internal.h"
 #include "ava/debug/print_members_on.h"
 
@@ -12,7 +12,7 @@ class BranchSummaryActions;
 
 class RuntimeRenderer;
 class SelectorHost;
-class TuiEventLoop;
+class TuiTimerRegistry;
 namespace terminal {
 class Context;
 }
@@ -52,7 +52,7 @@ class BranchSummaryOperation final
 {
  public:
   // TUI thread: start inactive without launching work or registering discovery.
-  // Frontend and session collaborators outlive this owner; attach_loop precedes
+  // Frontend and session collaborators outlive this owner; create_timers precedes
   // normal operation, and backend execution remains frontend-owned.
   BranchSummaryOperation(BranchSummaryActions& frontend, RuntimePresentationState& presentation, SelectorHost& selectors, RuntimeRenderer& renderer,
                          terminal::Context& terminal_context);
@@ -60,9 +60,9 @@ class BranchSummaryOperation final
   BranchSummaryOperation(BranchSummaryOperation const&) = delete;
   BranchSummaryOperation& operator=(BranchSummaryOperation const&) = delete;
 
-  // TUI thread: register a timer that only marks discovery due. The loop outlives this
+  // TUI thread: register a timer that only marks discovery due. The registry outlives this
   // stable operation and the already-constructed renderer used by service_if_due.
-  void attach_loop(TuiEventLoop& loop);
+  void create_timers(TuiTimerRegistry& timer_registry);
   // TUI application stage: read one pending backend snapshot, or return no value.
   // Several timer ticks require only one read. The returned outcome is handled before
   // input; the timer itself never reads the frontend or completes the operation.
@@ -104,7 +104,7 @@ class BranchSummaryOperation final
   [[nodiscard]] BranchSummaryOutcome poll();
   // TUI timer callback: mark discovery due without calling the frontend. The
   // application stage copies snapshots and applies their result before input.
-  void discover_progress(TuiTimer::Clock::time_point now);
+  void discover_progress(TuiTimerHandle::Clock::time_point now);
 
   // Frontend-owned narrow summary interface outlives this TUI-thread operation.
   BranchSummaryActions& frontend_;
@@ -134,9 +134,9 @@ class BranchSummaryOperation final
   // Set by the TUI timer; consumed by application servicing. Starting or
   // finishing an operation clears it so a later generation cannot inherit work.
   bool discovery_due_ = false;
-  // TUI-thread repeating discovery registration. Declared last so it unregisters before
-  // callback-visible state is destroyed; the attached loop must outlive it.
-  TuiTimer discovery_timer_;
+  // TUI-thread repeating discovery timer. Declared last so it unregisters before
+  // callback-visible state is destroyed; the timer registry must outlive it.
+  TuiTimerHandle discovery_timer_;
 };
 
 } // namespace ava::tui

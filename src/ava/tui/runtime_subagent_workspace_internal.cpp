@@ -1,7 +1,7 @@
 // Refreshes path-free subagent views and routes workspace input without owning backend job lifetimes.
 #include "sys.h"
 #include "SelectorHost.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
@@ -69,11 +69,11 @@ RuntimeSubagentWorkspaceController::~RuntimeSubagentWorkspaceController()
   close();
 }
 
-void RuntimeSubagentWorkspaceController::attach_loop(TuiEventLoop& loop)
+void RuntimeSubagentWorkspaceController::create_timers(TuiTimerRegistry& timer_registry)
 {
-  discovery_timer_ = loop.member_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
+  discovery_timer_ = timer_registry.create_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
   if (active())
-    discovery_timer_.repeat(kPollInterval);
+    discovery_timer_.arm_every(kPollInterval);
 }
 
 bool RuntimeSubagentWorkspaceController::service_if_due()
@@ -164,14 +164,14 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   selector_.freeze_underlying_transcript_layout = true;
   selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
   // Start discovery only after local mode/checkpoint state is coherent, then publish the complete selector.
-  discovery_timer_.repeat(kPollInterval, now);
+  discovery_timer_.arm_every(kPollInterval, now);
   publish();
   return true;
 }
 
 void RuntimeSubagentWorkspaceController::close()
 {
-  discovery_timer_.cancel();
+  discovery_timer_.disarm();
   discovery_due_ = false;
   mode_ = Mode::Closed;
   selector_ = {};

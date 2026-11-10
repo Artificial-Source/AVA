@@ -1,6 +1,6 @@
 // Queues plugin requests from workers and prepares their views on the TUI thread.
 #include "sys.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "TuiWakeup.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
@@ -278,7 +278,7 @@ class RuntimePluginUiCoordinatorState final
   void resolve_visible(TuiPluginUiReply reply);
   // Either thread: observe cancellation/deadline without touching screen data.
   [[nodiscard]] bool deadline_reached(std::chrono::steady_clock::time_point now) const;
-  // TUI thread: decide whether its deadline registration can be cancelled.
+  // TUI thread: decide whether its deadline timer can be disarmed.
   [[nodiscard]] bool active() const;
   // Either thread: cancel without allocation, then notify after releasing the lock.
   void cancel();
@@ -688,11 +688,11 @@ bool is_direct_foreground_plugin_run_submission(std::string_view submitted)
   return direct_foreground_plugin_binding(submitted).has_value();
 }
 
-RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiEventLoop& loop, RuntimePresentationState& presentation)
+RuntimePluginUiCoordinator::RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, RuntimePresentationState& presentation)
     : presentation_(presentation),
-      state_(std::make_shared<RuntimePluginUiCoordinatorState>(loop.wakeup())),
+      state_(std::make_shared<RuntimePluginUiCoordinatorState>(timer_registry.wakeup())),
       runtime_token_(std::make_shared<int const>(1)),
-      deadline_timer_(loop.member_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
+      deadline_timer_(timer_registry.create_timer(*state_, &RuntimePluginUiCoordinatorState::expire))
 {
 }
 
@@ -754,7 +754,7 @@ bool RuntimePluginUiCoordinator::cancel_unfittable_surfaces()
   // Close transport and release waiters before clearing their visible surfaces.
   // A buffered key can no longer authorize a choice in the discarded geometry.
   cancel_active();
-  deadline_timer_.cancel();
+  deadline_timer_.disarm();
   presentation_.publish_plugin_dock(std::nullopt);
   presentation_.publish_plugin_modal(std::nullopt);
   return true;
@@ -766,7 +766,7 @@ TuiPluginUiPollResult RuntimePluginUiCoordinator::poll(bool host_modal_conflict)
   auto result = state_->poll(presentation_, host_modal_conflict);
   result.changed = result.changed || geometry_changed;
   if (!state_->active())
-    deadline_timer_.cancel();
+    deadline_timer_.disarm();
   return result;
 }
 
@@ -865,14 +865,14 @@ void RuntimePluginUiCoordinator::cancel_active()
 
 void RuntimePluginUiCoordinator::finish_submission()
 {
-  deadline_timer_.cancel();
+  deadline_timer_.disarm();
   state_->finish();
   static_cast<void>(presentation_.clear_plugin_surface());
 }
 
 void RuntimePluginUiCoordinator::shutdown()
 {
-  deadline_timer_.cancel();
+  deadline_timer_.disarm();
   state_->shutdown();
   runtime_token_.reset();
   static_cast<void>(presentation_.clear_plugin_surface());

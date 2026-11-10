@@ -6,8 +6,8 @@
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/SelectorInputController.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -38,16 +38,16 @@ class FeatureOwnerFixture final
   // Construct every borrowed dependency before attaching renderer and summary
   // timers. All methods and returned references are used on this test thread.
   FeatureOwnerFixture()
-      : loop_(ava::tui::TuiWakeup{}),
+      : timer_registry_(ava::tui::TuiWakeup{}),
         presentation_(frontend_.frontend(), {}),
-        renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
+        renderer_(timer_registry_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         selector_input_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context()),
         summary_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context())
   {
     auto const [width, height] = ava::tui::terminal_size();
     presentation_.publish_dimensions(width, height);
-    summary_.attach_loop(loop_);
+    summary_.create_timers(timer_registry_);
   }
 
   // Borrow the registered frontend fixture until this enclosing fixture dies.
@@ -61,7 +61,7 @@ class FeatureOwnerFixture final
   // Borrow the summary owner; it cannot outlive its frontend or attached loop.
   ava::tui::BranchSummaryOperation& summary() { return summary_; }
   // Borrow the real timer registry for one explicit, deterministic due batch.
-  ava::tui::TuiEventLoop& loop() { return loop_; }
+  ava::tui::TuiTimerRegistry& timer_registry() { return timer_registry_; }
 
   // Fixture contents include arbitrary selector text and frontend authority.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -69,8 +69,8 @@ class FeatureOwnerFixture final
  private:
   // Own registered offline backend data until all dependent owners are gone.
   tui_test_support::TuiFrontEndFixture frontend_;
-  // Own timer registrations after dependencies attach and before they retire.
-  ava::tui::TuiEventLoop loop_;
+  // Own timers after dependencies attach and before they retire.
+  ava::tui::TuiTimerRegistry timer_registry_;
   // Own the projection; feature owners publish only through named operations.
   ava::tui::RuntimePresentationState presentation_;
   // Supply the renderer's editor dependency for this fixture's full lifetime.
@@ -81,7 +81,7 @@ class FeatureOwnerFixture final
   ava::tui::SelectorHost selectors_;
   // Borrow the preceding owners only on the test thread, until case teardown.
   ava::tui::SelectorInputController selector_input_;
-  // Own summary discovery registration and retire it before all dependencies.
+  // Own summary discovery timer and retire it before all dependencies.
   ava::tui::BranchSummaryOperation summary_;
 };
 
@@ -155,7 +155,7 @@ void test_branch_summary_prepare_failure_preserves_selector()
              screen.select_list->selected_item_index == 1 && screen.select_list->items[1].value == "second" && screen.select_list->query == "OWNER" &&
              screen.select_list->subtitle == screen.status,
          "failed summary preserves session rows, selected identity, and query while updating the subtitle");
-  fixture.loop().service_due(ava::tui::TuiEventLoop::Clock::now() + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(ava::tui::TuiTimerRegistry::Clock::now() + std::chrono::seconds{1});
   expect(!fixture.summary().service_if_due(), "failed preparation leaves no discovery result after a future timer batch");
   expect(!fixture.summary().service_if_due() && !fixture.summary().active(), "consuming an absent summary result leaves it inactive");
   expect(fixture.summary().handle_input({.key = Key::Escape}) == ava::tui::BranchSummaryOutcome::Inactive,
@@ -203,22 +203,22 @@ void test_branch_summary_discovery_and_settlement()
          "confirmation is followed by a fresh application snapshot without retiring the summary");
 
   // A terminal result for another generation must not restore this modal's selector.
-  auto const now = ava::tui::TuiEventLoop::Clock::now();
+  auto const now = ava::tui::TuiTimerRegistry::Clock::now();
   operation.generation = 8;
   operation.phase = ava::tui::TuiBranchSummaryPhase::Succeeded;
   operation.refresh_required = true;
-  fixture.loop().service_due(now + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(now + std::chrono::seconds{1});
   expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::Pending && fixture.summary().active() && refreshes == 0,
          "discovery rejects a terminal snapshot from a different summary generation");
   operation.generation = 7;
-  fixture.loop().service_due(now + std::chrono::seconds{2});
+  fixture.timer_registry().service_due(now + std::chrono::seconds{2});
   auto const& restored = fixture.selectors().view();
   expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::Settled && !fixture.summary().active() && refreshes == 1 &&
              fixture.selectors().kind() == ActiveSelectList::Session && restored && restored->query == "OWNER" && restored->selected_item_index == 0 &&
              restored->items[restored->selected_item_index].value == "second",
          "settlement refreshes catalog rows and restores the selected identity and query");
   auto const settled_reads = reads;
-  fixture.loop().service_due(now + std::chrono::seconds{3});
+  fixture.timer_registry().service_due(now + std::chrono::seconds{3});
   expect(!fixture.summary().service_if_due() && reads == settled_reads, "settlement retires discovery and its result is consumed only once");
 }
 
@@ -243,11 +243,11 @@ void test_branch_summary_exit_waits_for_settlement()
 
   // Only a terminal snapshot releases the exit gate; a timer cannot invent worker completion.
   operation.phase = ava::tui::TuiBranchSummaryPhase::Canceled;
-  auto const now = ava::tui::TuiEventLoop::Clock::now();
-  fixture.loop().service_due(now + std::chrono::seconds{1});
+  auto const now = ava::tui::TuiTimerRegistry::Clock::now();
+  fixture.timer_registry().service_due(now + std::chrono::seconds{1});
   expect(fixture.summary().service_if_due() == ava::tui::BranchSummaryOutcome::ExitReady && !fixture.summary().active() && !fixture.selectors().view(),
          "later settlement honors sticky exit intent and closes the restored selector");
-  fixture.loop().service_due(now + std::chrono::seconds{2});
+  fixture.timer_registry().service_due(now + std::chrono::seconds{2});
   expect(!fixture.summary().service_if_due(), "exit settlement retires its discovery timer and result");
 }
 

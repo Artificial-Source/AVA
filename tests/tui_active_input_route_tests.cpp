@@ -12,8 +12,8 @@
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/SessionSelector.h"
 #include "ava/tui/SessionTransitionCoordinator.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime_actions_internal.h"
@@ -237,7 +237,7 @@ void run_tui_active_input_route_tests()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
   auto descriptors = make_active_input_pipe();
   tui_test_support::TuiEventLoopFixture event_loop(descriptors.first.get());
-  ava::tui::TuiEventLoop& loop = event_loop.loop();
+  ava::tui::TuiTimerRegistry& timer_registry = event_loop.timer_registry();
   std::vector<std::string> follow_ups;
   std::promise<void> finish_run;
   auto run_release = finish_run.get_future().share();
@@ -276,23 +276,23 @@ void run_tui_active_input_route_tests()
   ava::tui::PendingAttachments attachments(presentation);
   ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(loop, frontend.frontend(), presentation, composer);
+  ava::tui::RuntimeRenderer renderer(timer_registry, frontend.frontend(), presentation, composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation, composer, renderer);
   ava::tui::SelectorHost selectors(presentation);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
   ava::tui::SessionSelector sessions(*frontend.frontend(), presentation, selectors, renderer, terminal_context);
-  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, loop);
+  ava::tui::RuntimePromptCoordinator prompts(*frontend.frontend(), presentation, grants, renderer, timer_registry);
   ava::tui::RuntimePromptStashController stash(presentation, composer, renderer, selectors, frontend.frontend()->key_bindings(), attachments);
-  ava::tui::RuntimePluginUiCoordinator plugin_ui(loop, presentation);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui(timer_registry, presentation);
   ava::tui::RuntimeActionController actions(*frontend.frontend(), presentation, composer, renderer, selectors, sessions, attachments);
-  actions.attach_loop(loop);
+  actions.create_timers(timer_registry);
   ava::tui::RuntimeSubagentWorkspaceController workspace(*frontend.frontend(), presentation, selectors);
-  workspace.attach_loop(loop);
+  workspace.create_timers(timer_registry);
   ava::tui::SessionTransitionCoordinator transitions(presentation, composer, renderer, search, workspace, selectors, attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, search, {});
-  mermaid.attach_loop(loop);
-  ava::tui::ActiveRun active_run(loop, *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid, attachments,
-                                 terminal_context);
+  mermaid.create_timers(timer_registry);
+  ava::tui::ActiveRun active_run(timer_registry, *frontend.frontend(), presentation, renderer, prompts, plugin_ui, search, workspace, transitions, mermaid,
+                                 attachments, terminal_context);
   // This guard is destroyed before ActiveRun, including failed setup and assertion unwinding, so joining cannot strand the worker.
   auto release_run = at_scope_end([&finish_run] { finish_run.set_value(); });
   ava::tui::CommandOutput command_output(presentation);

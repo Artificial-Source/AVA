@@ -3,7 +3,7 @@
 #include "PendingPermissionRequest.h"
 #include "PendingQuestionRequest.h"
 #include "SelectorHost.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "ava/event/events.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -42,15 +42,15 @@ bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std:
 }
 
 RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                                                   RuntimeRenderer& renderer, TuiEventLoop& loop, SelectorHost* selectors)
+                                                   RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, SelectorHost* selectors)
     : frontend_(frontend),
       presentation_(presentation),
       session_grants_(session_grants),
       renderer_(renderer),
       selectors_(selectors),
-      wakeup_(loop.wakeup()),
-      auto_resolution_timer_(loop.member_timer(*this, &RuntimePromptCoordinator::mark_auto_resolution_due)),
-      wheel_expiry_timer_(loop.member_timer(*this, &RuntimePromptCoordinator::expire_wheel_suppression))
+      wakeup_(timer_registry.wakeup()),
+      auto_resolution_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::mark_auto_resolution_due)),
+      wheel_expiry_timer_(timer_registry.create_timer(*this, &RuntimePromptCoordinator::expire_wheel_suppression))
 {
 }
 
@@ -358,7 +358,7 @@ std::optional<RuntimePromptCoordinator::QuestionResult> RuntimePromptCoordinator
   if (prompt.auto_resolve)
   {
     auto_resolution_due_ = true;
-    auto_resolution_timer_.repeat(std::chrono::milliseconds{100});
+    auto_resolution_timer_.arm_every(std::chrono::milliseconds{100});
   }
   return std::nullopt;
 }
@@ -573,12 +573,12 @@ bool RuntimePromptCoordinator::has_pending_requests() const
   return !pending_permission_requests_.empty() || !pending_question_requests_.empty();
 }
 
-void RuntimePromptCoordinator::mark_auto_resolution_due(TuiTimer::Clock::time_point)
+void RuntimePromptCoordinator::mark_auto_resolution_due(TuiTimerHandle::Clock::time_point)
 {
   auto_resolution_due_ = true;
 }
 
-void RuntimePromptCoordinator::expire_wheel_suppression(TuiTimer::Clock::time_point)
+void RuntimePromptCoordinator::expire_wheel_suppression(TuiTimerHandle::Clock::time_point)
 {
   wheel_suppression_deadline_.reset();
   wheel_governor_.reset();
@@ -586,15 +586,15 @@ void RuntimePromptCoordinator::expire_wheel_suppression(TuiTimer::Clock::time_po
 
 void RuntimePromptCoordinator::suppress_wheel_input()
 {
-  wheel_suppression_deadline_ = TuiTimer::Clock::now() + WheelBurstGovernor::kAcceptedEventInterval;
+  wheel_suppression_deadline_ = TuiTimerHandle::Clock::now() + WheelBurstGovernor::kAcceptedEventInterval;
   wheel_expiry_timer_.arm_at(*wheel_suppression_deadline_);
 }
 
 RuntimePromptCoordinator::ClaimedPromptRequest RuntimePromptCoordinator::retire_active_callbacks()
 {
   input_quarantined_ = false;
-  auto_resolution_timer_.cancel();
-  wheel_expiry_timer_.cancel();
+  auto_resolution_timer_.disarm();
+  wheel_expiry_timer_.disarm();
   auto_resolution_due_ = false;
   wheel_suppression_deadline_.reset();
   wheel_governor_.reset();
@@ -753,8 +753,8 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
       return PromptServiceOutcome::Active;
     if (input.resize)
     {
-      wheel_expiry_timer_.cancel();
-      expire_wheel_suppression(TuiTimer::Clock::now());
+      wheel_expiry_timer_.disarm();
+      expire_wheel_suppression(TuiTimerHandle::Clock::now());
       if (!renderer_.render())
       {
         if (std::holds_alternative<std::shared_ptr<PendingPermissionRequest>>(active_request_))
@@ -771,7 +771,7 @@ PromptServiceOutcome RuntimePromptCoordinator::handle_input(RuntimeInput const& 
     if (key != terminal::Key::MouseWheelUp && key != terminal::Key::MouseWheelDown)
     {
       wheel_suppression_deadline_.reset();
-      wheel_expiry_timer_.cancel();
+      wheel_expiry_timer_.disarm();
     }
     if (!wheel_governor_.accept_input(key))
       return PromptServiceOutcome::Active;

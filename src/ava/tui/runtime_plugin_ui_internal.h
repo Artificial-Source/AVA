@@ -1,7 +1,7 @@
 // Adapts synchronized plugin transport to session-owned TUI surfaces and timers.
 #pragma once
 
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_plugin_ui.h"
 #include "ava/tui/terminal.h"
@@ -18,7 +18,7 @@ class RuntimePresentationState;
 
 struct ComposerSnapshot;
 class RuntimePluginUiCoordinatorState;
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 // TUI-call-owned summary consumed by ActiveRun to request paint or cooperative stop.
 // It carries no borrowed state and preserves independent redraw and expiry evidence.
@@ -47,14 +47,14 @@ enum class TuiPluginUiInputResult
 // Session-owned plugin display/timer owner. Workers call only cancel_active and
 // deadline_reached here, or weak endpoints into the private synchronized state.
 // Only the TUI thread reads or updates screen data. The presentation state and
-// attached loop outlive this stable owner. Shutdown stops new requests before
+// timer registry outlive this stable owner. Shutdown stops new requests before
 // releasing its token; in-flight calls keep only the shared transport alive.
 class RuntimePluginUiCoordinator final
 {
  public:
-  // TUI thread: register expiry before accepting requests. The loop and presentation
+  // TUI thread: register expiry before accepting requests. The registry and presentation
   // outlive this coordinator; workers receive only a weak wake handle and transport.
-  RuntimePluginUiCoordinator(TuiEventLoop& loop, RuntimePresentationState& presentation);
+  RuntimePluginUiCoordinator(TuiTimerRegistry& timer_registry, RuntimePresentationState& presentation);
   // TUI thread: close transport and clear surfaces before its members are destroyed.
   // Retained endpoints may survive; their weak locks can only reach closed transport.
   ~RuntimePluginUiCoordinator();
@@ -112,8 +112,8 @@ class RuntimePluginUiCoordinator final
   // Coordinator's shared identity is exposed weakly in endpoints. Reset at shutdown
   // invalidates lifetime checks without keeping the coordinator or screen data alive.
   std::shared_ptr<void const> runtime_token_;
-  // TUI registration targets the retained state; cancel before shutdown releases state.
-  TuiTimer deadline_timer_;
+  // TUI timer targets the retained state; disarm before shutdown releases state.
+  TuiTimerHandle deadline_timer_;
 };
 
 }  // namespace ava::tui

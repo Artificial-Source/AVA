@@ -5,8 +5,8 @@
 #include "ava/tui/BranchSummaryOperation.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/SelectorHost.h"
-#include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/terminal/Context.h"
@@ -26,7 +26,7 @@ using ava::tui::ActiveSelectList;
 using ava::tui::BranchSummaryCancelMode;
 using ava::tui::BranchSummaryOutcome;
 using ava::tui::TuiBranchSummaryPhase;
-using Clock = ava::tui::TuiEventLoop::Clock;
+using Clock = ava::tui::TuiTimerRegistry::Clock;
 
 // Return an owned session checkpoint whose selected identity survives a reordered refresh.
 ava::tui::SelectListView summary_session_view()
@@ -71,14 +71,14 @@ class SummaryTimerFixture final
   // Establish borrowed dependencies before registering callbacks; the common
   // runner owns the initialized process terminal for this fixture's lifetime.
   SummaryTimerFixture()
-      : loop_(ava::tui::TuiWakeup{}),
+      : timer_registry_(ava::tui::TuiWakeup{}),
         presentation_(frontend_.frontend(), {}),
-        renderer_(loop_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
+        renderer_(timer_registry_, frontend_.frontend(), presentation_, composer_, &ava::core::Application::instance().terminal_context()),
         selectors_(presentation_),
         summary_(*frontend_.frontend(), presentation_, selectors_, renderer_, ava::core::Application::instance().terminal_context())
   {
     presentation_.publish_dimensions(100, 24);
-    summary_.attach_loop(loop_);
+    summary_.create_timers(timer_registry_);
     frontend_.hooks().on_branch_summary_prepare = [this](std::string_view source) {
       expect(source == "second", "timer fixture prepares the selected session identity");
       return ava::core::Result<ava::tui::TuiBranchSummarySnapshot>{backend_.operation};
@@ -112,7 +112,7 @@ class SummaryTimerFixture final
   // Borrow the real operation until this fixture retires its discovery handle.
   ava::tui::BranchSummaryOperation& summary() { return summary_; }
   // Borrow the registry for explicit synthetic deadline dispatch, without waiting.
-  ava::tui::TuiEventLoop& loop() { return loop_; }
+  ava::tui::TuiTimerRegistry& timer_registry() { return timer_registry_; }
   // Observe which selector is active before and after application servicing.
   ava::tui::SelectorHost const& selectors() const { return selectors_; }
   // Render the projected state for comparison, without discovery hooks. This
@@ -126,8 +126,8 @@ class SummaryTimerFixture final
   SummaryBackendFixture backend_;
   // Own the registered offline frontend until every TUI borrower retires.
   tui_test_support::TuiFrontEndFixture frontend_;
-  // Outlive every timer registration, including the renderer's frame callbacks.
-  ava::tui::TuiEventLoop loop_;
+  // Outlive every timer, including the renderer's frame callbacks.
+  ava::tui::TuiTimerRegistry timer_registry_;
   // Own the screen projection read by selector and frame assertions.
   ava::tui::RuntimePresentationState presentation_;
   // Supply the renderer's stable editor dependency through renderer destruction.
@@ -154,8 +154,8 @@ void test_summary_timer_defers_snapshot_and_refresh()
   // Capture after start so both explicit future deadlines necessarily cross the
   // production 250 ms cadence; no wall-clock wait or polling loop is involved.
   auto const first_deadline = Clock::now() + std::chrono::seconds{1};
-  fixture.loop().service_due(first_deadline);
-  fixture.loop().service_due(first_deadline + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(first_deadline);
+  fixture.timer_registry().service_due(first_deadline + std::chrono::seconds{1});
   expect(backend.snapshot_reads == 0 && backend.refreshes == 0 && fixture.summary().active() && fixture.selectors().kind() == ActiveSelectList::BranchSummary &&
              fixture.frame() == initial_frame,
          "discovery timer batches only mark due work and leave the summary projection unchanged");
@@ -166,7 +166,7 @@ void test_summary_timer_defers_snapshot_and_refresh()
   backend.operation.phase = TuiBranchSummaryPhase::Succeeded;
   backend.operation.refresh_required = true;
   auto const progress_frame = fixture.frame();
-  fixture.loop().service_due(first_deadline + std::chrono::seconds{2});
+  fixture.timer_registry().service_due(first_deadline + std::chrono::seconds{2});
   expect(backend.snapshot_reads == 1 && backend.refreshes == 0 && fixture.summary().active() && fixture.selectors().kind() == ActiveSelectList::BranchSummary &&
              fixture.frame() == progress_frame,
          "a terminal backend publication cannot refresh the catalog or restore the selector inside timer dispatch");
@@ -178,7 +178,7 @@ void test_summary_timer_defers_snapshot_and_refresh()
              restored->selected_item_index == 0 && restored->items[0].value == "second",
          "deferred settlement restores query and selected identity into reordered catalog rows");
   expect(!fixture.summary().service_if_due(), "terminal service produces its outcome only once");
-  fixture.loop().service_due(first_deadline + std::chrono::seconds{3});
+  fixture.timer_registry().service_due(first_deadline + std::chrono::seconds{3});
   expect(!fixture.summary().service_if_due() && backend.snapshot_reads == 2 && backend.refreshes == 1,
          "settled discovery is disarmed and cannot repeat snapshot or catalog work");
 }
@@ -198,7 +198,7 @@ void test_summary_timer_preserves_sticky_exit()
   auto const waiting_frame = fixture.frame();
   backend.operation.phase = TuiBranchSummaryPhase::Canceled;
   auto const deadline = Clock::now() + std::chrono::seconds{1};
-  fixture.loop().service_due(deadline);
+  fixture.timer_registry().service_due(deadline);
   expect(backend.snapshot_reads == 0 && backend.refreshes == 0 && fixture.summary().active() && fixture.selectors().kind() == ActiveSelectList::BranchSummary &&
              fixture.frame() == waiting_frame,
          "canceled backend discovery leaves the modal and exit gate untouched during timer dispatch");
@@ -206,18 +206,18 @@ void test_summary_timer_preserves_sticky_exit()
              !fixture.summary().active() && !fixture.selectors().view(),
          "application servicing honors sticky exit and closes the selector exactly once");
   expect(!fixture.summary().service_if_due(), "exit outcome is consumed by its one application service");
-  fixture.loop().service_due(deadline + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(deadline + std::chrono::seconds{1});
   expect(!fixture.summary().service_if_due() && backend.snapshot_reads == 1, "exit settlement retires further discovery");
 }
 
 // An accepted input cancellation may settle while a timer flag is queued; neither
-// that flag nor its canceled registration may poll a subsequently started generation.
+// that flag nor its disarmed timer may poll a subsequently started generation.
 void test_summary_timer_clears_due_across_settlement_and_restart()
 {
   SummaryTimerFixture fixture;
   auto& backend = fixture.backend();
   expect(fixture.start() == BranchSummaryOutcome::Pending, "restart case starts its first generation");
-  fixture.loop().service_due(Clock::now() + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(Clock::now() + std::chrono::seconds{1});
   expect(backend.snapshot_reads == 0, "queued timer work remains unserviced before synchronous cancellation");
   backend.operation.phase = TuiBranchSummaryPhase::Canceled;
   backend.accept_cancellation = true;
@@ -233,7 +233,7 @@ void test_summary_timer_clears_due_across_settlement_and_restart()
   auto const restarted_frame = fixture.frame();
   backend.operation.phase = TuiBranchSummaryPhase::Succeeded;
   backend.operation.refresh_required = true;
-  fixture.loop().service_due(Clock::now() + std::chrono::seconds{1});
+  fixture.timer_registry().service_due(Clock::now() + std::chrono::seconds{1});
   expect(backend.snapshot_reads == 1 && backend.refreshes == 0 && fixture.frame() == restarted_frame,
          "the restarted timer also defers snapshot and refresh work until application servicing");
   expect(fixture.summary().service_if_due() == BranchSummaryOutcome::Settled && backend.snapshot_reads == 2 && backend.refreshes == 1,

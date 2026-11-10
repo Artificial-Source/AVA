@@ -308,7 +308,7 @@ set(AVA_TESTS_SOURCES
   "tui_command_output_tests.cpp"
   "tui_completion_tests.cpp"
   "tui_composer_rendering_tests.cpp"
-  "tui_event_loop_tests.cpp"
+  "tui_timer_registry_tests.cpp"
   "tui_feature_owner_tests.cpp"
   "tui_feature_interface_tests.cpp"
   "tui_branch_summary_timer_tests.cpp"
@@ -443,7 +443,7 @@ set(AVA_TEST_SUITES
   tui_shutdown
   permission_rules
   tui_composer
-  tui_event_loop
+  tui_timer_registry
   tui_pending_requests
   terminal_horizontal_layout
   terminal_paragraph

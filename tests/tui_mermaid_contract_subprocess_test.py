@@ -21,7 +21,7 @@ ASSERTION_PREDICATE = (
     b"(!bridge_.enqueue && !bridge_.cancel && !bridge_.drain)"
     b" || bridge_.set_completion_notifier"
 )
-ATTACH_FUNCTION = b"RuntimeMermaidPresentationController::attach_loop"
+ATTACH_FUNCTION = b"RuntimeMermaidPresentationController::create_timers"
 OUTPUT_LIMIT = 256 * 1024
 
 

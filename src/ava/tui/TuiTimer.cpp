@@ -1,74 +1,102 @@
-// Transfers and removes timer registrations on the TUI thread, leaving
-// deadline policy and callback dispatch to the loop-owned registration.
+// Maintains timer deadlines and dispatch generations, skipping missed repeating
+// ticks without calling feature code or retaining registry iterators.
 #include "sys.h"
-#include "TuiEventLoop.h"
 #include "TuiTimer.h"
 
+#include <type_traits>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
+namespace {
 
-TuiTimer::TuiTimer(TuiEventLoop& loop, std::uint64_t id) noexcept : loop_(&loop), id_(id)
+// Used by TUI-thread scheduling to avoid signed overflow for caller-supplied times.
+// Nonpositive delay means immediate eligibility; an unrepresentable future deadline
+// saturates at the clock limit. Pure calculation with no borrowed object lifetime.
+TuiTimer::Clock::time_point saturated_deadline(TuiTimer::Clock::time_point now, TuiTimer::Clock::duration delay)
+{
+  using Clock = TuiTimer::Clock;
+  if (delay <= Clock::duration::zero())
+    return now;
+  if (now.time_since_epoch() > Clock::duration::max() - delay)
+    return Clock::time_point::max();
+  return now + delay;
+}
+
+} // namespace
+
+TuiTimer::TuiTimer(Callback callback) : callback_(std::move(callback))
 {
 }
 
-TuiTimer::~TuiTimer()
+bool TuiTimer::due(Clock::time_point now) const noexcept
 {
-  release();
+  return deadline_ && *deadline_ <= now;
 }
 
-TuiTimer::TuiTimer(TuiTimer&& other) noexcept : loop_(std::exchange(other.loop_, nullptr)), id_(std::exchange(other.id_, 0))
+void TuiTimer::disarm() noexcept
 {
-}
-
-TuiTimer& TuiTimer::operator=(TuiTimer&& other) noexcept
-{
-  if (this != &other)
-  {
-    // Remove this handle's old callback before transferring ownership, so move
-    // assignment cannot strand a registration that still borrows a feature target.
-    release();
-    loop_ = std::exchange(other.loop_, nullptr);
-    id_ = std::exchange(other.id_, 0);
-  }
-  return *this;
-}
-
-void TuiTimer::release() noexcept
-{
-  if (loop_)
-    loop_->remove_timer(id_);
-  loop_ = nullptr;
-  id_ = 0;
-}
-
-void TuiTimer::cancel() noexcept
-{
-  if (loop_)
-    loop_->cancel_timer(id_);
-}
-
-bool TuiTimer::active() const noexcept
-{
-  return loop_ && loop_->timer_active(id_);
+  ++generation_;
+  deadline_.reset();
+  interval_ = Clock::duration::zero();
 }
 
 void TuiTimer::arm_at(Clock::time_point deadline)
 {
-  if (loop_)
-    loop_->arm_timer_at(id_, deadline);
+  ++generation_;
+  deadline_ = deadline;
+  interval_ = Clock::duration::zero();
 }
 
 void TuiTimer::arm_after(Clock::duration delay, Clock::time_point now)
 {
-  if (loop_)
-    loop_->arm_timer_after(id_, delay, now);
+  arm_at(saturated_deadline(now, delay));
 }
 
-void TuiTimer::repeat(Clock::duration interval, Clock::time_point now)
+void TuiTimer::arm_every(Clock::duration interval, Clock::time_point now)
 {
-  if (loop_)
-    loop_->repeat_timer(id_, interval, now);
+  // Supply a positive repeat interval; use arm_at(now) for a one-shot immediate callback.
+  ASSERT(interval > Clock::duration::zero());
+  if (interval <= Clock::duration::zero())
+  {
+    disarm();
+    return;
+  }
+  ++generation_;
+  deadline_ = saturated_deadline(now, interval);
+  interval_ = interval;
+}
+
+TuiTimer::Callback TuiTimer::prepare_dispatch(Clock::time_point now)
+{
+  // Dispatch only a timer whose deadline is due; recheck its generation in the registry first.
+  ASSERT(due(now));
+  if (!due(now))
+    return {};
+
+  // Copy before changing the schedule so allocation failure leaves the old state
+  // intact. The copy can survive removal of this record by the eventual callback.
+  auto callback = callback_;
+  ++generation_;
+  if (interval_ > Clock::duration::zero() && now < Clock::time_point::max())
+  {
+    // Unsigned subtraction also covers the full signed clock range without
+    // overflowing when an explicit timestamp is far beyond the prior deadline.
+    using UnsignedRep = std::make_unsigned_t<Clock::duration::rep>;
+    auto const elapsed = static_cast<UnsignedRep>(now.time_since_epoch().count()) - static_cast<UnsignedRep>(deadline_->time_since_epoch().count());
+    // Keep the original interval phase while skipping all missed ticks. Scheduling
+    // from now + interval instead would accumulate drift whenever dispatch is late.
+    auto const remainder = elapsed % static_cast<UnsignedRep>(interval_.count());
+    auto const until_next = interval_ - Clock::duration(static_cast<Clock::duration::rep>(remainder));
+    deadline_ = saturated_deadline(now, until_next);
+  }
+  else
+  {
+    // There is no representable future tick after time_point::max().
+    deadline_.reset();
+    interval_ = Clock::duration::zero();
+  }
+  return callback;
 }
 
 } // namespace ava::tui

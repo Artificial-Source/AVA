@@ -12,8 +12,8 @@
 #include "SessionSelector.h"
 #include "SessionTransitionCoordinator.h"
 #include "SettingsDialog.h"
-#include "TuiEventLoop.h"
 #include "TuiInputDispatcher.h"
+#include "TuiTimerRegistry.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_input_internal.h"
@@ -71,9 +71,9 @@ class TuiSession final
   // TUI thread: return when the TUI thread must wake up for the next timer, or nothing when no timer is armed.
   //
   // A deadline in the past means that the caller should not sleep at all.
-  [[nodiscard]] std::optional<TuiEventLoop::Clock::time_point> next_timer_deadline() const noexcept;
+  [[nodiscard]] std::optional<TuiTimerRegistry::Clock::time_point> next_timer_deadline() const noexcept;
   // TUI thread after every wakeup: run the callbacks of all timers that are due at now.
-  void expire_timers(TuiEventLoop::Clock::time_point now);
+  void expire_timers(TuiTimerRegistry::Clock::time_point now);
   // TUI thread: the terminal input fd reported ready, which may include a hangup or error.
   //
   // Only records hangup and error; the input itself is read by flush().
@@ -127,7 +127,7 @@ class TuiSession final
   void service_control();
   // Plain timer wake: keeps the 100 ms observation cadence without handling
   // signals or running application work from inside service_due().
-  void wake_for_control(TuiEventLoop::Clock::time_point now);
+  void wake_for_control(TuiTimerRegistry::Clock::time_point now);
   // TUI thread after due timers: consume at most 256 events, then attempt final
   // settlement. Return whether another turn can process accepted application work.
   [[nodiscard]] bool service_application_updates();
@@ -194,7 +194,7 @@ class TuiSession final
   terminal::Context& terminal_context_;
   // TUI-thread timer registry and wakeup factory, constructed before every registered feature.
   // Timer handles below die first; copied weak wakeups may outlive the registry.
-  TuiEventLoop loop_;
+  TuiTimerRegistry timer_registry_;
   // TUI-owned display data; readers borrow const views and features update them through named operations.
   RuntimePresentationState presentation_state_;
   // TUI-thread output-modal policy shared by idle and active dispatch. Its current
@@ -221,7 +221,7 @@ class TuiSession final
   bool stopping_ = false;
   // The session's one TUI-thread editor; declared before every owner that borrows draft state.
   Composer draft_state_;
-  // TUI-thread caches, viewport and frame scheduler; its timer handles retire before the loop.
+  // TUI-thread caches, viewport and frame scheduler; its timer handles retire before the registry.
   RuntimeRenderer renderer_;
   // TUI-thread transcript/sidebar navigation using the editor and renderer declared above.
   RuntimeNavigationController navigation_;
@@ -264,7 +264,7 @@ class TuiSession final
   TuiInputDispatcher input_dispatcher_;
   // TUI-thread plain wake every 100 ms, targeting this session. Cancel on exit
   // before any feature owner is destroyed.
-  TuiTimer control_timer_;
+  TuiTimerHandle control_timer_;
 };
 
 } // namespace ava::tui

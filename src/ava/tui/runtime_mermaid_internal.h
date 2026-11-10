@@ -1,7 +1,7 @@
 // Reconciles diagram presentation with the application bridge using completion wakes and bounded Busy retries.
 #pragma once
 
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime.h"
@@ -21,7 +21,7 @@ class RuntimePresentationState;
 
 class RuntimeRenderer;
 class TranscriptSearchController;
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 // TUI-thread application-stage result; session control distinguishes a changed projection from latched renderer
 // failure.
@@ -54,17 +54,17 @@ class RuntimeMermaidPresentationController final
   // safely outlive this object.
   ~RuntimeMermaidPresentationController();
 
-  // The attached loop outlives this stable owner and its registration.
+  // The timer registry outlives this stable owner and its timer.
   // The already-constructed renderer outlives this owner and batches its frame requests.
   // A nonempty bridge must support notifier registration, including while disabled.
-  void attach_loop(TuiEventLoop& loop);
+  void create_timers(TuiTimerRegistry& timer_registry);
   // TUI application stage: reconcile records, drain results before submitting work, update accepted diagram layout, refresh
   // search, and invalidate a frame.
   [[nodiscard]] MermaidServiceOutcome service();
   // TUI application stage: respond to completion/retry readiness or changed transcript/configuration; outstanding requests alone never
   // cause polling.
   [[nodiscard]] MermaidServiceOutcome service_if_changed();
-  // TUI thread: cancel retry registration, unregister notification, cancel records, and release bridge
+  // TUI thread: disarm the retry timer, unregister notification, cancel records, and release bridge
   // callbacks. Already copied notifications may still run but touch only shared readiness and a weak waiter.
   void shutdown() noexcept;
 
@@ -140,7 +140,7 @@ class RuntimeMermaidPresentationController final
   // completion notifications wake accepted/queued work without polling.
   void synchronize_retry_timer();
   // Timer callback publishes readiness only; bridge calls wait for application servicing.
-  void mark_retry_due(TuiTimer::Clock::time_point now);
+  void mark_retry_due(TuiTimerHandle::Clock::time_point now);
 
   // Borrowed session projection outlives this controller; TUI thread reads transcript/configuration and
   // publishes accepted results.
@@ -190,10 +190,10 @@ class RuntimeMermaidPresentationController final
   // TUI-thread next Busy delay: 100 ms initially, 250 ms thereafter; successful/nonbusy service resets it.
   std::chrono::milliseconds retry_delay_{100};
   // TUI-thread absolute contention deadline; unrelated transcript/input changes cannot shorten this backoff.
-  std::optional<TuiTimer::Clock::time_point> retry_at_;
+  std::optional<TuiTimerHandle::Clock::time_point> retry_at_;
   // TUI-owned one-shot Busy wake; canceled before unregistering bridge callbacks so no retry targets a retired
   // controller.
-  TuiTimer retry_timer_;
+  TuiTimerHandle retry_timer_;
 };
 
 }  // namespace ava::tui

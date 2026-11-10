@@ -1,6 +1,6 @@
 // Prepares feature display data and transcript layout before the session's single paint stage.
 #include "sys.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "runtime_state_internal.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/mermaid_projection.h"
@@ -109,15 +109,15 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(TuiEventLoop& loop, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer,
+RuntimeRenderer::RuntimeRenderer(TuiTimerRegistry& timer_registry, TuiFrontEnd* frontend, RuntimePresentationState& presentation, Composer& composer,
                                  terminal::Context* terminal_context)
     : presentation_(presentation), draft_state_(composer), terminal_context_(terminal_context), transcript_(presentation, composer), frontend_(frontend)
 {
-  // Register while all callback targets are alive. The caller services the loop
+  // Register while all callback targets are alive. The caller services the registry
   // only after construction; partially constructed handles retire on failure.
-  frame_timer_ = loop.member_timer(*this, &RuntimeRenderer::frame_due);
-  indicator_timer_ = loop.member_timer(*this, &RuntimeRenderer::indicator_due);
-  autoscroll_timer_ = loop.member_timer(*this, &RuntimeRenderer::autoscroll_due);
+  frame_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::frame_due);
+  indicator_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::indicator_due);
+  autoscroll_timer_ = timer_registry.create_timer(*this, &RuntimeRenderer::autoscroll_due);
   synchronize_timers();
 }
 
@@ -127,9 +127,9 @@ void RuntimeRenderer::synchronize_timers()
   // session.
   if (frame_scheduler_.failed())
   {
-    frame_timer_.cancel();
-    indicator_timer_.cancel();
-    autoscroll_timer_.cancel();
+    frame_timer_.disarm();
+    indicator_timer_.disarm();
+    autoscroll_timer_.disarm();
     armed_frame_deadline_.reset();
     armed_indicator_deadline_.reset();
     armed_autoscroll_deadline_.reset();
@@ -144,7 +144,7 @@ void RuntimeRenderer::synchronize_timers()
     if (frame)
       frame_timer_.arm_at(*frame);
     else
-      frame_timer_.cancel();
+      frame_timer_.disarm();
   }
   auto const indicator = transcript_.indicator_deadline();
   if (indicator != armed_indicator_deadline_)
@@ -153,7 +153,7 @@ void RuntimeRenderer::synchronize_timers()
     if (indicator)
       indicator_timer_.arm_at(*indicator);
     else
-      indicator_timer_.cancel();
+      indicator_timer_.disarm();
   }
   auto const autoscroll = transcript_.autoscroll_deadline();
   if (autoscroll != armed_autoscroll_deadline_)
@@ -162,7 +162,7 @@ void RuntimeRenderer::synchronize_timers()
     if (autoscroll)
       autoscroll_timer_.arm_at(*autoscroll);
     else
-      autoscroll_timer_.cancel();
+      autoscroll_timer_.disarm();
   }
 }
 
@@ -400,7 +400,7 @@ bool RuntimeRenderer::paint_for_handoff()
   if (frame_scheduler_.failed())
     return false;
   frame_scheduler_.discard_pending();
-  frame_timer_.cancel();
+  frame_timer_.disarm();
   armed_frame_deadline_.reset();
   pending_thaw_ = false;
   auto const succeeded = render_full(false);
@@ -499,7 +499,7 @@ bool RuntimeRenderer::paint_ready_frame()
   if (!kind)
     return true;
   auto const freeze_transcript_layout = !std::exchange(pending_thaw_, false);
-  frame_timer_.cancel();
+  frame_timer_.disarm();
   armed_frame_deadline_.reset();
   // Consume timer/deadline state before terminal output so a later invalidation starts a fresh pending frame;
   // then latch failure and reconcile remaining timers.

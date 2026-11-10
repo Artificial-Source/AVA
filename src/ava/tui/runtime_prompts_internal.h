@@ -4,7 +4,7 @@
 
 #include "PendingPermissionRequest.h"
 #include "PendingQuestionRequest.h"
-#include "TuiTimer.h"
+#include "TuiTimerHandle.h"
 #include "TuiWakeup.h"
 #include "runtime_render_internal.h"
 #include "ava/debug/print_members_on.h"
@@ -39,7 +39,7 @@ class SelectorHost;
 class RuntimeRenderer;
 class TuiSessionGrantRegistry;
 
-class TuiEventLoop;
+class TuiTimerRegistry;
 
 namespace runtime_input {
 struct RuntimeInput;
@@ -81,9 +81,9 @@ class RuntimePromptCoordinator final
 {
  public:
   // TUI thread: bind session collaborators and member timers before accepting requests.
-  // The optional selector and loop must outlive this stable callback target.
+  // The optional selector and timer registry must outlive this stable callback target.
   RuntimePromptCoordinator(TuiFrontEnd const& frontend, RuntimePresentationState& presentation, TuiSessionGrantRegistry& session_grants,
-                           RuntimeRenderer& renderer, TuiEventLoop& loop, SelectorHost* selectors = nullptr);
+                           RuntimeRenderer& renderer, TuiTimerRegistry& timer_registry, SelectorHost* selectors = nullptr);
   // Not copyable: one owner releases active requests, and resolver/timer callbacks retain its address.
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;
@@ -224,9 +224,9 @@ class RuntimePromptCoordinator final
   void abandon_active_request();
   // TUI timer callback: request a later service check; never invoke borrowed prompt callbacks
   // from timer dispatch itself.
-  void mark_auto_resolution_due(TuiTimer::Clock::time_point now);
+  void mark_auto_resolution_due(TuiTimerHandle::Clock::time_point now);
   // TUI timer callback: restore wheel eligibility and reset burst state after the quiet period.
-  void expire_wheel_suppression(TuiTimer::Clock::time_point now);
+  void expire_wheel_suppression(TuiTimerHandle::Clock::time_point now);
   // TUI thread after accepted prompt wheel navigation: arm a quiet period to keep a
   // burst from changing multiple choices across redraws.
   void suppress_wheel_input();
@@ -285,15 +285,15 @@ class RuntimePromptCoordinator final
   // TUI-only burst filter; prompt retirement or suppression expiry resets its history.
   WheelBurstGovernor wheel_governor_;
   // TUI-only quiet-period deadline set after navigation and cleared on non-wheel input/retirement.
-  std::optional<TuiTimer::Clock::time_point> wheel_suppression_deadline_;
+  std::optional<TuiTimerHandle::Clock::time_point> wheel_suppression_deadline_;
   // Weak wake handle; notify after enqueueing, cancellation, or completion so the
   // next application turn can acquire prompts or resume features they had held.
   TuiWakeup wakeup_;
-  // TUI registration marks automatic discovery due every 100 ms while a question
-  // offers it. The borrowed loop and stable target outlive both registrations.
-  TuiTimer auto_resolution_timer_;
-  // TUI registration ends the wheel quiet period; cancel it before releasing a claim.
-  TuiTimer wheel_expiry_timer_;
+  // TUI timer marks automatic discovery due every 100 ms while a question
+  // offers it. The borrowed registry and stable target outlive both timers.
+  TuiTimerHandle auto_resolution_timer_;
+  // TUI timer ends the wheel quiet period; disarm it before releasing a claim.
+  TuiTimerHandle wheel_expiry_timer_;
 };
 
 }  // namespace ava::tui

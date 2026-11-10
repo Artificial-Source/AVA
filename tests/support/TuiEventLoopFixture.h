@@ -2,7 +2,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/tui/TuiEventLoop.h"
+#include "ava/tui/TuiTimerRegistry.h"
 #include "ava/tui/TuiWakeup.h"
 #include "ava/core/UniqueFd.h"
 #include "utils/threading/EventLoop.h"
@@ -20,9 +20,9 @@ namespace tui_test_support {
 
 // Test-thread stand-in for the event loop of TuiFrontEnd::run.
 //
-// Owns the utils event loop (watching one input fd and one notification Event) and the TuiEventLoop
+// Owns the utils event loop (watching one input fd and one notification Event) and the TuiTimerRegistry
 // timer registry whose wakeup() tokens notify that Event. Construct it before every feature borrowing
-// loop(); destroy those features first so their timers retire before the registry. It never services
+// timer_registry(); destroy those features first so their timers retire before the registry. It never services
 // timer callbacks itself and creates no worker.
 class TuiEventLoopFixture final
 {
@@ -40,9 +40,9 @@ class TuiEventLoopFixture final
   explicit TuiEventLoopFixture(int input_fd) : TuiEventLoopFixture(std::pair<ava::core::UniqueFd, ava::core::UniqueFd>{}, input_fd) { }
 
   // Test-thread borrow valid until fixture destruction; feature timers may use it.
-  [[nodiscard]] ava::tui::TuiEventLoop& loop() { return loop_; }
-  // Return a token that notifies the same Event as loop().wakeup().
-  [[nodiscard]] ava::tui::TuiWakeup wakeup() const { return loop_.wakeup(); }
+  [[nodiscard]] ava::tui::TuiTimerRegistry& timer_registry() { return timer_registry_; }
+  // Return a token that notifies the same Event as timer_registry().wakeup().
+  [[nodiscard]] ava::tui::TuiWakeup wakeup() const { return timer_registry_.wakeup(); }
 
   // Wait like TuiFrontEnd::run does, but do not dispatch anything: consume readiness and notifications.
   //
@@ -52,7 +52,7 @@ class TuiEventLoopFixture final
     using EventLoop = utils::threading::EventLoop;
     if (mode == Wait::ReadyOnly)
       event_loop_->wait_until(std::chrono::steady_clock::now());
-    else if (auto const deadline = loop_.next_deadline())
+    else if (auto const deadline = timer_registry_.next_deadline())
       event_loop_->wait_until(*deadline);
     else
       event_loop_->wait();
@@ -83,7 +83,7 @@ class TuiEventLoopFixture final
         event_loop_(std::make_shared<utils::threading::EventLoop>()),
         input_event_(event_loop_->watch_fd(input_fd >= 0 ? input_fd : descriptors_.first.get(), utils::threading::EventLoop::PollEvents::read)),
         notification_event_(event_loop_->watch_event()),
-        loop_(ava::tui::TuiWakeup(event_loop_, notification_event_))
+        timer_registry_(ava::tui::TuiWakeup(event_loop_, notification_event_))
   {
   }
 
@@ -102,8 +102,8 @@ class TuiEventLoopFixture final
   std::shared_ptr<utils::threading::EventLoop> event_loop_;
   utils::threading::EventLoop::Event input_event_;
   utils::threading::EventLoop::Event notification_event_;
-  // Destroyed first; all borrowed feature registrations must already be gone.
-  ava::tui::TuiEventLoop loop_;
+  // Destroyed first; all borrowed feature timers must already be gone.
+  ava::tui::TuiTimerRegistry timer_registry_;
   bool notified_ = false;
   bool terminal_hangup_ = false;
   bool terminal_error_ = false;

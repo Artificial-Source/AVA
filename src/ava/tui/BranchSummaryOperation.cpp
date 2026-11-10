@@ -4,7 +4,7 @@
 #include "BranchSummaryActions.h"
 #include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "runtime_render_internal.h"
 #include "runtime_views_internal.h"
 #include "terminal/Context.h"
@@ -20,11 +20,11 @@ BranchSummaryOperation::BranchSummaryOperation(BranchSummaryActions& frontend, R
 {
 }
 
-void BranchSummaryOperation::attach_loop(TuiEventLoop& loop)
+void BranchSummaryOperation::create_timers(TuiTimerRegistry& timer_registry)
 {
-  discovery_timer_ = loop.member_timer(*this, &BranchSummaryOperation::discover_progress);
+  discovery_timer_ = timer_registry.create_timer(*this, &BranchSummaryOperation::discover_progress);
   if (active_)
-    discovery_timer_.repeat(std::chrono::milliseconds{250});
+    discovery_timer_.arm_every(std::chrono::milliseconds{250});
 }
 
 std::optional<BranchSummaryOutcome> BranchSummaryOperation::service_if_due()
@@ -34,7 +34,7 @@ std::optional<BranchSummaryOutcome> BranchSummaryOperation::service_if_due()
   return poll();
 }
 
-void BranchSummaryOperation::discover_progress(TuiTimer::Clock::time_point)
+void BranchSummaryOperation::discover_progress(TuiTimerHandle::Clock::time_point)
 {
   // Repeated ticks can share one snapshot read in the next application stage.
   discovery_due_ = true;
@@ -106,7 +106,7 @@ BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot con
                                 : runtime_views::branch_summary_terminal_status(operation));
   active_ = false;
   discovery_due_ = false;
-  discovery_timer_.cancel();
+  discovery_timer_.disarm();
   phase_ = operation.phase;
   if (exit_requested)
   {
@@ -183,7 +183,7 @@ BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, 
   selected_source_value_ = std::move(selected_value);
   auto const outcome = consume(*prepared);
   if (active_)
-    discovery_timer_.repeat(std::chrono::milliseconds{250});
+    discovery_timer_.arm_every(std::chrono::milliseconds{250});
   return outcome;
 }
 

@@ -1,6 +1,6 @@
 // Publishes accepted Mermaid results on the TUI thread while application workers retain process ownership.
 #include "sys.h"
-#include "TuiEventLoop.h"
+#include "TuiTimerRegistry.h"
 #include "TuiWakeup.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -95,15 +95,15 @@ RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
   shutdown();
 }
 
-void RuntimeMermaidPresentationController::attach_loop(TuiEventLoop& loop)
+void RuntimeMermaidPresentationController::create_timers(TuiTimerRegistry& timer_registry)
 {
   // Supply set_completion_notifier before attaching any nonempty bridge, even
   // while disabled; otherwise accepted work can finish without waking its owner.
   ASSERT((!bridge_.enqueue && !bridge_.cancel && !bridge_.drain) || bridge_.set_completion_notifier);
-  retry_timer_ = loop.member_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
+  retry_timer_ = timer_registry.create_timer(*this, &RuntimeMermaidPresentationController::mark_retry_due);
   if (bridge_.set_completion_notifier)
   {
-    bridge_.set_completion_notifier([ready = completion_ready_, wakeup = loop.wakeup()]() noexcept {
+    bridge_.set_completion_notifier([ready = completion_ready_, wakeup = timer_registry.wakeup()]() noexcept {
       // Publish readiness before waking. Only shared/weak values cross threads;
       // a copied callback cannot reach a retired controller or terminal object.
       ready->store(true, std::memory_order_release);
@@ -117,19 +117,19 @@ void RuntimeMermaidPresentationController::synchronize_retry_timer()
 {
   if (shutdown_ || !bridge_busy_)
   {
-    retry_timer_.cancel();
+    retry_timer_.disarm();
     retry_at_.reset();
     retry_delay_ = std::chrono::milliseconds(100);
   }
   else if (!retry_at_)
   {
-    retry_at_ = TuiTimer::Clock::now() + retry_delay_;
+    retry_at_ = TuiTimerHandle::Clock::now() + retry_delay_;
     retry_timer_.arm_at(*retry_at_);
     retry_delay_ = std::chrono::milliseconds(250);
   }
 }
 
-void RuntimeMermaidPresentationController::mark_retry_due(TuiTimer::Clock::time_point)
+void RuntimeMermaidPresentationController::mark_retry_due(TuiTimerHandle::Clock::time_point)
 {
   retry_at_.reset();
   retry_due_ = true;
@@ -431,7 +431,7 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
   // Keep Busy backoff even when unrelated input changes the transcript. On an
   // eligible attempt, drain canceled/old-session results before submitting more
   // work. Disabled presentation must also release those coordinator slots.
-  if (!retry_at_ || TuiTimer::Clock::now() >= *retry_at_)
+  if (!retry_at_ || TuiTimerHandle::Clock::now() >= *retry_at_)
   {
     retry_at_.reset();
     bridge_busy_ = false;
@@ -470,7 +470,7 @@ void RuntimeMermaidPresentationController::shutdown() noexcept
   shutdown_ = true;
   // Retire TUI retry callbacks first. Unregistration prevents future stored callbacks, but independently copied
   // shared/weak notifications may safely finish later.
-  retry_timer_.cancel();
+  retry_timer_.disarm();
   retry_at_.reset();
   if (bridge_.set_completion_notifier)
   {
