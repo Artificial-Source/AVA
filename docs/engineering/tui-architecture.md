@@ -83,8 +83,7 @@ owner prepares a frame.
 | --- | --- |
 | `TuiFrontEnd` | Owns the TUI thread's `utils::threading::EventLoop`. `run()` is the only code that waits on it and dispatches its events; `terminate()` ends it. |
 | `TuiSession` | Composition, the order of work per wakeup, control decisions and transitions between owners. |
-| `TuiTimeoutHandler` | Member of `TuiFrontEnd`. Owns the `TuiTimeoutHandler`, reports the next deadline and runs due timers. It knows nothing about `TuiSession`. |
-| `TuiTimeoutHandler` | The timers. It does not wait, own feature state or decode keys. |
+| `TuiTimeoutHandler` | Member of `TuiFrontEnd`. Owns the timers, runs the due ones and reports the next deadline. It does not wait, own feature state or decode keys, and knows nothing about `TuiSession`. |
 | `RuntimePresentationState` | The screen and sidebar projections. Readers get const views; features publish through named operations that preserve bounds and generations. |
 | `Composer` | Draft, cursor, selection, editing history, completion choices and Escape state. |
 | `RuntimeRenderer` | Frame scheduling, completion/layout caches and `TranscriptView`. It prepares layout around viewport changes. |
@@ -173,20 +172,15 @@ this distinction. A debug marker alone does not sanitize content.
 
 ## One wakeup of the loop
 
-`TuiFrontEnd::run` registers the terminal input descriptor and one notification
-event, then repeats:
+`TuiFrontEnd::run` registers the terminal input descriptor, one notification
+event and one event for timers armed on other threads (see `TuiTimeoutHandler::attach`), then repeats:
 
-1. **Wait.** Sleep until terminal input is ready, a producer notifies, or the
-   earliest armed timer deadline (`TuiTimeoutHandler::next_deadline`) passes.
-   The only way out of the loop is the `terminated` status set by `terminate()`.
-2. **Dispatch.** Pass input readiness, including hangup and error, to
-   `TuiTerminalInputHandler::input_ready` and notifications to
-   `TuiNotificationHandler::notified`. For now these two handlers only forward
-   to `TuiSession`.
-3. **Due timers.** `TuiTimeoutHandler::expire` dispatches the timers whose
+1. **Due timers.** `TuiTimeoutHandler::expire` dispatches the timers whose
    deadlines are due, unless the session stopped them with `TuiTimeoutHandler::stop`.
-   Timer callbacks update their feature or request a frame.
-4. **Flush.** `TuiSession::flush` does the remaining work, for now still by
+   Timer callbacks update their feature or request a frame. Running this before the wait
+   also catches deadlines that passed while the previous events were handled. When nothing
+   is due it only looks at the earliest deadline.
+2. **Flush.** `TuiSession::flush` does the remaining work, for now still by
    checking every mailbox:
    1. **Control.** Observe signals, terminal closure, descriptor errors and recorded
       rendering failures. Cancellation may release a waiting worker.
@@ -204,9 +198,20 @@ event, then repeats:
    5. **Left-over work.** When work remains (a full input batch, keys buffered inside
       ncurses that do not make the descriptor readable, or a bounded event backlog),
       notify the session's own wakeup so that the next wait returns immediately.
+3. **Wait.** Sleep until terminal input is ready, a producer notifies, or the
+   earliest armed timer deadline passes. `expire` returns that deadline; for as long as
+   the flush above exists, which may arm timers, `run` asks `TuiTimeoutHandler::next_deadline`
+   again instead. Both record the deadline, so that a timer that another thread arms before it
+   wakes the TUI thread. A deadline in the past, armed during this turn, makes the wait a poll.
+   The only way out of the loop is the `terminated` status set by `terminate()`.
+4. **Dispatch.** Pass input readiness, including hangup and error, to
+   `TuiTerminalInputHandler::input_ready` and notifications to
+   `TuiNotificationHandler::notified`. For now these two handlers only forward
+   to `TuiSession`. The event of a timer armed on another thread needs no handling:
+   step 1 of the next turn takes the new deadline into account.
 
 There is no second timer/application pass after painting. A timer that becomes
-due during input or paint is dispatched after the next wait, which then does not sleep.
+due during input or paint is dispatched at the start of the next turn, after a wait that does not sleep.
 Scheduled frames normally use a 16 ms interval from the previous completed paint;
 explicit urgent redraws and terminal handoffs have their own immediate paths.
 Once the session stopped it does no more work; it waits for the termination.
@@ -414,8 +419,9 @@ plugin dialog does not grant access to mutable session or permission state.
    declare the handle after the state its callback uses. Create the timer with
    `timer_registry.create_timer(*this, &Owner::callback)` at a stable object address.
    Creating it does not invoke the callback. Any thread that has a
-   `TuiTimeoutHandler const&` may do this, and the handle's owner may disarm it on any thread,
-   but arming stays on the TUI thread.
+   `TuiTimeoutHandler const&` may do this, and the handle's owner may arm and disarm it on
+   any thread. Arming on another thread wakes the TUI thread only when the new deadline is
+   earlier than the one it sleeps until; disarming never wakes it.
 2. Use `arm_at` for an absolute one-shot deadline or `arm_every` for a positive
    interval. In the callback, mark work due or request a frame, then return.
    For work that calls the frontend or other features, add a service method and

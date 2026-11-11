@@ -24,7 +24,7 @@ namespace tui_test_support {
 // wakeup() returns tokens that notify that Event. Construct it before every feature borrowing
 // tui_timeout_handler(); destroy those features first so their timers retire before the registry. It never services
 // timer callbacks itself and creates no worker.
-class TuiEventLoopFixture final
+class TuiEventLoopFixture
 {
  public:
   // How wait() may block.

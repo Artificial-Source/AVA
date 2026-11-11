@@ -208,12 +208,17 @@ app::ExitCode TuiFrontEnd::run()
     TerminalBackgroundDetectionGuard terminal_background_detection;
     maybe_probe_terminal_background_appearance(terminal_context);
 
-    // Register every event before the first wait: the terminal input fd, and one notification Event that all producers share for now.
+    // Register every event before the first wait: the terminal input fd, one notification Event that all producers share for now,
+    // and one Event with which another thread that arms a timer makes this thread recalculate until when it may sleep.
     [[maybe_unused]] EventLoop::Event const input_event = event_loop.watch_fd(::fileno(terminal_context.input_stream()), EventLoop::PollEvents::read);
     EventLoop::Event const notify_event = event_loop.watch_event();
+    EventLoop::Event const timer_armed_event = event_loop.watch_event();
 
     Dout(dc::tuievents, "Terminal input event has index " << EventLoop::index(input_event));
     Dout(dc::tuievents, "Notify event has index " << EventLoop::index(notify_event));
+    Dout(dc::tuievents, "Timer armed event has index " << EventLoop::index(timer_armed_event));
+
+    timeout_handler_.attach(TuiWakeup(event_loop_, timer_armed_event));
 
     //FIXME: TuiWakeup and TuiSession is *old* code that needs to be replaced.
     TuiWakeup const wakeup(event_loop_, notify_event);
@@ -224,8 +229,18 @@ app::ExitCode TuiFrontEnd::run()
     // The only exit of this loop is a termination requested by the application (see terminate()).
     for (;;)
     {
-      // Wait for the next Event.
-      if (auto const deadline = timeout_handler_.next_deadline())
+      // Run the timers that are due. This also catches deadlines that passed while the previous events were being handled,
+      // before this thread would otherwise go to sleep.
+      auto deadline = timeout_handler_.expire(TuiTimeoutHandler::Clock::now());
+
+      // FIXME: This is a hack to keep the testsuite working while functionality of the old TuiSession is still being used.
+      // Paint what the events of the previous turn and the timers above changed, before going to sleep.
+      session.flush();
+      // Remove this together with the flush above: flush may arm timers, which expire could not take into account.
+      deadline = timeout_handler_.next_deadline();
+
+      // Wait for the next Event. A deadline in the past, armed by a timer callback, makes this a poll that does not block.
+      if (deadline)
         event_loop.wait_until(*deadline);
       else
         event_loop.wait();
@@ -245,18 +260,16 @@ app::ExitCode TuiFrontEnd::run()
             EventLoop::ReadyEvents const ready_events = wait_result.ready_events(index);
             terminal_input_handler_.input_ready(fd, ready_events);
           }
+          else if ((event & timer_armed_event).any())
+          {
+            // Nothing to do: the next call to expire, at the start of the loop, takes the new deadline into account.
+          }
           else
             notification_handler_.notified();
         }
       }
       else if (wait_result.status() == EventLoop::WaitStatus::terminated)
         break;
-
-      // Not only after a timeout: a deadline can pass while other events are being handled.
-      timeout_handler_.expire(TuiTimeoutHandler::Clock::now());
-
-      // FIXME: This is a hack to keep the testsuite working while functionality of the old TuiSession is still being used.
-      session.flush();
     }
 
     return session.shutdown(std::bind_front(&RuntimeBeforeShutdownGuard::invoke, &before_shutdown));

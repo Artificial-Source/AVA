@@ -16,7 +16,7 @@ namespace ava::tui {
 // and destruction run on the TUI thread, with no callback active during destruction.
 // The implicit destructor removes the timer before releasing publish_frame_;
 // stop disarms animation but keeps that timer available for another start.
-class Spinner final
+class Spinner
 {
  public:
   // TUI thread with tui_timeout_handler and publish_frame's target alive: bind a disarmed member timer.

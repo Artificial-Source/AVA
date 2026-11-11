@@ -4,8 +4,8 @@
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/tui/Spinner.h"
-#include "ava/tui/TuiTimerHandle.h"
 #include "ava/tui/TuiTimeoutHandler.h"
+#include "ava/tui/TuiTimerHandle.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/core/UniqueFd.h"
 
@@ -24,12 +24,12 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
-using ava::tui::TuiTimerHandle;
 using ava::tui::TuiTimeoutHandler;
+using ava::tui::TuiTimerHandle;
 using Fixture = tui_test_support::TuiEventLoopFixture;
 
 // Test-thread RAII pipe for readiness and hangup cases; the loop borrows its read end.
-class EventLoopPipe final
+class EventLoopPipe
 {
  public:
   // Open both ends before constructing the loop; failure leaves valid() false.
@@ -68,7 +68,7 @@ class EventLoopPipe final
 };
 
 // Test-thread callback target recording supplied deadlines; outlives its timer handle.
-class TimerRecorder final
+class TimerRecorder
 {
  public:
   // Timer dispatch records the pass time so late-repeat behavior can be asserted.
@@ -83,7 +83,7 @@ class TimerRecorder final
 };
 
 // Test-thread spinner sink that records published frame identities, not terminal output.
-class SpinnerFrames final
+class SpinnerFrames
 {
  public:
   // Spinner callback: retain each published phase for stop/restart assertions.
@@ -107,7 +107,7 @@ enum class PeerTimerAction
 
 // The pair owns its handles and remains at one address until they are retired.
 // Either callback may run first; it invalidates the other captured generation.
-class MutatingTimerPair final
+class MutatingTimerPair
 {
  public:
   // Test thread: register stable targets; the registry must outlive both optional handles.
@@ -162,7 +162,7 @@ class MutatingTimerPair final
 };
 
 // Stable test-thread callback target that replaces its own repeat with a one-shot deadline.
-class RearmingTimer final
+class RearmingTimer
 {
  public:
   // Register before arming; the borrowed registry outlives this owner and its handle.
@@ -429,6 +429,73 @@ void test_timer_creation_on_other_threads()
     expect(recorder.ticks().size() == kKeptPerThread, "every timer created on another thread has its own identity and runs once");
 }
 
+// Protect the deadline that expire returns, which is what TuiFrontEnd::run sleeps until.
+void test_expire_returns_next_deadline()
+{
+  TuiTimeoutHandler tui_timeout_handler;
+  TimerRecorder first;
+  TimerRecorder second;
+  auto early = tui_timeout_handler.create_timer(first, &TimerRecorder::tick);
+  auto late = tui_timeout_handler.create_timer(second, &TimerRecorder::tick);
+  auto const start = Clock::time_point{} + 1s;
+  expect(!tui_timeout_handler.expire(start), "without armed timers expire returns no deadline");
+  late.arm_at(start + 20ms);
+  early.arm_at(start + 10ms);
+  expect(tui_timeout_handler.expire(start) == start + 10ms && first.ticks().empty(), "before any deadline expire runs nothing and returns the earliest");
+  expect(tui_timeout_handler.expire(start + 10ms) == start + 20ms && first.ticks().size() == 1 && second.ticks().empty(),
+         "expire runs the due timer and returns the deadline of the next one");
+  early.arm_every(5ms, start + 10ms);
+  expect(tui_timeout_handler.expire(start + 12ms) == start + 15ms, "a newly armed earlier deadline is returned");
+  expect(tui_timeout_handler.expire(start + 20ms) == start + 25ms && first.ticks().size() == 2 && second.ticks().size() == 1,
+         "expire runs every due timer and returns the rescheduled repeat");
+  late.arm_at(start + 22ms);
+  tui_timeout_handler.stop();
+  expect(!tui_timeout_handler.expire(start + 30ms) && first.ticks().size() == 2 && second.ticks().size() == 1 && !tui_timeout_handler.next_deadline(),
+         "after stop expire runs nothing and returns no deadline");
+}
+
+// Protect waking the TUI thread when another thread arms a timer before the deadline it sleeps until.
+void test_arming_on_other_threads_wakes_the_loop()
+{
+  EventLoopPipe pipe;
+  if (!ava::tests::require(pipe.valid(), "create timer wakeup test input pipe"))
+    return;
+  Fixture event_loop(pipe.input());
+  TuiTimeoutHandler& tui_timeout_handler = event_loop.tui_timeout_handler();
+  // The test thread plays the TUI thread.
+  tui_timeout_handler.attach(event_loop.wakeup());
+  TimerRecorder recorder;
+  auto timer = tui_timeout_handler.create_timer(recorder, &TimerRecorder::tick);
+  // The owner of the handle moves to another thread for the duration of one arm.
+  auto const arm_on_other_thread = [&timer](Clock::time_point deadline) { std::jthread([&timer, deadline] { timer.arm_at(deadline); }).join(); };
+  auto const woken = [&event_loop] {
+    event_loop.wait(Fixture::Wait::ReadyOnly);
+    return event_loop.notified();
+  };
+  auto const now = Clock::now();
+
+  expect(!tui_timeout_handler.expire(now), "the loop sleeps without deadline");
+  arm_on_other_thread(now + 1h);
+  expect(woken(), "arming on another thread wakes a loop that sleeps without deadline");
+  arm_on_other_thread(now + 30min);
+  expect(!woken(), "arming again before the loop called expire does not wake it again");
+  expect(tui_timeout_handler.expire(now) == now + 30min, "expire returns the deadline that was armed on another thread");
+  arm_on_other_thread(now + 2h);
+  expect(!woken(), "a deadline after the one the loop sleeps until does not wake it");
+  expect(tui_timeout_handler.expire(now) == now + 2h, "rearming replaced the deadline");
+  arm_on_other_thread(now + 10min);
+  expect(woken(), "a deadline before the one the loop sleeps until wakes it");
+  expect(tui_timeout_handler.expire(now) == now + 10min, "the loop sleeps until the new deadline");
+  timer.arm_at(now + 1min);
+  expect(!woken(), "arming on the TUI thread itself never wakes it");
+  expect(tui_timeout_handler.next_deadline() == now + 1min, "next_deadline sees what the TUI thread armed after expire");
+  arm_on_other_thread(now + 30s);
+  expect(woken(), "next_deadline recorded the earlier deadline that the loop now sleeps until");
+  tui_timeout_handler.stop();
+  arm_on_other_thread(now + 1s);
+  expect(!woken() && !tui_timeout_handler.expire(now + 1h) && recorder.ticks().empty(), "after stop arming wakes nothing and nothing runs");
+}
+
 // Protect safe notification through an expired weak wake handle.
 void test_retired_wakeup()
 {
@@ -466,5 +533,7 @@ void run_tui_timeout_handler_tests()
   test_hangup_preserves_final_input();
   test_next_deadline();
   test_timer_creation_on_other_threads();
+  test_expire_returns_next_deadline();
+  test_arming_on_other_threads_wakes_the_loop();
   test_retired_wakeup();
 }

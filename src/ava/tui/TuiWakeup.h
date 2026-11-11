@@ -16,11 +16,19 @@ namespace ava::tui {
 // that locked the loop keeps it alive until that call returns, so the last owner may then be
 // released on the producer thread. Copy, move and destruction follow ordinary object
 // synchronization rules: do not replace or destroy a token while another thread calls it.
-class TuiWakeup final
+class TuiWakeup
 {
+ private:
+  // Initialized at construction/copy and only read during notify.
+  std::weak_ptr<utils::threading::EventLoop> event_loop_;
+
+  // The notification Event of event_loop_ that notify() publishes.
+  utils::threading::EventLoop::Event event_{};
+
  public:
   // Any thread: create an inert token for owners that have not attached to a loop.
   TuiWakeup() = default;
+
   // TUI thread: create a token that notifies event, which must have been returned by event_loop->watch_event().
   TuiWakeup(std::weak_ptr<utils::threading::EventLoop> event_loop, utils::threading::EventLoop::Event event) noexcept;
 
@@ -32,12 +40,6 @@ class TuiWakeup final
 
   // Printing reports only the event; it never locks or prints the loop.
   AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  // Initialized at construction/copy and only read during notify.
-  std::weak_ptr<utils::threading::EventLoop> event_loop_;
-  // The notification Event of event_loop_ that notify() publishes.
-  utils::threading::EventLoop::Event event_{};
 };
 
 } // namespace ava::tui

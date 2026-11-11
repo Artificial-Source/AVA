@@ -16,15 +16,16 @@ using TuiTimerId = std::uint64_t;
 // Move-only handle owned by the feature whose callback TuiTimeoutHandler stores.
 //
 // Any thread can create a handle, through TuiTimeoutHandler::create_timer, and destroy it.
-// Arming is TUI-thread-only, because a deadline set by another thread would not wake the event loop.
-// The owner may disarm on any thread; see disarm for what that does and does not guarantee.
+// The owner may also arm and disarm it on any thread: arming on another thread wakes the TUI thread
+// when the new deadline is earlier than the one it sleeps until. See disarm for what disarming
+// on another thread does and does not guarantee.
 // A single handle is not thread-safe: it has one owner at a time.
 //
 // The registry and stable callback target outlive the handle; an executing callback must
 // also finish before its target dies, which matters when destroying an armed handle on
 // another thread. Destruction removes the timer, while disarm only clears its deadline.
 // Moving transfers responsibility for removing the timer without changing its callback target.
-class TuiTimerHandle final
+class TuiTimerHandle
 {
  private:
   // Borrowed stable registry address, changed only by moves/release.
@@ -62,19 +63,20 @@ class TuiTimerHandle final
   // or start once more, if expire already took it out before this call: its target must stay alive
   // until any such invocation returns.
   void disarm() noexcept;
-  // TUI thread: report an armed deadline, not whether a callback is currently running.
+  // Report an armed deadline, not whether a callback is currently running.
   // Empty and disarmed handles report false.
   //
   // Not const, because it is not thread-safe: it reads this handle's members, which its owner may change.
-  // Only on the TUI thread is the answer also stable, because only that thread arms and disarms timers.
+  // On another thread than the TUI thread the answer may already be outdated when it is returned:
+  // `expire` disarms a one-shot timer when it runs it.
   [[nodiscard]] bool armed() noexcept;
-  // TUI thread: replace any schedule with one shot. A past deadline is serviced by
+  // Replace any schedule with one shot. A past deadline is serviced by
   // a later `expire` pass, never synchronously by this call; empty is harmless.
   void arm_at(Clock::time_point deadline);
-  // TUI thread: schedule one shot relative to now; nonpositive delay means now,
+  // Schedule one shot relative to now; nonpositive delay means now,
   // overflow saturates, and no callback runs until dispatch. Empty is harmless.
   void arm_after(Clock::duration delay, Clock::time_point now = Clock::now());
-  // TUI thread: require a positive interval and schedule the first tick after now.
+  // Require a positive interval and schedule the first tick after now.
   // Dispatch skips missed ticks while keeping the original cadence; empty is harmless.
   void arm_every(Clock::duration interval, Clock::time_point now = Clock::now());
 

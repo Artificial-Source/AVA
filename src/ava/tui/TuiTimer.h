@@ -23,7 +23,7 @@ namespace ava::tui {
 // and advances/disarms the schedule before invocation, so removing a timer
 // inside a callback is safe. Callback targets must survive the executing call as
 // well as their handle; destroying this record does not destroy borrowed targets.
-class TuiTimer final
+class TuiTimer
 {
  public:
   // Use the same monotonic clock as the registry and public timer handles.
