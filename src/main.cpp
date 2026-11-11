@@ -42,7 +42,7 @@ int main(int argc, char** argv)
 #ifndef CWDEBUG // Commented out in Debug mode so we can see in gdb where an exception is thrown from.
   catch (std::exception& exception)
   {
-    DoutFatal(dc::core, "\e[31mstd::exception: " << exception.what() << " caught in src/main.cpp\e[0m");
+    DoutFatal(dc::core, "\033[31mstd::exception: " << exception.what() << " caught in src/main.cpp\033[0m");
     exit_code = std::to_underlying(ava::app::ExitCode::internal_error);
   }
 #endif
