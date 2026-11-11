@@ -153,7 +153,7 @@ std::string spawn_detached(std::vector<std::string> const& arguments)
       ::_exit(grandchild < 0 ? 127 : 0);
     ::execvp(argv[0], argv.data());
     int const exec_error = errno;
-    static_cast<void>(::write(exec_status_writer.get(), &exec_error, sizeof(exec_error)));
+    [[maybe_unused]] int res = ::write(exec_status_writer.get(), &exec_error, sizeof(exec_error));
     ::_exit(127);
   }
 
